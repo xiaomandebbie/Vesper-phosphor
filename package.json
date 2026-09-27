@@ -1,0 +1,18 @@
+{
+  "name": "vesper-phosphor",
+  "version": "0.1.0",
+  "description": "晨暮星✨ — self-scheduling wake-up agent (vesper = diary/wake-control gateway, phosphor = scheduler loop, gateway = LLM routing gateway)",
+  "type": "module",
+  "main": "src/phosphor.js",
+  "scripts": {
+    "vesper": "node src/vesper.js",
+    "phosphor": "node src/phosphor.js",
+    "gateway": "node src/gateway.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.3.0",
+    "express": "^4.19.2",
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "dotenv": "^16.4.5"
+  }
+}
