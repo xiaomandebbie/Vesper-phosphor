@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import express from 'express';
 import { Readable } from 'stream';
+import { addConversationMessage } from './state.js';
 
 const app = express();
 app.use(express.json({ limit: '10mb' }));
@@ -8,9 +9,6 @@ app.use(express.json({ limit: '10mb' }));
 const PORT = process.env.GATEWAY_PORT || 3002;
 const GATEWAY_API_KEY = process.env.GATEWAY_API_KEY;
 
-// ---- 路由分流表 ----
-// key 是客户端请求体里的 model 字段。以后加新的上游（自建 Ollama、Claude、别的 API），
-// 只需要在这里加一条，Aru 和 decide.js 都不用改代码。
 const routingTable = {
   'aru-chat': {
     source: 'aru',
@@ -35,7 +33,6 @@ function requireGatewayAuth(req, res, next) {
   next();
 }
 
-// 给 Aru "拉取模型" 那个按钮用的，OpenAI 兼容的模型列表接口。
 app.get('/v1/models', requireGatewayAuth, (req, res) => {
   res.json({
     object: 'list',
@@ -59,6 +56,17 @@ app.post('/v1/chat/completions', requireGatewayAuth, async (req, res) => {
 
   const upstreamBody = { ...req.body, model: route.upstreamModel };
 
+  if (route.source === 'aru' && Array.isArray(req.body.messages) && req.body.messages.length) {
+    const last = req.body.messages[req.body.messages.length - 1];
+    if (last && typeof last.content === 'string' && (last.role === 'user' || last.role === 'assistant')) {
+      try {
+        addConversationMessage(last.role === 'user' ? '允朔' : 'AI', last.content);
+      } catch (err) {
+        console.error('gateway: addConversationMessage failed:', err.message);
+      }
+    }
+  }
+
   try {
     const upstreamRes = await fetch(`${route.baseURL}/v1/chat/completions`, {
       method: 'POST',
@@ -78,8 +86,6 @@ app.post('/v1/chat/completions', requireGatewayAuth, async (req, res) => {
     const contentType = upstreamRes.headers.get('content-type');
     if (contentType) res.setHeader('content-type', contentType);
 
-    // 原样透传响应体——不管是普通 JSON 还是 stream:true 的 SSE，都不在这里解析，
-    // 只做转发，这样 Aru 那边不管用什么模式请求都能正常工作。
     if (upstreamRes.body) {
       Readable.fromWeb(upstreamRes.body).pipe(res);
     } else {
