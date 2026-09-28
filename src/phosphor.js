@@ -10,20 +10,13 @@ import {
   acknowledgeMissed,
   logWake,
   getLatestDeviceReport,
-  getRecentConversation,
-  countRecentConversation,
   closeDb,
 } from './state.js';
 import decide from './decide.js';
 import { executeAction } from './actions/index.js';
 import { listAllTools, connectAll, callTool, isConnected } from './mcp-manager.js';
-import {
-  isSharedTimelineEnabled,
-  readSharedConversation,
-  countSharedConversation,
-  describeAction,
-  postSharedEvent,
-} from './timeline.js';
+import { isSharedTimelineEnabled, describeAction, postSharedEvent } from './timeline.js';
+import { getSharedContext, countRecentChat } from './context.js';
 
 const TICK_MS = 60 * 1000;
 const MISSED_GRACE_MS = 3 * 60 * 1000;
@@ -76,39 +69,6 @@ function normalizeDecision(raw, fallbackMood) {
   };
 }
 
-// 没有时间戳的消息（比如助手回复）沿用前一条的时间；开头几条没有就用后面第一条有的。
-// 不然 decide.js 会把 null 当成 1970 年显示。
-function fillTimestamps(entries) {
-  let last = null;
-  for (const e of entries) {
-    if (e.ts) last = e.ts;
-    else if (last) e.ts = last;
-  }
-  const first = entries.find((e) => e.ts)?.ts ?? Date.now();
-  for (const e of entries) if (!e.ts) e.ts = first;
-  return entries;
-}
-
-// 最近对话：配了 HEARTBEAT_TIMELINE_FILE 就读 heartbeat 的时间线，和 heartbeat 看到的完全一样；
-// 没配或读失败就用自己的 conversation_log。
-function getRecentMessages(limit) {
-  if (isSharedTimelineEnabled()) {
-    const shared = readSharedConversation(limit);
-    if (shared) return fillTimestamps(shared);
-  }
-  return getRecentConversation(limit);
-}
-
-// 对话密度：最近2小时的消息数，来源同上。
-function computeConversationDensity() {
-  const windowMs = 2 * 60 * 60 * 1000;
-  if (isSharedTimelineEnabled()) {
-    const n = countSharedConversation(windowMs);
-    if (n !== null) return n;
-  }
-  return countRecentConversation(windowMs);
-}
-
 // 从 Ombre Brain 取一段文本。取不到就返回 null，不影响这一轮唤醒。
 async function callOmbre(toolName, args) {
   try {
@@ -138,8 +98,9 @@ async function runDecisionCycle({ kind, scheduledAt = null, selfNote = null }) {
   const wakeState = getWakeState();
   const latestDevice = getLatestDeviceReport();
   const { breathSummary, feelSummary } = await getMemorySummary();
-  const density = computeConversationDensity();
-  const recentMessages = getRecentMessages(20);
+  // 最近对话：所有 Aru 窗口的聊天 + heartbeat/phosphor 的事件，换窗口不会丢（见 context.js）
+  const density = countRecentChat(2 * 60 * 60 * 1000);
+  const recentMessages = getSharedContext(20);
   const gapMinutes = wakeState.updated_at ? (Date.now() - wakeState.updated_at) / 60000 : 0;
 
   const missed = getUnacknowledgedMissed();
@@ -283,7 +244,7 @@ async function main() {
   process.on('SIGINT', () => shutdown('SIGINT'));
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   console.log(
-    `phosphor: 最长唤醒间隔 ${MAX_WAKE_MINUTES} 分钟；共享 heartbeat 时间线：${isSharedTimelineEnabled() ? '已开启' : '未开启'}`
+    `phosphor: 最长唤醒间隔 ${MAX_WAKE_MINUTES} 分钟；共享 heartbeat 事件：${isSharedTimelineEnabled() ? '已开启' : '未开启'}；聊天来源：conversation_log（跨窗口）`
   );
   await connectAll();
   await tick();
