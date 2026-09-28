@@ -50,7 +50,7 @@ phosphor 每 **60 秒** 执行一次 `tick()`，每次检查两条互不干扰�
 
 ## 一次醒来的完整流程
 
-1. **收集情况**：当前 mode、距上次醒来多久、手机最近上报的电量/位置/屏幕时间、过去 2 小时对话条数（对话密度）、最近 15 条对话、Ombre Brain 里的"最近感受"、有没有 missed 的精确唤醒、现在能用哪些 MCP 工具
+1. **收集情况**：当前 mode、距上次醒来多久、手机最近上报的电量/位置/屏幕时间、过去 2 小时对话条数（对话密度）、最近 15 条对话、Ombre Brain 里的 `breath` 与 `feel`、有没有 missed 的精确唤醒、现在能用哪些 MCP 工具
 2. **做决定**：`decide.js` 把这些写成一段 prompt 发给模型，要求只返回一个 JSON：
    ```json
    {"next_wake_minutes": 96, "mood": "...", "action": "diary", "action_detail": "...", "self_wake": null}
@@ -59,6 +59,14 @@ phosphor 每 **60 秒** 执行一次 `tick()`，每次检查两条互不干扰�
 4. **执行动作**：`actions/index.js` 按 `action` 分派
 5. **记账**：不管成功、失败还是 noop，都往 `wake_log` 表写一条
 6. **更新状态**：保存心情、安排下次醒来、登记 self_wake
+
+### 记忆那一步为什么要两个都拉
+
+`breath` 给的是"我是谁、最近在干什么"，`feel` 给的是"我现在感觉怎么样"。
+
+只拉 `feel` 的话，后台这一侧就只剩情绪、看不到主线——表现出来像失忆：知道自己心里闷，但想不起为什么。两个一起拉才拼得出完整的自己。
+
+`breath` 是 0 参数、0 次 LLM 调用，纯读库，不增加模型开销。
 
 ### 决定失败时
 
@@ -94,16 +102,18 @@ phosphor 每 **60 秒** 执行一次 `tick()`，每次检查两条互不干扰�
 - **diary 配图还没接**，`image_prompt` 目前会被跳过，不会生成占位图
 - **diary 配音**固定用 ElevenLabs `eleven_v3` 模型。只有它认 `[breathing]`、`[whispers]` 这类标签，换模型会把标签原样念出来
 - **silent 故意不给 TA 自己切**。那等于从你的世界里消失，这个开关只留给人：`POST /wake/mode`
-- **小红书故意不自动连接**。发文前要先和小满商量
+- **会对外说话的 server 故意不自动连接**（比如小红书）。发文前要先商量
 
 ## 对话记录是怎么来的
 
 phosphor 本身看不到你们的聊天。"最近聊了什么"和"对话密度"都来自 `conversation_log` 表，这张表的数据有两个来源：
 
-1. **自动**：Aru 使用 `vesper-gateway` 的 `aru-chat` 模型时，网关在转发前记下用户最后一条消息（标为"小满"），在回复流结束时记下助手回复（标为"允朔"）。记录前会剥掉 Aru 注入的 `<environment>` 块和 `<sent_at>` 时间戳
+1. **自动**：Aru 使用 `vesper-gateway` 的 `aru-chat` 模型时，网关在转发前记下用户最后一条消息（标为用户），在回复流结束时记下助手回复（标为 TA 自己）。记录前会剥掉 Aru 注入的 `<environment>` 块和 `<sent_at>` 时间戳
 2. **手动**：`POST /wake/conversation`（见接口篇）
 
 没接上之前这张表一直是空的，只代表没有数据，不代表程序坏了。
+
+如果同时配了 heartbeat（见 [08](08-heartbeat.md)），决策时用的上下文是 `conversation_log` 里的聊天加上 heartbeat 文件里的"事件"，合并后按时间排序。
 
 ## 数据库里有什么
 
@@ -126,6 +136,8 @@ phosphor 本身看不到你们的聊天。"最近聊了什么"和"对话密度"�
 src/
 ├── phosphor.js      主循环：两条唤醒链、兜底、退出时关库
 ├── decide.js        拼 prompt、调模型、重试、解析 JSON
+├── context.js       合并 conversation_log 与 heartbeat 事件
+├── timeline.js      读写 heartbeat 的时间线文件
 ├── state.js         所有数据库读写；启动时自动建 data/ 目录
 ├── vesper.js        3001 端口：上报、/wake/*、日记页
 ├── gateway.js       3002 端口：模型路由 + 对话记录
