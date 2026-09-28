@@ -2,7 +2,7 @@
 
 一个会自己醒来的 TA。每隔一段时间，TA 会看看现在的情况（几点了、你们最近聊了什么、手机电量、自己还记得什么、最近的感受），然后自己决定：推送一条消息、写一篇日记、去论坛逛逛、翻翻记忆，或者什么都不做。最后再决定下次什么时候醒。
 
-可以和 dylan-heartbeat 并行跑，稳定之后再切换。两者的区别见 [08](docs/08-heartbeat.md)。
+可以和别的唤醒项目（比如 dylan-heartbeat）并行跑，稳定之后再切换。两者的区别见 [08](docs/08-heartbeat.md)。
 
 ## 三个进程
 
@@ -10,7 +10,7 @@
 |---|---|---|
 | `phosphor` | 无 | 心脏。每分钟看一眼该不该醒，该醒就做决定、执行动作 |
 | `vesper` | 3001 | 接收手机上报、`/wake/*` 控制接口、日记网页 |
-| `vesper-gateway` | 3002 | 模型网关。Aru 和 phosphor 都从这里调模型，顺便记录对话 |
+| `vesper-gateway` | 3002 | 模型网关。聊天客户端和 phosphor 都从这里调模型，顺便记录对话 |
 
 三个进程共用一个数据库 `data/state.db`。
 
@@ -32,8 +32,8 @@
 ## ⚡ 最快跑起来（VPS，已经装好 Node 20+ 和 pm2）
 
 ```bash
-cd /root
-git clone https://github.com/xiaomandebbie/Vesper-phosphor.git vesper-phosphor
+cd ~
+git clone https://github.com/<你的用户名>/vesper-phosphor.git
 cd vesper-phosphor
 npm ci
 cp .env.example .env
@@ -56,15 +56,15 @@ pm2 logs phosphor --lines 40 --nostream
 
 1. **`.env` 和 `data/state.db` 不在 git 里**。删掉项目重新 clone，这两样不会回来，删之前先备份
 2. **三个 key 不填就开防火墙 = 公网裸奔**：`GATEWAY_API_KEY`、`REPORT_STATUS_API_KEY`、`VESPER_BASIC_USER/PASS`
-3. **Aru 里填的 API Key 是 `GATEWAY_API_KEY`**，不是上游模型的 key
+3. **聊天客户端里填的 API Key 是 `GATEWAY_API_KEY`**，不是上游模型自己的 key
 4. **`*_UPSTREAM_BASE_URL` 只写域名，不带 `/v1`**；`LLM_BASE_URL` 反而要写完整地址
 5. **改了 `.env` 要重启**：`pm2 restart vesper vesper-gateway phosphor --update-env`
 6. **不要在服务器上直接改代码**。在 GitHub 上改，服务器只 `git pull`
 
 ## 设计上的几个"故意"
 
-- **silent 不给 TA 自己切**。那等于从你的世界里消失，这个开关只留给人（`POST /wake/mode`）
-- **小红书不自动连**。会对外说话的 server 都留给人来触发，见 [07](docs/07-mcp.md)
+- **silent 不给 TA 自己切**。那等于从对方的世界里消失，这个开关只留给人（`POST /wake/mode`）
+- **会对外说话的 MCP 不自动连**。发帖、发文这类留给人来触发，见 [07](docs/07-mcp.md)
 - **进程停掉的时间不追不补**。停一天再开，只会醒一次
 - **决策上下文里没有随机数和算出来的"强度"**，只给真实、可解释的输入
 - **每次醒来都记账**，包括 noop 和出错，TA 不在时发生过什么都能从 `GET /wake/log` 看回来
@@ -76,7 +76,7 @@ pm2 logs phosphor --lines 40 --nostream
 - 对话记录只取最后一条、不去重：重发或重新生成时同一条会写两遍；一次带多条新消息时会丢中间的
 - `conversation_log` 没有清理机制，会一直涨
 - 助手回复的捕获依赖上游是标准 SSE，非标准格式时捞不到文本，只打一行 warn
-- Aru 前端怎么接 `/wake/*` 接口：待补充
+- 聊天客户端前端怎么接 `/wake/*` 接口：待补充
 
 ## 目录结构
 
@@ -89,7 +89,7 @@ src/
 ├── state.js           SQLite 读写；启动时自动建 data/
 ├── vesper.js          3001：上报、/wake/*、日记页
 ├── gateway.js         3002：模型路由 + 对话记录
-├── mcp-manager.js     连接 Ombre Brain / Lutopia
+├── mcp-manager.js     连接 Ombre Brain / 论坛
 └── actions/           bark / diary / mcp-action / ombre-brain / set-mode
 docs/                  详细文档（见上表）
 ```

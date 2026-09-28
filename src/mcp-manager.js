@@ -70,13 +70,14 @@ export async function connectAll() {
   // 论坛：个人 MCP URL，Streamable HTTP。
   // 个人连接不需要传 token，身份由 URL 里的短码自动绑定。
   // 如果配的是 .../sse 结尾的旧格式，自动去掉这个后缀。
-  const forumUrl = process.env.FORUM_MCP_URL || process.env.LUTOPIA_MCP_ARGS;
+  // 名字保持 lutopia：decide.js 的 prompt 里就是用这个名字指挥工具调用的，改名两边会打架。
+  const forumUrl = process.env.LUTOPIA_MCP_URL || process.env.LUTOPIA_MCP_ARGS;
   if (forumUrl) {
     try {
-      await connectMcpHttp('forum', forumUrl.replace(/\/sse$/, ''));
-      console.log('connected MCP: forum');
+      await connectMcpHttp('lutopia', forumUrl.replace(/\/sse$/, ''));
+      console.log('connected MCP: lutopia');
     } catch (err) {
-      console.error('could not connect MCP "forum":', err.message);
+      console.error('could not connect MCP "lutopia":', err.message);
     }
   }
 
