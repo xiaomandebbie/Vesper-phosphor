@@ -25,7 +25,7 @@ connectMcpHttp(name, url, headers)
 connectMcpStdio(name, command, args)
 ```
 
-Ombre Brain 和 Lutopia 都是前者（远程 HTTP）。如果你的 server 是个本地命令行程序，用后者。
+这两个内置的都是前者（远程 HTTP）。如果你的 server 是个本地命令行程序，用后者。
 
 ## 加一个新的：三步
 
@@ -83,7 +83,7 @@ pm2 restart phosphor
 ```json
 {
   "action": "mcp_call",
-  "action_detail": "{\"server\":\"weather\",\"tool\":\"get_forecast\",\"args\":{\"city\":\"长沙\"}}"
+  "action_detail": "{\"server\":\"weather\",\"tool\":\"get_forecast\",\"args\":{\"city\":\"上海\"}}"
 }
 ```
 
@@ -103,7 +103,7 @@ pm2 restart phosphor
 
 有些 server 能对外的世界产生影响：发帖、发文章、下单、发消息。这类建议**不要**放进 TA 的自主行动列表——它每次醒来都可能自己决定要用。
 
-项目里的做法是：小红书的 MCP 特意不写进 `connectAll()`，需要时由人手动要求、并且先商量好内容。接新 server 时可以照这个思路判断：
+项目里的做法是：能对外发帖发文的社交平台 MCP 特意不写进 `connectAll()`，需要时由人手动要求、并且先商量好内容。接新 server 时可以照这个思路判断：
 
 - 只读（查资料、翻记忆、看帖子）→ 可以自主
 - 会对外说话、会花钱、会改别人能看到的东西 → 留给人来触发
