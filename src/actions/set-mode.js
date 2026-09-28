@@ -11,10 +11,16 @@ export default async function setMode(detail) {
   let mode;
   try {
     const parsed = JSON.parse(detail);
-    mode = parsed.mode;
+    // 三种输入都要接住：
+    //   {"mode":"low-frequency"} → 对象，取 .mode
+    //   "low-frequency"          → JSON 字符串，parsed 本身就是值
+    //   low-frequency            → 不是 JSON，走 catch
+    mode = parsed && typeof parsed === 'object' ? parsed.mode : parsed;
   } catch (err) {
     mode = detail; // 容错：直接传字符串也行
   }
+
+  if (typeof mode === 'string') mode = mode.trim();
 
   if (!VALID_MODES.includes(mode)) {
     console.error(`setMode(): invalid mode "${mode}", ignoring`);
