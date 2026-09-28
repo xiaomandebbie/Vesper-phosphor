@@ -5,10 +5,58 @@ const LLM_BASE_URL =
 const LLM_MODEL = process.env.LLM_MODEL || process.env.DEEPSEEK_MODEL || 'deepseek-flash';
 const LLM_API_KEY = process.env.LLM_API_KEY || process.env.DEEPSEEK_API_KEY;
 
-// 决策输出的 JSON 本身很短，但模型可能先花额度在思考上。
-// 原来写死 700，实测会"返回 200 但正文为空"（额度被思考吃光）。
-// 放宽到 2000，需要时可以用 .env 的 DECIDE_MAX_TOKENS 调。
-const DECIDE_MAX_TOKENS = Number(process.env.DECIDE_MAX_TOKENS || 2000);
+// 输出上限默认不设，交给上游用自己的默认值。
+// 原来写死 700——决策 JSON 本身很短，看着够；但如果模型先花额度在思考上，
+// 思考没走完额度就用光，正文就是空的，而报错只说 "no content"，查不出原因。
+// 真要收紧再用 .env 的 DECIDE_MAX_TOKENS。
+const DECIDE_MAX_TOKENS = process.env.DECIDE_MAX_TOKENS
+  ? Number(process.env.DECIDE_MAX_TOKENS)
+  : null;
+
+async function callLLM(prompt, maxTokens = DECIDE_MAX_TOKENS) {
+  const payload = {
+    model: LLM_MODEL,
+    messages: [{ role: 'user', content: prompt }],
+  };
+  if (maxTokens) payload.max_tokens = maxTokens;
+
+  const res = await fetch(LLM_BASE_URL, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${LLM_API_KEY}`,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  });
+
+  if (!res.ok) {
+    throw new Error(`decide(): LLM API error ${res.status}: ${await res.text()}`);
+  }
+
+  const data = await res.json();
+  const choice = data.choices?.[0];
+  return {
+    content: choice?.message?.content ?? '',
+    finish: choice?.finish_reason ?? 'none',
+    raw: data,
+  };
+}
+
+// 模型有时候会把 JSON 包在 ``` 里，或者在前后加一两句人话。
+// 先原样试，不行就只取第一个 { 到最后一个 } 再试。
+function parseDecision(text) {
+  const cleaned = text.replace(/```json|```/g, '').trim();
+  try {
+    return JSON.parse(cleaned);
+  } catch (err) {
+    const start = cleaned.indexOf('{');
+    const end = cleaned.lastIndexOf('}');
+    if (start !== -1 && end > start) {
+      return JSON.parse(cleaned.slice(start, end + 1));
+    }
+    throw err;
+  }
+}
 
 export default async function decide(context) {
   const kindNote =
@@ -67,40 +115,29 @@ list 只显示一个未读切片并会标记已读，不要把一页 list 当成
 只返回一个JSON对象，不要任何其他文字、不要markdown代码块标记：
 {"next_wake_minutes": number, "mood": string, "action": string, "action_detail": string, "self_wake": {"after_minutes": number, "note": string} | null}`;
 
-  const res = await fetch(LLM_BASE_URL, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${LLM_API_KEY}`,
-      'content-type': 'application/json',
-    },
-    body: JSON.stringify({
-      model: LLM_MODEL,
-      max_tokens: DECIDE_MAX_TOKENS,
-      messages: [{ role: 'user', content: prompt }],
-    }),
-  });
+  let out = await callLLM(prompt);
 
-  if (!res.ok) {
-    throw new Error(`decide(): LLM API error ${res.status}: ${await res.text()}`);
-  }
-
-  const data = await res.json();
-  const raw = data.choices?.[0]?.message?.content;
-  if (!raw) {
-    // 上游给了 200，但正文是空的。不猜原因，把原始响应打出来。
-    // 常见三种：finish_reason=length（额度被思考吃光）、choices 是空数组（被内容过滤）、
-    // 或者 body 里其实是个 error 对象。
-    const finish = data.choices?.[0]?.finish_reason ?? 'none';
+  // 空正文：先别急着失败。把原始响应打出来；如果这次是带了上限的，
+  // 再摘掉上限重试一次——额度被思考吃光的话，这一下就回来了。
+  if (!out.content && DECIDE_MAX_TOKENS) {
     console.error(
-      `decide(): empty content. finish_reason=${finish} raw=${JSON.stringify(data).slice(0, 600)}`
+      `decide(): empty content with max_tokens=${DECIDE_MAX_TOKENS}. finish_reason=${out.finish} raw=${JSON.stringify(out.raw).slice(0, 600)}`
     );
-    throw new Error(`decide(): no content in response (finish_reason=${finish})`);
+    out = await callLLM(prompt, null);
   }
 
-  const cleaned = raw.replace(/```json|```/g, '').trim();
+  if (!out.content) {
+    // 到这里还是空，就不是额度问题了。把 finish_reason 和原始 body 打出来：
+    // 常见还有两种——choices 是空数组（被内容过滤）、body 里其实是个 error 对象。
+    console.error(
+      `decide(): empty content. finish_reason=${out.finish} raw=${JSON.stringify(out.raw).slice(0, 600)}`
+    );
+    throw new Error(`decide(): no content in response (finish_reason=${out.finish})`);
+  }
+
   try {
-    return JSON.parse(cleaned);
+    return parseDecision(out.content);
   } catch (err) {
-    throw new Error(`decide(): failed to parse JSON: ${cleaned}`);
+    throw new Error(`decide(): failed to parse JSON: ${out.content.slice(0, 300)}`);
   }
 }
