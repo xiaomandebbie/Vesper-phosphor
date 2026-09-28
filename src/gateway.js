@@ -34,6 +34,17 @@ function requireGatewayAuth(req, res, next) {
   next();
 }
 
+// Aru 会把 <environment> 环境块和 <sent_at> 时间戳拼进用户消息里。
+// 这些是给对话侧看的上下文，不是小满本人说的话；原样记进 conversation_log 的话，
+// decide.js 拿到的"最近对话"会全是环境噪音，真正说了什么反而被挤掉。
+function stripInjectedBlocks(text) {
+  if (typeof text !== 'string') return '';
+  return text
+    .replace(/<environment>[\s\S]*?<\/environment>/g, '')
+    .replace(/<sent_at[^>]*>/g, '')
+    .trim();
+}
+
 // 只记 Aru 那条线路的对话，方向按上游协议来：
 // messages 里 role=user 是小满说的，role=assistant 是允朔说的。
 // assistant 那条不在这里记——由响应侧统一补，免得同一句话落两遍。
@@ -41,9 +52,10 @@ function recordUserMessage(messages) {
   if (!Array.isArray(messages) || !messages.length) return;
   const last = messages[messages.length - 1];
   if (!last || last.role !== 'user') return;
-  if (typeof last.content !== 'string' || !last.content.trim()) return;
+  const cleaned = stripInjectedBlocks(last.content);
+  if (!cleaned) return;
   try {
-    addConversationMessage('小满', last.content);
+    addConversationMessage('小满', cleaned);
   } catch (err) {
     console.error('gateway: addConversationMessage(user) failed:', err.message);
   }
@@ -91,6 +103,11 @@ function makeAssistantCapture(onComplete) {
         } catch {
           // 不是 JSON 就算了，不记
         }
+      }
+      // 流走完还是没捞到文本：要么上游不是标准 SSE，要么这次只吐了推理内容。
+      // 不报错，但留一行日志，免得"回复没进 conversation_log"变成无声的丢。
+      if (!text.trim()) {
+        console.warn('gateway: assistant capture got empty text — upstream may not be standard SSE');
       }
       onComplete(text);
       cb();
