@@ -12,6 +12,7 @@ import {
   getLatestDeviceReport,
   getRecentConversation,
   countRecentConversation,
+  closeDb,
 } from './state.js';
 import decide from './decide.js';
 import { executeAction } from './actions/index.js';
@@ -20,6 +21,48 @@ import { listAllTools, connectAll, callTool, isConnected } from './mcp-manager.j
 const TICK_MS = 60 * 1000;
 const MISSED_GRACE_MS = 3 * 60 * 1000;
 const LOW_FREQ_MIN_GAP_MINUTES = 90;
+const DEFAULT_WAKE_MINUTES = 60;
+const MIN_WAKE_MINUTES = 5;
+const MAX_WAKE_MINUTES = 24 * 60;
+
+// 模型返回的 JSON 字段不一定齐全、类型也不一定对。
+// 缺 next_wake_minutes 会让 next_wake_at 变成 NaN（存进库里是 NULL），之后每分钟都判定"该醒了"，
+// 等于每分钟调一次 LLM；缺 mood 会让 updateWakeState 报 Missing named parameter。统一在这里兜住。
+function normalizeDecision(raw, fallbackMood) {
+  const d = raw && typeof raw === 'object' ? raw : {};
+
+  let minutes = Number(d.next_wake_minutes);
+  if (!Number.isFinite(minutes)) minutes = DEFAULT_WAKE_MINUTES;
+  minutes = Math.min(Math.max(Math.round(minutes), MIN_WAKE_MINUTES), MAX_WAKE_MINUTES);
+
+  const mood =
+    typeof d.mood === 'string' && d.mood.trim() ? d.mood.trim() : (fallbackMood ?? '平静');
+  const action = typeof d.action === 'string' && d.action.trim() ? d.action.trim() : 'noop';
+
+  // action_detail 约定是字符串；模型有时直接给对象，转回 JSON 字符串，下游各 action 照常解析
+  let actionDetail = d.action_detail ?? '';
+  if (typeof actionDetail !== 'string') actionDetail = JSON.stringify(actionDetail);
+
+  let selfWake = null;
+  if (d.self_wake && typeof d.self_wake === 'object') {
+    const after = Number(d.self_wake.after_minutes);
+    if (Number.isFinite(after) && after > 0) {
+      selfWake = {
+        after_minutes: after,
+        note: typeof d.self_wake.note === 'string' ? d.self_wake.note : null,
+      };
+    }
+  }
+
+  return {
+    ...d,
+    next_wake_minutes: minutes,
+    mood,
+    action,
+    action_detail: actionDetail,
+    self_wake: selfWake,
+  };
+}
 
 // 对话密度：最近2小时的消息数，作为一个简单但真实的信号。
 // 消息数据来自 conversation_log 表，由外部聊天前端（比如 aru）主动上报进来
@@ -78,7 +121,7 @@ async function runDecisionCycle({ kind, scheduledAt = null, selfNote = null }) {
   let errorMessage = null;
 
   try {
-    decision = await decide(context);
+    decision = normalizeDecision(await decide(context), wakeState.mood);
     console.log(`[${kind}] decision:`, decision);
     result = await executeAction(decision);
     console.log(`[${kind}] action result:`, JSON.stringify(result));
@@ -101,9 +144,9 @@ async function runDecisionCycle({ kind, scheduledAt = null, selfNote = null }) {
 
   if (decision) {
     updateWakeState({ mood: decision.mood });
-    if (decision.self_wake && decision.self_wake.after_minutes) {
+    if (decision.self_wake) {
       const wakeAt = Date.now() + decision.self_wake.after_minutes * 60000;
-      addPendingWake(wakeAt, decision.self_wake.note ?? null);
+      addPendingWake(wakeAt, decision.self_wake.note);
     }
   }
 
@@ -146,23 +189,48 @@ async function preciseTick() {
   }
 }
 
+// decide() 加上重试可能跑超过一分钟；上一轮没跑完就跳过这一轮，
+// 不然 next_wake_at 还没更新，同一次唤醒会被并发触发两遍。
+let ticking = false;
 async function tick() {
+  if (ticking) return;
+  ticking = true;
   try {
-    await nonPreciseTick();
-  } catch (err) {
-    console.error('nonPreciseTick error:', err);
-  }
-  try {
-    await preciseTick();
-  } catch (err) {
-    console.error('preciseTick error:', err);
+    try {
+      await nonPreciseTick();
+    } catch (err) {
+      console.error('nonPreciseTick error:', err);
+    }
+    try {
+      await preciseTick();
+    } catch (err) {
+      console.error('preciseTick error:', err);
+    }
+  } finally {
+    ticking = false;
   }
 }
 
+// pm2 stop / restart 会发 SIGINT。主动关库再退出，
+// 不让 better-sqlite3 的 Statement 拖到 Node 拆环境时才析构（日志里那个 (env) != nullptr 断言）。
+let timer = null;
+function shutdown(signal) {
+  console.log(`phosphor: received ${signal}, shutting down`);
+  if (timer) clearInterval(timer);
+  try {
+    closeDb();
+  } catch (err) {
+    console.error('closeDb() failed:', err.message);
+  }
+  process.exit(0);
+}
+
 async function main() {
+  process.on('SIGINT', () => shutdown('SIGINT'));
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
   await connectAll();
   await tick();
-  setInterval(tick, TICK_MS);
+  timer = setInterval(tick, TICK_MS);
 }
 
 main();

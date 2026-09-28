@@ -1,9 +1,14 @@
 import Database from 'better-sqlite3';
+import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const db = new Database(path.join(__dirname, '..', 'data', 'state.db'));
+// data/ 不在 git 里（.gitignore 忽略了 db 文件，git 也不跟踪空目录），
+// 新 clone 下来没有这个目录，better-sqlite3 会直接报错。先建好。
+const DATA_DIR = path.join(__dirname, '..', 'data');
+fs.mkdirSync(DATA_DIR, { recursive: true });
+const db = new Database(path.join(DATA_DIR, 'state.db'));
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS wake_state (
@@ -161,6 +166,12 @@ export function countRecentConversation(windowMs) {
   return db
     .prepare('SELECT COUNT(*) AS c FROM conversation_log WHERE ts >= ?')
     .get(Date.now() - windowMs).c;
+}
+
+// 进程退出前主动关库（phosphor.js 收到 SIGINT/SIGTERM 时调用）。
+// 重复调用安全：已关就跳过。
+export function closeDb() {
+  if (db.open) db.close();
 }
 
 export default db;

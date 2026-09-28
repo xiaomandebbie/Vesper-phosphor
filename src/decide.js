@@ -13,6 +13,13 @@ const DECIDE_MAX_TOKENS = process.env.DECIDE_MAX_TOKENS
   ? Number(process.env.DECIDE_MAX_TOKENS)
   : null;
 
+// 单次请求最多等多久。不设的话上游卡住时这一轮 tick 会一直挂着。
+const LLM_TIMEOUT_MS = Number(process.env.DECIDE_TIMEOUT_MS || 120000);
+
+// 第一次失败（空正文 / 被截断 / 不是合法 JSON）后，重试时追加在 prompt 末尾的提醒。
+const RETRY_HINT =
+  '\n\n（注意：上一次的回复是空的、被截断了，或者不是合法 JSON。这次请只输出一个完整的 JSON 对象；action_detail 里的正文控制在 400 字以内，确保所有引号和括号都闭合。）';
+
 async function callLLM(prompt, maxTokens = DECIDE_MAX_TOKENS) {
   const payload = {
     model: LLM_MODEL,
@@ -27,6 +34,7 @@ async function callLLM(prompt, maxTokens = DECIDE_MAX_TOKENS) {
       'content-type': 'application/json',
     },
     body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(LLM_TIMEOUT_MS),
   });
 
   if (!res.ok) {
@@ -115,29 +123,33 @@ list 只显示一个未读切片并会标记已读，不要把一页 list 当成
 只返回一个JSON对象，不要任何其他文字、不要markdown代码块标记：
 {"next_wake_minutes": number, "mood": string, "action": string, "action_detail": string, "self_wake": {"after_minutes": number, "note": string} | null}`;
 
-  let out = await callLLM(prompt);
+  // 最多请求两次：第一次按配置来；空正文、被截断或 JSON 解析失败时，
+  // 摘掉 max_tokens、附上提醒再试一次。两次都不行才抛错，phosphor 会把下次唤醒往后推 10 分钟。
+  let lastError = null;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    const isRetry = attempt > 1;
+    const out = await callLLM(isRetry ? prompt + RETRY_HINT : prompt, isRetry ? null : DECIDE_MAX_TOKENS);
 
-  // 空正文：先别急着失败。把原始响应打出来；如果这次是带了上限的，
-  // 再摘掉上限重试一次——额度被思考吃光的话，这一下就回来了。
-  if (!out.content && DECIDE_MAX_TOKENS) {
-    console.error(
-      `decide(): empty content with max_tokens=${DECIDE_MAX_TOKENS}. finish_reason=${out.finish} raw=${JSON.stringify(out.raw).slice(0, 600)}`
-    );
-    out = await callLLM(prompt, null);
-  }
+    if (!out.content) {
+      // 常见原因：思考型模型把额度花在思考上、choices 是空数组（被内容过滤）、body 里其实是个 error 对象
+      console.error(
+        `decide(): empty content (attempt ${attempt}). finish_reason=${out.finish} raw=${JSON.stringify(out.raw).slice(0, 600)}`
+      );
+      lastError = new Error(`decide(): no content in response (finish_reason=${out.finish})`);
+      continue;
+    }
 
-  if (!out.content) {
-    // 到这里还是空，就不是额度问题了。把 finish_reason 和原始 body 打出来：
-    // 常见还有两种——choices 是空数组（被内容过滤）、body 里其实是个 error 对象。
-    console.error(
-      `decide(): empty content. finish_reason=${out.finish} raw=${JSON.stringify(out.raw).slice(0, 600)}`
-    );
-    throw new Error(`decide(): no content in response (finish_reason=${out.finish})`);
+    try {
+      return parseDecision(out.content);
+    } catch (err) {
+      // finish_reason=length 基本就是被截断了（日记正文写太长）
+      console.error(
+        `decide(): failed to parse JSON (attempt ${attempt}, finish_reason=${out.finish}): ${out.content.slice(0, 300)}`
+      );
+      lastError = new Error(
+        `decide(): failed to parse JSON (finish_reason=${out.finish}): ${out.content.slice(0, 300)}`
+      );
+    }
   }
-
-  try {
-    return parseDecision(out.content);
-  } catch (err) {
-    throw new Error(`decide(): failed to parse JSON: ${out.content.slice(0, 300)}`);
-  }
+  throw lastError;
 }
