@@ -17,13 +17,25 @@ import {
 import decide from './decide.js';
 import { executeAction } from './actions/index.js';
 import { listAllTools, connectAll, callTool, isConnected } from './mcp-manager.js';
+import {
+  isSharedTimelineEnabled,
+  readSharedConversation,
+  countSharedConversation,
+  describeAction,
+  postSharedEvent,
+} from './timeline.js';
 
 const TICK_MS = 60 * 1000;
 const MISSED_GRACE_MS = 3 * 60 * 1000;
 const LOW_FREQ_MIN_GAP_MINUTES = 90;
 const DEFAULT_WAKE_MINUTES = 60;
 const MIN_WAKE_MINUTES = 5;
-const MAX_WAKE_MINUTES = 24 * 60;
+// 两次自然唤醒之间最长隔多久。模型给得再大也会被截到这个值。
+// .env 里 PHOSPHOR_MAX_WAKE_MINUTES 可改，不填是 1440（一天）。
+const MAX_WAKE_MINUTES = (() => {
+  const n = Number(process.env.PHOSPHOR_MAX_WAKE_MINUTES);
+  return Number.isFinite(n) && n >= MIN_WAKE_MINUTES ? Math.round(n) : 24 * 60;
+})();
 
 // 模型返回的 JSON 字段不一定齐全、类型也不一定对。
 // 缺 next_wake_minutes 会让 next_wake_at 变成 NaN（存进库里是 NULL），之后每分钟都判定"该醒了"，
@@ -32,7 +44,7 @@ function normalizeDecision(raw, fallbackMood) {
   const d = raw && typeof raw === 'object' ? raw : {};
 
   let minutes = Number(d.next_wake_minutes);
-  if (!Number.isFinite(minutes)) minutes = DEFAULT_WAKE_MINUTES;
+  if (!Number.isFinite(minutes)) minutes = Math.min(DEFAULT_WAKE_MINUTES, MAX_WAKE_MINUTES);
   minutes = Math.min(Math.max(Math.round(minutes), MIN_WAKE_MINUTES), MAX_WAKE_MINUTES);
 
   const mood =
@@ -64,12 +76,37 @@ function normalizeDecision(raw, fallbackMood) {
   };
 }
 
-// 对话密度：最近2小时的消息数，作为一个简单但真实的信号。
-// 消息数据来自 conversation_log 表，由外部聊天前端（比如 aru）主动上报进来
-// （见 vesper.js 的 POST /wake/conversation）——这个项目本身接触不到真实对话，
-// 没有上报就一直是0，不是坏了。
-async function computeConversationDensity() {
-  return countRecentConversation(2 * 60 * 60 * 1000);
+// 没有时间戳的消息（比如助手回复）沿用前一条的时间；开头几条没有就用后面第一条有的。
+// 不然 decide.js 会把 null 当成 1970 年显示。
+function fillTimestamps(entries) {
+  let last = null;
+  for (const e of entries) {
+    if (e.ts) last = e.ts;
+    else if (last) e.ts = last;
+  }
+  const first = entries.find((e) => e.ts)?.ts ?? Date.now();
+  for (const e of entries) if (!e.ts) e.ts = first;
+  return entries;
+}
+
+// 最近对话：配了 HEARTBEAT_TIMELINE_FILE 就读 heartbeat 的时间线，和 heartbeat 看到的完全一样；
+// 没配或读失败就用自己的 conversation_log。
+function getRecentMessages(limit) {
+  if (isSharedTimelineEnabled()) {
+    const shared = readSharedConversation(limit);
+    if (shared) return fillTimestamps(shared);
+  }
+  return getRecentConversation(limit);
+}
+
+// 对话密度：最近2小时的消息数，来源同上。
+function computeConversationDensity() {
+  const windowMs = 2 * 60 * 60 * 1000;
+  if (isSharedTimelineEnabled()) {
+    const n = countSharedConversation(windowMs);
+    if (n !== null) return n;
+  }
+  return countRecentConversation(windowMs);
 }
 
 // 从 Ombre Brain 取一段文本。取不到就返回 null，不影响这一轮唤醒。
@@ -101,8 +138,8 @@ async function runDecisionCycle({ kind, scheduledAt = null, selfNote = null }) {
   const wakeState = getWakeState();
   const latestDevice = getLatestDeviceReport();
   const { breathSummary, feelSummary } = await getMemorySummary();
-  const density = await computeConversationDensity();
-  const recentMessages = getRecentConversation(15);
+  const density = computeConversationDensity();
+  const recentMessages = getRecentMessages(20);
   const gapMinutes = wakeState.updated_at ? (Date.now() - wakeState.updated_at) / 60000 : 0;
 
   const missed = getUnacknowledgedMissed();
@@ -153,6 +190,9 @@ async function runDecisionCycle({ kind, scheduledAt = null, selfNote = null }) {
     result,
     error: errorMessage,
   });
+
+  // 做了事就写回 heartbeat 的时间线，让 heartbeat 和聊天窗口里的 TA 都知道
+  if (!errorMessage) await postSharedEvent(describeAction(decision, result));
 
   if (missed.length) acknowledgeMissed(missed.map((m) => m.id));
 
@@ -242,6 +282,9 @@ function shutdown(signal) {
 async function main() {
   process.on('SIGINT', () => shutdown('SIGINT'));
   process.on('SIGTERM', () => shutdown('SIGTERM'));
+  console.log(
+    `phosphor: 最长唤醒间隔 ${MAX_WAKE_MINUTES} 分钟；共享 heartbeat 时间线：${isSharedTimelineEnabled() ? '已开启' : '未开启'}`
+  );
   await connectAll();
   await tick();
   timer = setInterval(tick, TICK_MS);
