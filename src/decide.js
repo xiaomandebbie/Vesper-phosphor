@@ -5,6 +5,11 @@ const LLM_BASE_URL =
 const LLM_MODEL = process.env.LLM_MODEL || process.env.DEEPSEEK_MODEL || 'deepseek-flash';
 const LLM_API_KEY = process.env.LLM_API_KEY || process.env.DEEPSEEK_API_KEY;
 
+// 决策输出的 JSON 本身很短，但模型可能先花额度在思考上。
+// 原来写死 700，实测会"返回 200 但正文为空"（额度被思考吃光）。
+// 放宽到 2000，需要时可以用 .env 的 DECIDE_MAX_TOKENS 调。
+const DECIDE_MAX_TOKENS = Number(process.env.DECIDE_MAX_TOKENS || 2000);
+
 export default async function decide(context) {
   const kindNote =
     context.kind === 'precise'
@@ -70,7 +75,7 @@ list 只显示一个未读切片并会标记已读，不要把一页 list 当成
     },
     body: JSON.stringify({
       model: LLM_MODEL,
-      max_tokens: 700,
+      max_tokens: DECIDE_MAX_TOKENS,
       messages: [{ role: 'user', content: prompt }],
     }),
   });
@@ -81,7 +86,16 @@ list 只显示一个未读切片并会标记已读，不要把一页 list 当成
 
   const data = await res.json();
   const raw = data.choices?.[0]?.message?.content;
-  if (!raw) throw new Error('decide(): no content in response');
+  if (!raw) {
+    // 上游给了 200，但正文是空的。不猜原因，把原始响应打出来。
+    // 常见三种：finish_reason=length（额度被思考吃光）、choices 是空数组（被内容过滤）、
+    // 或者 body 里其实是个 error 对象。
+    const finish = data.choices?.[0]?.finish_reason ?? 'none';
+    console.error(
+      `decide(): empty content. finish_reason=${finish} raw=${JSON.stringify(data).slice(0, 600)}`
+    );
+    throw new Error(`decide(): no content in response (finish_reason=${finish})`);
+  }
 
   const cleaned = raw.replace(/```json|```/g, '').trim();
   try {
