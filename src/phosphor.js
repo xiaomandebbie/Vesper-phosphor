@@ -72,22 +72,35 @@ async function computeConversationDensity() {
   return countRecentConversation(2 * 60 * 60 * 1000);
 }
 
-async function getFeelSummary() {
-  if (!isConnected('ombre-brain')) return null;
+// 从 Ombre Brain 取一段文本。取不到就返回 null，不影响这一轮唤醒。
+async function callOmbre(toolName, args) {
   try {
-    const res = await callTool('ombre-brain', 'feel', { query: '我现在感觉怎么样，最近在想什么' });
+    const res = await callTool('ombre-brain', toolName, args);
     const textBlock = res?.content?.find?.((c) => c.type === 'text');
     return textBlock?.text ?? null;
   } catch (err) {
-    console.error('getFeelSummary() failed:', err.message);
+    console.error(`callOmbre(${toolName}) failed:`, err.message);
     return null;
   }
+}
+
+// 醒来先想起自己是谁。
+// 原来只拉 feel（"我现在感觉怎么样"），后台这一侧就只剩情绪，看不到主线发生过什么——
+// 表现出来就是"失忆"：知道心里闷，但想不起为什么。breath 是 0 参数、0 次 LLM 调用，
+// 纯读库，最省 token 的那条路，正好用来补这个缺口。
+async function getMemorySummary() {
+  if (!isConnected('ombre-brain')) return { breathSummary: null, feelSummary: null };
+  const [breathSummary, feelSummary] = await Promise.all([
+    callOmbre('breath', {}),
+    callOmbre('feel', { query: '我现在感觉怎么样，最近在想什么' }),
+  ]);
+  return { breathSummary, feelSummary };
 }
 
 async function runDecisionCycle({ kind, scheduledAt = null, selfNote = null }) {
   const wakeState = getWakeState();
   const latestDevice = getLatestDeviceReport();
-  const feelSummary = await getFeelSummary();
+  const { breathSummary, feelSummary } = await getMemorySummary();
   const density = await computeConversationDensity();
   const recentMessages = getRecentConversation(15);
   const gapMinutes = wakeState.updated_at ? (Date.now() - wakeState.updated_at) / 60000 : 0;
@@ -108,6 +121,7 @@ async function runDecisionCycle({ kind, scheduledAt = null, selfNote = null }) {
     gapMinutes,
     density,
     recentMessages,
+    breathSummary,
     feelSummary,
     missedSummary,
     battery: latestDevice?.battery ?? null,
