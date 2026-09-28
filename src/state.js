@@ -160,9 +160,9 @@ export function listDiary(limit = 50) {
   return stmt('SELECT * FROM diary ORDER BY ts DESC LIMIT ?').all(limit);
 }
 
-// 对话记录：由外部聊天前端（比如你说的 aru）主动上报，phosphor 拿它算密度、
+// 对话记录：由外部聊天前端主动上报，phosphor 拿它算密度、
 // decide.js 拿它当"最近聊了什么"的真实上下文。不是从这个项目里自动采集的——
-// 这个项目本身接触不到你们的真实对话，需要有个地方把消息推进来。
+// 这个项目本身接触不到真实对话，需要有个地方把消息推进来。
 export function addConversationMessage(speaker, content) {
   stmt('INSERT INTO conversation_log (ts, speaker, content) VALUES (?, ?, ?)').run(
     Date.now(),
