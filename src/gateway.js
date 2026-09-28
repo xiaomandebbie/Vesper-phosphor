@@ -34,12 +34,24 @@ function requireGatewayAuth(req, res, next) {
   next();
 }
 
+// OpenAI 格式里 content 有两种写法：纯字符串，或者带图片时的数组
+// [{type:'text', text:'...'}, {type:'image_url', ...}]。数组只取文字部分。
+function contentToText(content) {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    return content
+      .filter((p) => p && p.type === 'text' && typeof p.text === 'string')
+      .map((p) => p.text)
+      .join('\n');
+  }
+  return '';
+}
+
 // Aru 会把 <environment> 环境块和 <sent_at> 时间戳拼进用户消息里。
 // 这些是给对话侧看的上下文，不是小满本人说的话；原样记进 conversation_log 的话，
 // decide.js 拿到的"最近对话"会全是环境噪音，真正说了什么反而被挤掉。
-function stripInjectedBlocks(text) {
-  if (typeof text !== 'string') return '';
-  return text
+function stripInjectedBlocks(content) {
+  return contentToText(content)
     .replace(/<environment>[\s\S]*?<\/environment>/g, '')
     .replace(/<sent_at[^>]*>/g, '')
     .trim();
@@ -48,6 +60,7 @@ function stripInjectedBlocks(text) {
 // 只记 Aru 那条线路的对话，方向按上游协议来：
 // messages 里 role=user 是小满说的，role=assistant 是允朔说的。
 // assistant 那条不在这里记——由响应侧统一补，免得同一句话落两遍。
+// 工具循环里最后一条是 role=tool，这里会直接跳过，不会把工具结果当成小满说的话。
 function recordUserMessage(messages) {
   if (!Array.isArray(messages) || !messages.length) return;
   const last = messages[messages.length - 1];
@@ -61,16 +74,31 @@ function recordUserMessage(messages) {
   }
 }
 
+// 非流式响应最多缓存这么大，防止异常大的 body 撑爆内存
+const MAX_RAW_BYTES = 2 * 1024 * 1024;
+
 // 上游回的是 SSE，允朔说的话散在 delta 里。
 // 这个 Transform 一边把数据放行给前端，一边把文本捞出来，流结束时交回去。
 function makeAssistantCapture(onComplete) {
   const decoder = new StringDecoder('utf8');
   let buffer = '';
   let text = '';
+  let raw = ''; // 非流式时的完整 body
+  let sawSSE = false;
+  let sawToolCalls = false;
+  let sawReasoning = false;
+
+  const inspectMessage = (m) => {
+    if (!m) return;
+    if (typeof m.content === 'string') text += m.content;
+    if (Array.isArray(m.tool_calls) && m.tool_calls.length) sawToolCalls = true;
+    if (m.reasoning_content) sawReasoning = true;
+  };
 
   const feedLine = (line) => {
     const trimmed = line.trim();
     if (!trimmed.startsWith('data:')) return;
+    sawSSE = true;
     const payload = trimmed.slice(5).trim();
     if (!payload || payload === '[DONE]') return;
     let parsed;
@@ -79,35 +107,42 @@ function makeAssistantCapture(onComplete) {
     } catch {
       return;
     }
-    const delta = parsed?.choices?.[0]?.delta?.content;
-    if (typeof delta === 'string') text += delta;
+    inspectMessage(parsed?.choices?.[0]?.delta);
   };
 
   return new Transform({
     transform(chunk, enc, cb) {
-      buffer += decoder.write(chunk);
+      const str = decoder.write(chunk);
+      if (!sawSSE && raw.length < MAX_RAW_BYTES) raw += str;
+      buffer += str;
       const lines = buffer.split('\n');
       buffer = lines.pop() ?? '';
       for (const line of lines) feedLine(line);
       cb(null, chunk);
     },
     flush(cb) {
-      buffer += decoder.end();
+      const rest = decoder.end();
+      if (!sawSSE && raw.length < MAX_RAW_BYTES) raw += rest;
+      buffer += rest;
       if (buffer) feedLine(buffer);
-      // 万一上游不是流式，整段就是一个 JSON
-      if (!text) {
+
+      // 不是流式：整段 body 就是一个 JSON（可能跨多行，所以用 raw 而不是最后一行）
+      if (!sawSSE) {
         try {
-          const parsed = JSON.parse(buffer || '{}');
-          const content = parsed?.choices?.[0]?.message?.content;
-          if (typeof content === 'string') text = content;
+          inspectMessage(JSON.parse(raw || '{}')?.choices?.[0]?.message);
         } catch {
           // 不是 JSON 就算了，不记
         }
       }
-      // 流走完还是没捞到文本：要么上游不是标准 SSE，要么这次只吐了推理内容。
-      // 不报错，但留一行日志，免得"回复没进 conversation_log"变成无声的丢。
-      if (!text.trim()) {
-        console.warn('gateway: assistant capture got empty text — upstream may not be standard SSE');
+
+      // 没捞到正文时区分原因。
+      // 工具调用轮（Aru 让模型调工具时）本来就没有正文，是正常情况，不出声。
+      if (!text.trim() && !sawToolCalls) {
+        if (sawReasoning) {
+          console.warn('gateway: assistant reply had reasoning but no content — nothing to record');
+        } else {
+          console.warn('gateway: assistant capture got empty text — upstream may not be standard SSE');
+        }
       }
       onComplete(text);
       cb();
@@ -167,7 +202,8 @@ app.post('/v1/chat/completions', requireGatewayAuth, async (req, res) => {
 
     const source = Readable.fromWeb(upstreamRes.body);
 
-    if (!recordConversation) {
+    // 上游报错（非 2xx）时原样透传，不当成允朔的话记录
+    if (!recordConversation || !upstreamRes.ok) {
       source.pipe(res);
       return;
     }
