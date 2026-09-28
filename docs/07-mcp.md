@@ -21,7 +21,7 @@ MCP（Model Context Protocol）是 TA 的"手脚"。唤醒时决定要做的事�
 // 远程 server：给一个 URL，可选带鉴权头
 connectMcpHttp(name, url, headers)
 
-// 本地进程：给一个命令和参数，Aru 会把它当子进程拉起来
+// 本地进程：给一个命令和参数，当子进程拉起来
 connectMcpStdio(name, command, args)
 ```
 
@@ -95,7 +95,7 @@ pm2 restart phosphor
 
 ### 工具名会全量进 prompt
 
-`listAllTools()` 返回的是**所有**已连 server 的所有工具名，整份塞进 prompt。工具多的 server 会吃掉不少 token——比如一个有一百七十多个工具的 server，光名字就是一大段。
+`listAllTools()` 返回的是**所有**已连 server 的所有工具名，整份塞进 prompt。工具多的 server 会吃掉不少 token——一个有一百七十多个工具的 server，光名字就是一大段。
 
 所以只连真正要用的。不用的把 `.env` 里那个变量清空重启就行，不用改代码。
 
@@ -103,7 +103,7 @@ pm2 restart phosphor
 
 有些 server 能对外的世界产生影响：发帖、发文章、下单、发消息。这类建议**不要**放进 TA 的自主行动列表——它每次醒来都可能自己决定要用。
 
-项目里的做法是：小红的 MCP 特意不写进 `connectAll()`，需要时由人手动要求、并且先商量好内容。接新 server 时可以照这个思路判断：
+项目里的做法是：小红书的 MCP 特意不写进 `connectAll()`，需要时由人手动要求、并且先商量好内容。接新 server 时可以照这个思路判断：
 
 - 只读（查资料、翻记忆、看帖子）→ 可以自主
 - 会对外说话、会花钱、会改别人能看到的东西 → 留给人来触发
@@ -138,7 +138,7 @@ OMBRE_MCP_TOKEN=去 Dashboard 生成
 
 端口看 `docker ps` 里映射到宿主机的那个，容器内固定 8000。
 
-**它解决什么问题**：phosphor 每次醒来都是一个新进程状态，不记得上次做过什么、为什么这么做。只靠 `wake_log` 只能知道"做过什么"，不知道"当时怎么想的"。Ombre Brain 补的就是这一段。
+**它解决什么问题**：phosphor 每次醒来都是一个新的进程状态，不记得上次做过什么、为什么这么做。只靠 `wake_log` 只能知道"做过什么"，不知道"当时怎么想的"。Ombre Brain 补的就是这一段。
 
 **醒来时怎么用**：phosphor 会并行调两次，结果都拼进决策 prompt。
 
@@ -146,6 +146,8 @@ OMBRE_MCP_TOKEN=去 Dashboard 生成
 |---|---|
 | `breath()` | 0 参数、0 次 LLM 调用，纯读库。让重要且还没闭环的事重新浮上来 |
 | `feel(query)` | 翻感受类记忆——"我现在感觉怎么样" |
+
+只调 `feel` 的话，后台那一侧就只剩情绪、看不到主线：知道自己心里闷，但想不起为什么。两个一起拉，才拼得出"我是谁、最近在干什么"。
 
 **决策侧自己还能选**：`ombre_brain` 动作有四种模式。
 
