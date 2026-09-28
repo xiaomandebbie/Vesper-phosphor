@@ -10,6 +10,7 @@ import {
   addPendingWake,
   getRecentWakeLog,
   addConversationMessage,
+  getRecentConversation,
 } from './state.js';
 
 const app = express();
@@ -24,6 +25,18 @@ const MEDIA_MAX_AGE_DAYS = Number(process.env.MEDIA_MAX_AGE_DAYS || 30);
 
 fs.mkdirSync(path.join(MEDIA_DIR, 'images'), { recursive: true });
 fs.mkdirSync(path.join(MEDIA_DIR, 'audio'), { recursive: true });
+
+// 数据库里 decision / result 存的是模型返回的原始文本，
+// 只要有一次不是干净 JSON，直接 JSON.parse 就会把整个路由打成 500。
+// 统一包一层：坏的就当 null，不影响其它字段照常返回。
+function safeParse(s) {
+  if (!s) return null;
+  try {
+    return JSON.parse(s);
+  } catch {
+    return null;
+  }
+}
 
 function pruneOldMedia() {
   const cutoff = Date.now() - MEDIA_MAX_AGE_DAYS * 24 * 60 * 60 * 1000;
@@ -89,8 +102,8 @@ app.get('/wake/state', requireApiKey, (req, res) => {
     next_wake_at: state.next_wake_at,
     mood: state.mood,
     last_wake_at: lastLog?.fired_at ?? null,
-    last_action: lastLog ? JSON.parse(lastLog.decision ?? 'null')?.action ?? null : null,
-    last_result: lastLog ? JSON.parse(lastLog.result ?? 'null') : null,
+    last_action: safeParse(lastLog?.decision)?.action ?? null,
+    last_result: safeParse(lastLog?.result),
   });
 });
 
@@ -101,8 +114,8 @@ app.get('/wake/log', requireApiKey, (req, res) => {
     kind: r.kind,
     mode: r.mode,
     gap_minutes: r.gap_minutes,
-    decision: r.decision ? JSON.parse(r.decision) : null,
-    result: r.result ? JSON.parse(r.result) : null,
+    decision: safeParse(r.decision),
+    result: safeParse(r.result),
     error: r.error,
   }));
   res.json(rows);
@@ -141,6 +154,12 @@ app.post('/wake/conversation', requireApiKey, (req, res) => {
   if (!content) return res.status(400).json({ error: 'content required' });
   addConversationMessage(speaker, content);
   res.json({ ok: true });
+});
+
+// 只读一眼最近上报进来的对话，方便自查方向对不对、内容有没有落上。
+app.get('/wake/conversation', requireApiKey, (req, res) => {
+  const limit = Math.min(Number(req.query.limit) || 50, 500);
+  res.json(getRecentConversation(limit));
 });
 
 app.get('/diary', requireBasicAuth, (req, res) => {
