@@ -37,12 +37,12 @@ pm2 logs phosphor --lines 50 --nostream         # 最近的普通日志
 
 `better-sqlite3` 在进程退出时的原生断言。**数据不会丢**。
 
-1. 确认代码是最新的（新代码会在退出前主动关库）
+1. 确认代码是最新的（新代码会缓存预编译语句、并在退出前主动关库）
 2. 还有的话，重编一次：
    ```bash
-   cd /root/vesper-phosphor
+   cd ~/vesper-phosphor
    npm rebuild better-sqlite3 --build-from-source
-   pm2 restart phosphor
+   pm2 restart phosphor vesper vesper-gateway
    ```
 3. **换过 Node 版本后一定要重编**。原生模块和 Node 版本是绑定的
 
@@ -61,7 +61,7 @@ pm2 logs phosphor --lines 50 --nostream         # 最近的普通日志
 ### TA 一直不醒
 
 ```bash
-cd /root/vesper-phosphor
+cd ~/vesper-phosphor
 node -e "const db=require('better-sqlite3')('data/state.db'); const s=db.prepare('select * from wake_state').get(); console.log(s.mode, new Date(s.next_wake_at).toLocaleString())"
 ```
 
@@ -72,19 +72,23 @@ node -e "const db=require('better-sqlite3')('data/state.db'); const s=db.prepare
 
 旧代码的 bug：模型没返回 `next_wake_minutes` 时 `next_wake_at` 变成空。更新到最新代码就好。
 
+### 醒来后像失忆，只知道自己情绪、不知道在干什么
+
+决策上下文里只给了 `feel`、没给 `breath`。更新到最新代码，或在 Ombre Brain 那边确认 `breath` 工具可用（见 [07](07-mcp.md)）。
+
 ---
 
-## 🟠 网关 / Aru 相关
+## 🟠 网关 / 聊天客户端相关
 
-### Aru 报 401 / `invalid api key`
+### 客户端报 401 / `invalid api key`
 
-- Aru 里填的 API Key 必须是 `.env` 的 `GATEWAY_API_KEY`，**不是 DeepSeek 的 key**
+- 客户端里填的 API Key 必须是 `.env` 的 `GATEWAY_API_KEY`，**不是上游模型自己的 key**
 - `.env` 里 `GATEWAY_API_KEY` 为空时网关拒绝所有请求
 - 改了 `.env` 忘了重启
 
-### Aru 报 400 / `Unknown model`
+### 客户端报 400 / `Unknown model`
 
-模型名只能是 `aru-chat` 或 `vesper-decide`，大小写一致，前后没有空格。
+模型名只能是路由表里的那几个（默认 `chat` / `vesper-decide`），大小写一致，前后没有空格。
 
 ### 网关日志 `status=404`
 
@@ -92,9 +96,9 @@ node -e "const db=require('better-sqlite3')('data/state.db'); const s=db.prepare
 
 ### 网关日志 `status=401`
 
-是**上游**拒绝了，检查 `ARU_UPSTREAM_API_KEY` / `DECIDE_UPSTREAM_API_KEY`。
+是**上游**拒绝了，检查 `CLIENT_UPSTREAM_API_KEY` / `DECIDE_UPSTREAM_API_KEY`。
 
-### Aru 连不上（超时、无响应）
+### 客户端连不上（超时、无响应）
 
 1. 服务器上 `curl localhost:3002/v1/models -H "Authorization: Bearer 你的key"` 通不通
 2. 通的话是外网到不了：检查云服务器**防火墙**有没有放行 3002
@@ -103,8 +107,8 @@ node -e "const db=require('better-sqlite3')('data/state.db'); const s=db.prepare
 
 ### 对话记录是空的 / "最近对话"没东西
 
-- Aru 必须用 `aru-chat` 这个模型走网关，直连 DeepSeek 不会被记录
-- 网关日志出现 `assistant capture got empty text`：上游不是标准 SSE，助手回复没捞到
+- 客户端必须走网关的 `chat` 这条线路，直连上游不会被记录
+- 网关日志出现 `assistant capture got empty text`：上游不是标准 SSE，回复没捞到
 
 ---
 
@@ -118,15 +122,16 @@ node -e "const db=require('better-sqlite3')('data/state.db'); const s=db.prepare
 git config http.version HTTP/1.1
 git pull
 # 还不行就走镜像
-git pull https://gh-proxy.com/https://github.com/xiaomandebbie/Vesper-phosphor.git main
+MIRROR=https://gh-proxy.com/https://github.com
+git pull $MIRROR/<你的用户名>/vesper-phosphor.git main
 ```
 
 ### `Authentication failed` / `403`
 
-这才是 key 的问题。多半是 remote 地址里写了旧 token。仓库是公开的，改成不带 token 的：
+这才是 key 的问题。多半是 remote 地址里写了旧 token。改成不带 token 的：
 
 ```bash
-git remote set-url origin https://github.com/xiaomandebbie/Vesper-phosphor.git
+git remote set-url origin https://github.com/<你的用户名>/vesper-phosphor.git
 ```
 
 ### `git pull` 说本地有改动、会被覆盖
@@ -157,12 +162,16 @@ git pull
 
 旧版本 `vesper.js` 里写成了 `< img`（多一个空格）。更新代码。另外目前配图功能本来就没接，只有音频。
 
+### 日记没有声音
+
+`ELEVENLABS_API_KEY` 或 `ELEVENLABS_VOICE_ID` 没填。两个都要有才会生成音频。
+
 ### Bark 没推送
 
 - `BARK_KEY` 没填：日志里有 `BARK_KEY not set`
 - 填的是整条 URL：只要 `api.day.app/` 后面那一段
 
-### Ombre Brain / Lutopia 连不上
+### Ombre Brain / 论坛 连不上
 
 启动日志里找 `could not connect MCP`，后面就是原因。连不上不会让 phosphor 崩，只是对应功能不可用。
 
@@ -178,7 +187,7 @@ pm2 restart vesper vesper-gateway phosphor --update-env
 
 ```bash
 node -v
-cd /root/vesper-phosphor && git log --oneline -1
+cd ~/vesper-phosphor && git log --oneline -1
 pm2 ls
 pm2 logs phosphor --err --lines 50 --nostream
 ```

@@ -30,22 +30,33 @@ pm2 restart vesper vesper-gateway phosphor --update-env
 
 优先级：`LLM_*` > `DEEPSEEK_API_KEY` + `deepseek-flash`。
 
-> 💡 README 里反复强调：**做决定的模型最好和聊天的模型是同一个**，不然"窗口里的 TA"和"后台做决定的 TA"会像两个人。最简单的办法是让两边都走 vesper-gateway（见 [02](02-deploy-vps.md)）。
+> 💡 **做决定的模型最好和聊天的模型是同一个**，不然"窗口里的 TA"和"后台做决定的 TA"会像两个人。最简单的办法是让两边都走 vesper-gateway（见 [02](02-deploy-vps.md)）。
+
+## 称呼
+
+| 变量 | 说明 |
+|---|---|
+| `USER_DISPLAY_NAME` | 对话记录里怎么标"对方说的话"。不填是 `user` |
+| `AI_DISPLAY_NAME` | 对话记录里怎么标"TA 说的话"。不填是 `assistant` |
+
+这两个名字会写进 `conversation_log`，也会出现在给模型的 prompt 里。
 
 ## 网关（vesper-gateway，3002 端口）
 
 | 变量 | 说明 |
 |---|---|
 | `GATEWAY_PORT` | 端口，默认 `3002` |
-| `GATEWAY_API_KEY` | **必填**。Aru 和 phosphor 请求网关时带的 key。不填网关拒绝一切请求 |
-| `ARU_UPSTREAM_BASE_URL` | `aru-chat` 转发到哪。**只写域名，不带 `/v1`** |
-| `ARU_UPSTREAM_API_KEY` | 上游 key。不填就用 `DEEPSEEK_API_KEY` |
-| `ARU_UPSTREAM_MODEL` | 上游真实模型名 |
+| `GATEWAY_API_KEY` | **必填**。聊天客户端和 phosphor 请求网关时带的 key。不填网关拒绝一切请求 |
+| `CLIENT_UPSTREAM_BASE_URL` | `chat` 这条线路转发到哪。**只写域名，不带 `/v1`** |
+| `CLIENT_UPSTREAM_API_KEY` | 上游 key。不填就用 `DEEPSEEK_API_KEY` |
+| `CLIENT_UPSTREAM_MODEL` | 上游真实模型名 |
 | `DECIDE_UPSTREAM_BASE_URL` | `vesper-decide` 转发到哪。**只写域名** |
 | `DECIDE_UPSTREAM_API_KEY` | 同上 |
 | `DECIDE_UPSTREAM_MODEL` | 同上 |
 
 网关请求上游时固定拼 `/v1/chat/completions`。所以上游必须是 OpenAI 兼容接口，并且路径就是 `/v1/chat/completions`。
+
+> 旧变量名 `ARU_UPSTREAM_*` 和旧模型名 `aru-chat` 仍然兼容，已经配好的不用改。
 
 ## vesper（3001 端口）
 
@@ -71,20 +82,22 @@ pm2 restart vesper vesper-gateway phosphor --update-env
 | `OMBRE_BRAIN_URL` | 形如 `http://localhost:18001/mcp`。端口看 `docker ps` 里映射到宿主机的那个 |
 | `OMBRE_MCP_TOKEN` | OB Dashboard → 设置 → MCP 鉴权 → 选"OAuth + 静态 Token 共存"生成 |
 
-不填 URL：phosphor 不连 Ombre Brain，"最近的感受"一直是"暂无"，`ombre_brain` 动作会跳过。
+不填 URL：phosphor 不连 Ombre Brain，`breath` 和 `feel` 都是"暂无"，`ombre_brain` 动作会跳过。
 
-## Lutopia 论坛
+## 论坛
 
 | 变量 | 说明 |
 |---|---|
-| `LUTOPIA_MCP_ARGS` | 个人 MCP 地址，形如 `https://lutopia.app/mcp/abc12345`。末尾带 `/sse` 会自动去掉 |
+| `LUTOPIA_MCP_URL` | 论坛的个人 MCP 地址，形如 `https://example.com/mcp/abc12345`。末尾带 `/sse` 会自动去掉 |
+
+旧名 `LUTOPIA_MCP_ARGS` 仍然兼容。
 
 ## 日记配音 ElevenLabs
 
 | 变量 | 说明 |
 |---|---|
 | `ELEVENLABS_API_KEY` | 不填 = 日记没有声音，正文照常保存 |
-| `ELEVENLABS_VOICE_ID` | 音色 id |
+| `ELEVENLABS_VOICE_ID` | 音色 id，去 ElevenLabs 后台 Voice Library 复制。**两个都填了才会生成语音** |
 
 模型固定 `eleven_v3`，代码里写死的，不用配。
 
@@ -109,10 +122,10 @@ MEDIA_DIR=./media
 ## 检查 `.env` 有没有被读到
 
 ```bash
-cd /root/vesper-phosphor
+cd ~/vesper-phosphor
 node -e "require('dotenv').config(); for (const k of ['DEEPSEEK_API_KEY','LLM_BASE_URL','GATEWAY_API_KEY','REPORT_STATUS_API_KEY']) console.log(k, process.env[k] ? '已填' : '—空—')"
 ```
 
 只显示"已填/空"，不会把 key 打出来。
 
-> ⚠️ 这条命令**必须在项目根目录执行**。pm2 启动时也一样：`.env` 是按"启动时所在目录"找的。在别的目录执行 `pm2 start /root/vesper-phosphor/src/phosphor.js` 会读不到 `.env`。
+> ⚠️ 这条命令**必须在项目根目录执行**。pm2 启动时也一样：`.env` 是按"启动时所在目录"找的。在别的目录执行 `pm2 start ~/vesper-phosphor/src/phosphor.js` 会读不到 `.env`。
