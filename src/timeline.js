@@ -22,8 +22,9 @@ const MAX_CHARS_PER_MESSAGE = 500;
 // 和 heartbeat 的 special_events.js 保持一致。
 // heartbeat 只认这种开头的消息是"唤醒事件"：会保留在时间线里，也会注入到之后的聊天上下文。
 // 不符合这个格式的事件，下一次有人聊天时就会被 heartbeat 丢掉。
+// 注意中间那段称呼用通配符：两边各自怎么叫对方不一样，写死了就对不上了。
 const SPECIAL_EVENT_PREFIX =
-  /^\s*[（(]\s*\d{4}[/-]\d{1,2}[/-]\d{1,2}(?:[ T]?)\d{1,2}[:：]\d{2}(?::\d{2})?\s+(?:自动唤醒：本次未发送(?:\s*(?:Bark|推送))?|刚刚发送了推送|刚刚给用户发了\s*(?:Bark|ntfy)?\s*推送|刚刚给用户发了\s*Bark)(?:[：:｜|）)]|\s|$)/i;
+  /^\s*[（(]\s*\d{4}[/-]\d{1,2}[/-]\d{1,2}(?:[ T]?)\d{1,2}[:：]\d{2}(?::\d{2})?\s+(?:自动唤醒：本次未发送(?:\s*(?:Bark|推送))?|刚刚发送了推送|刚刚给[^：:｜|）)\s]{0,24}发了\s*(?:Bark|ntfy)?\s*推送|刚刚给[^：:｜|）)\s]{0,24}发了\s*Bark)(?:[：:｜|）)]|\s|$)/i;
 const TIMESTAMP = /(\d{4})[-/](\d{1,2})[-/](\d{1,2})(?:[ T]?)(\d{1,2})[:：](\d{2})/;
 
 // ---------- 时间 ----------
@@ -147,6 +148,7 @@ function tryJson(value) {
 
 // 把这次醒来做的事写成一句 heartbeat 认得的事件。没做成、或不值得记的返回 null。
 // executeAction() 失败时返回 null，所以 result === null 一律当作没做成。
+// 措辞要和 heartbeat 的 special_events.js 对得上，改之前先确认那边也认。
 export function describeAction(decision, result) {
   if (!decision || result === null) return null;
   const detail = decision.action_detail || '';
