@@ -3,12 +3,19 @@ import express from 'express';
 import { Readable, Transform } from 'stream';
 import { StringDecoder } from 'string_decoder';
 import { addConversationMessage } from './state.js';
+import { getSharedContext, formatContextText } from './context.js';
 
 const app = express();
 app.use(express.json({ limit: '10mb' }));
 
 const PORT = process.env.GATEWAY_PORT || 3002;
 const GATEWAY_API_KEY = process.env.GATEWAY_API_KEY;
+
+const decideUpstream = {
+  baseURL: process.env.DECIDE_UPSTREAM_BASE_URL || 'https://api.deepseek.com',
+  apiKey: process.env.DECIDE_UPSTREAM_API_KEY || process.env.DEEPSEEK_API_KEY,
+  upstreamModel: process.env.DECIDE_UPSTREAM_MODEL || 'deepseek-flash',
+};
 
 const routingTable = {
   'aru-chat': {
@@ -17,12 +24,11 @@ const routingTable = {
     apiKey: process.env.ARU_UPSTREAM_API_KEY || process.env.DEEPSEEK_API_KEY,
     upstreamModel: process.env.ARU_UPSTREAM_MODEL || 'deepseek-flash',
   },
-  'vesper-decide': {
-    source: 'decide.js',
-    baseURL: process.env.DECIDE_UPSTREAM_BASE_URL || 'https://api.deepseek.com',
-    apiKey: process.env.DECIDE_UPSTREAM_API_KEY || process.env.DEEPSEEK_API_KEY,
-    upstreamModel: process.env.DECIDE_UPSTREAM_MODEL || 'deepseek-flash',
-  },
+  'vesper-decide': { source: 'decide.js', ...decideUpstream },
+  // dylan-heartbeat 自己醒来时用这条（heartbeat .env 里 MODEL_NAME=heartbeat-wake）。
+  // 上游和 vesper-decide 一样，区别是会把请求里的"最近记录"换成跨窗口的共享上下文，
+  // 这样 heartbeat 和 phosphor 看到的是同一份，换了 Aru 窗口也不会丢。
+  'heartbeat-wake': { source: 'heartbeat', injectSharedContext: true, ...decideUpstream },
 };
 
 function requireGatewayAuth(req, res, next) {
@@ -72,6 +78,47 @@ function recordUserMessage(messages) {
   } catch (err) {
     console.error('gateway: addConversationMessage(user) failed:', err.message);
   }
+}
+
+// heartbeat 醒来时发的 user 消息里有一段"最近记录："，后面是它从自己时间线文件里拼的聊天。
+// 那个文件只有当前 Aru 窗口的内容，换窗口就丢。这里把标记后面的内容换成跨窗口的共享上下文，
+// 和 phosphor 做决定时读的是同一份。找不到标记或共享上下文是空的，就原样转发。
+const HISTORY_MARKER = '最近记录：';
+const HEARTBEAT_CONTEXT_LIMIT = Number(process.env.HEARTBEAT_CONTEXT_LIMIT) || 30;
+
+function injectSharedContext(messages) {
+  if (!Array.isArray(messages)) return messages;
+  let entries;
+  try {
+    entries = getSharedContext(HEARTBEAT_CONTEXT_LIMIT);
+  } catch (err) {
+    console.error('gateway: 读取共享上下文失败，原样转发:', err.message);
+    return messages;
+  }
+  if (!entries.length) {
+    console.warn('gateway: heartbeat-wake 共享上下文是空的，原样转发');
+    return messages;
+  }
+  const text = formatContextText(entries);
+  let replaced = false;
+  const out = messages.map((m) => {
+    if (replaced || m.role !== 'user' || typeof m.content !== 'string') return m;
+    const idx = m.content.indexOf(HISTORY_MARKER);
+    if (idx === -1) return m;
+    replaced = true;
+    return {
+      ...m,
+      content:
+        `${m.content.slice(0, idx + HISTORY_MARKER.length)}\n\n` +
+        `（以下是所有聊天窗口里最近的记录，以及自动唤醒事件，按时间先后排列）\n\n${text}`,
+    };
+  });
+  if (replaced) {
+    console.log(`gateway: heartbeat-wake 已注入共享上下文 ${entries.length} 条`);
+  } else {
+    console.warn('gateway: heartbeat-wake 没找到"最近记录："，原样转发');
+  }
+  return out;
 }
 
 // 非流式响应最多缓存这么大，防止异常大的 body 撑爆内存
@@ -174,7 +221,10 @@ app.post('/v1/chat/completions', requireGatewayAuth, async (req, res) => {
   const recordConversation = route.source === 'aru';
   if (recordConversation) recordUserMessage(req.body.messages);
 
-  const upstreamBody = { ...req.body, model: route.upstreamModel };
+  const messages = route.injectSharedContext
+    ? injectSharedContext(req.body.messages)
+    : req.body.messages;
+  const upstreamBody = { ...req.body, messages, model: route.upstreamModel };
 
   try {
     const upstreamRes = await fetch(`${route.baseURL}/v1/chat/completions`, {
