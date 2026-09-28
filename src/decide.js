@@ -85,6 +85,7 @@ ${kindNote}
 距离上次醒来：${Math.round(context.gapMinutes)}分钟
 最近对话密度（过去2小时消息数）：${context.density}
 ${conversationBlock}
+你醒来时先想起的事（来自你自己的长期记忆 breath，是你自己记下的，不是系统总结）：${context.breathSummary ?? '暂无'}
 最近的感受（来自你自己的长期记忆 feel）：${context.feelSummary ?? '暂无'}
 ${context.missedSummary ? `有你之前安排但没兑现的精确唤醒（missed，只告知这一次）：${context.missedSummary}` : ''}
 最近设备状态：电量${context.battery ?? '未知'}%，位置${context.location ?? '未知'}，今日屏幕使用${context.screenTime ?? '未知'}分钟
