@@ -1,8 +1,8 @@
 # vesper-phosphor 晨暮星✨
 
-一个会自己醒来的 TA。每隔一段时间，TA 会看看现在的情况（几点了、你们最近聊了什么、手机电量、自己最近的感受），然后自己决定：推送一条消息、写一篇日记、去论坛逛逛、翻翻记忆，或者什么都不做。最后再决定下次什么时候醒。
+一个会自己醒来的 TA。每隔一段时间，TA 会看看现在的情况（几点了、你们最近聊了什么、手机电量、自己还记得什么、最近的感受），然后自己决定：推送一条消息、写一篇日记、去论坛逛逛、翻翻记忆，或者什么都不做。最后再决定下次什么时候醒。
 
-独立于 dylan-heartbeat，可以两边并行跑，稳定之后再切换。
+可以和 dylan-heartbeat 并行跑，稳定之后再切换。两者的区别见 [08](docs/08-heartbeat.md)。
 
 ## 三个进程
 
@@ -26,6 +26,8 @@
 | [04 · `.env` 配置项详解](docs/04-config.md) | 每个变量是什么、不填会怎样、最小可用配置 |
 | [05 · 易错点与排错](docs/05-pitfalls.md) | **出问题先看这篇**。按症状查 |
 | [06 · 接口说明](docs/06-api.md) | `/wake/*`、网关、iOS 快捷指令上报 |
+| [07 · 接入更多 MCP](docs/07-mcp.md) | 已内置的两个怎么工作；想加新的三步 |
+| [08 · 和 heartbeat 的关系](docs/08-heartbeat.md) | 两个项目的区别、事件格式约定、怎么共存与切换 |
 
 ## ⚡ 最快跑起来（VPS，已经装好 Node 20+ 和 pm2）
 
@@ -54,7 +56,7 @@ pm2 logs phosphor --lines 40 --nostream
 
 1. **`.env` 和 `data/state.db` 不在 git 里**。删掉项目重新 clone，这两样不会回来，删之前先备份
 2. **三个 key 不填就开防火墙 = 公网裸奔**：`GATEWAY_API_KEY`、`REPORT_STATUS_API_KEY`、`VESPER_BASIC_USER/PASS`
-3. **Aru 里填的 API Key 是 `GATEWAY_API_KEY`**，不是 DeepSeek 的 key
+3. **Aru 里填的 API Key 是 `GATEWAY_API_KEY`**，不是上游模型的 key
 4. **`*_UPSTREAM_BASE_URL` 只写域名，不带 `/v1`**；`LLM_BASE_URL` 反而要写完整地址
 5. **改了 `.env` 要重启**：`pm2 restart vesper vesper-gateway phosphor --update-env`
 6. **不要在服务器上直接改代码**。在 GitHub 上改，服务器只 `git pull`
@@ -62,10 +64,11 @@ pm2 logs phosphor --lines 40 --nostream
 ## 设计上的几个"故意"
 
 - **silent 不给 TA 自己切**。那等于从你的世界里消失，这个开关只留给人（`POST /wake/mode`）
-- **小红书不自动连**。发文前要先和小满商量
+- **小红书不自动连**。会对外说话的 server 都留给人来触发，见 [07](docs/07-mcp.md)
 - **进程停掉的时间不追不补**。停一天再开，只会醒一次
 - **决策上下文里没有随机数和算出来的"强度"**，只给真实、可解释的输入
 - **每次醒来都记账**，包括 noop 和出错，TA 不在时发生过什么都能从 `GET /wake/log` 看回来
+- **醒来先拉 `breath` 再拉 `feel`**。只给情绪、不给主线，TA 会像失忆一样"知道自己闷但想不起为什么"
 
 ## 待补充 / TODO
 
@@ -81,6 +84,8 @@ pm2 logs phosphor --lines 40 --nostream
 src/
 ├── phosphor.js        主循环：两条唤醒链、字段兜底、退出时关库
 ├── decide.js          拼 prompt、调模型、自动重试、解析 JSON
+├── context.js         合并 conversation_log 与 heartbeat 事件
+├── timeline.js        读写 heartbeat 的时间线文件
 ├── state.js           SQLite 读写；启动时自动建 data/
 ├── vesper.js          3001：上报、/wake/*、日记页
 ├── gateway.js         3002：模型路由 + 对话记录
