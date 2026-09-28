@@ -22,19 +22,27 @@ const decideUpstream = {
   upstreamModel: process.env.DECIDE_UPSTREAM_MODEL || 'deepseek-flash',
 };
 
+const clientUpstream = {
+  source: 'client',
+  baseURL:
+    process.env.CLIENT_UPSTREAM_BASE_URL || process.env.ARU_UPSTREAM_BASE_URL || 'https://api.deepseek.com',
+  apiKey:
+    process.env.CLIENT_UPSTREAM_API_KEY || process.env.ARU_UPSTREAM_API_KEY || process.env.DEEPSEEK_API_KEY,
+  upstreamModel: process.env.CLIENT_UPSTREAM_MODEL || process.env.ARU_UPSTREAM_MODEL || 'deepseek-flash',
+};
+
 const routingTable = {
-  'chat': {
-    source: 'client',
-    baseURL: process.env.CLIENT_UPSTREAM_BASE_URL || process.env.ARU_UPSTREAM_BASE_URL || 'https://api.deepseek.com',
-    apiKey: process.env.CLIENT_UPSTREAM_API_KEY || process.env.ARU_UPSTREAM_API_KEY || process.env.DEEPSEEK_API_KEY,
-    upstreamModel: process.env.CLIENT_UPSTREAM_MODEL || process.env.ARU_UPSTREAM_MODEL || 'deepseek-flash',
-  },
-  'vesper-decide': { source: 'decide.js', ...decideUpstream },
+  // 聊天前端走这条，对话会被记录
+  chat: clientUpstream,
+  vesper-decide: { source: 'decide.js', ...decideUpstream },
   // 另一个唤醒项目（heartbeat）自己醒来时用这条（它的 .env 里 MODEL_NAME=heartbeat-wake）。
   // 上游和 vesper-decide 一样，区别是会把请求里的"最近记录"换成跨窗口的共享上下文，
   // 这样两边看到的是同一份，换了聊天窗口也不会丢。
   'heartbeat-wake': { source: 'heartbeat', injectSharedContext: true, ...decideUpstream },
 };
+
+// 旧名字兼容：以前这个路由叫 aru-chat。已经配好的客户端不用改。
+routingTable['aru-chat'] = clientUpstream;
 
 function requireGatewayAuth(req, res, next) {
   const auth = req.headers['authorization'];

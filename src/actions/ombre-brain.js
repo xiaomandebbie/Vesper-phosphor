@@ -1,6 +1,6 @@
 import { callTool, isConnected } from '../mcp-manager.js';
 
-// Ombre Brain's real tool names (per 允朔's spec, 2026-09-26):
+// Ombre Brain 暴露的工具：
 //   breath()                -> wake up and see what surfaces, no args
 //   breath_search(query,..) -> keyword/semantic recall
 //   feel(query)             -> recall past feelings tied to a topic

@@ -4,7 +4,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 
 const clients = {};
 
-// stdio 连接：本地进程形式的 MCP server（比如 Ombre Brain）
+// stdio 连接：本地进程形式的 MCP server
 export async function connectMcpStdio(name, command, args) {
   const client = new Client({ name: `phosphor-${name}`, version: '1.0.0' });
   const transport = new StdioClientTransport({ command, args });
@@ -13,7 +13,7 @@ export async function connectMcpStdio(name, command, args) {
   return client;
 }
 
-// Streamable HTTP 连接：远程 MCP server（Lutopia、Ombre Brain 都是这种）。
+// Streamable HTTP 连接：远程 MCP server（Ombre Brain、论坛都是这种）。
 // headers 可选，比如 Ombre Brain 用静态 Token 鉴权时传 Authorization。
 export async function connectMcpHttp(name, url, headers) {
   const client = new Client({ name: `phosphor-${name}`, version: '1.0.0' });
@@ -67,20 +67,20 @@ export async function connectAll() {
     }
   }
 
-  // Lutopia 论坛：个人 MCP URL，Streamable HTTP。
+  // 论坛：个人 MCP URL，Streamable HTTP。
   // 个人连接不需要传 token，身份由 URL 里的短码自动绑定。
   // 如果配的是 .../sse 结尾的旧格式，自动去掉这个后缀。
-  if (process.env.LUTOPIA_MCP_ARGS) {
+  const forumUrl = process.env.FORUM_MCP_URL || process.env.LUTOPIA_MCP_ARGS;
+  if (forumUrl) {
     try {
-      const url = process.env.LUTOPIA_MCP_ARGS.replace(/\/sse$/, '');
-      await connectMcpHttp('lutopia', url);
-      console.log('connected MCP: lutopia');
+      await connectMcpHttp('forum', forumUrl.replace(/\/sse$/, ''));
+      console.log('connected MCP: forum');
     } catch (err) {
-      console.error('could not connect MCP "lutopia":', err.message);
+      console.error('could not connect MCP "forum":', err.message);
     }
   }
 
-  // 小红书：故意不在这里自动连接。
+  // 会对外说话的社交平台：故意不在这里自动连接。
   // 人类明确要求发文时才需要用它，且发文前必须先跟人类商量内容——
   // 不应该是"醒来后自己决定要做的事"，所以不放进 TA 的自主行动工具列表。
 }

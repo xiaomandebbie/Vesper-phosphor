@@ -34,14 +34,13 @@ async function generateImage(prompt) {
   // return `/media/images/${filename}`;
 }
 
-// ElevenLabs 文字转语音。模型固定 eleven_v3，voice id 用你配的那个。
+// ElevenLabs 文字转语音。模型固定 eleven_v3，voice id 从 .env 读。
 // 方括号标签（[breathing] / [whispers] 等）只有 eleven_v3 才会按语气演绎，
 // 换成 eleven_multilingual_v2 会把标签原样念出来，别换模型。
 async function generateAudio(text) {
   const apiKey = process.env.ELEVENLABS_API_KEY;
-  if (!apiKey || !text) return null;
-
-  const voiceId = process.env.ELEVENLABS_VOICE_ID || '63iLXcdhqE1RBfAafuhs';
+  const voiceId = process.env.ELEVENLABS_VOICE_ID;
+  if (!apiKey || !voiceId || !text) return null;
 
   try {
     const res = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
