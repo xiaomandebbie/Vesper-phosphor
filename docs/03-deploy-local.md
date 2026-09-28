@@ -30,9 +30,11 @@ npm install -g pm2
 
 ## 第 3 步：拉代码、装依赖
 
+把 `<你的用户名>` 换成你自己的 GitHub 用户名。
+
 ```bash
 cd ~
-git clone https://github.com/xiaomandebbie/Vesper-phosphor.git vesper-phosphor
+git clone https://github.com/<你的用户名>/vesper-phosphor.git
 cd vesper-phosphor
 npm ci
 ```
@@ -95,7 +97,7 @@ pm2 ls
 
 ---
 
-## 手机上的 Aru 怎么连到电脑上的网关
+## 手机上的聊天客户端怎么连到电脑上的网关
 
 `localhost` 指的是"本机"，手机上填 `localhost` 连的是手机自己，不是你的电脑。
 
@@ -103,7 +105,7 @@ pm2 ls
 2. 查电脑的局域网 IP
    - Mac：系统设置 → Wi-Fi → 详细信息 → IP 地址（形如 `192.168.1.23`）
    - Windows：PowerShell 输入 `ipconfig`，找"IPv4 地址"
-3. Aru 里 Base URL 填 `http://192.168.1.23:3002/v1`
+3. 客户端里 Base URL 填 `http://192.168.1.23:3002/v1`
 4. 第一次连接时电脑可能弹出"是否允许 node 接受传入连接"，点**允许**
 
 出门离开这个 Wi-Fi 就连不上了，这也是长期用要上 VPS 的原因。

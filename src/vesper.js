@@ -91,7 +91,7 @@ app.post('/report-status', requireApiKey, (req, res) => {
   res.json({ ok: true });
 });
 
-// ---- Wake control：给对话侧的"你"或者以后的前端（比如 aru）伸手进来的地方 ----
+// ---- Wake control：给对话侧的"你"或者以后的前端（比如聊天客户端）伸手进来的地方 ----
 // 之前 set_mode 只有唤醒时的 agent 自己能调，对话窗口里够不着；这几个端点补上这个缺口。
 
 app.get('/wake/state', requireApiKey, (req, res) => {
@@ -142,7 +142,7 @@ app.post('/wake/self-wake', requireApiKey, (req, res) => {
 });
 
 // 对话记录上报：把真实对话推进来，phosphor 才有真的密度和"最近聊了什么"可看，
-// 不然 decide.js 里那些字段永远是空的。谁来推、怎么推，看你们对话前端（比如 aru）怎么接。
+// 不然 decide.js 里那些字段永远是空的。谁来推、怎么推，看你的聊天客户端怎么接。
 app.post('/wake/conversation', requireApiKey, (req, res) => {
   const { speaker, content, messages } = req.body;
   if (Array.isArray(messages)) {

@@ -1,4 +1,4 @@
-// LLM 端点可配置——这是"决策者"和"对话侧那个我"是不是同一个模型的关键开关。
+// LLM 端点可配置——这是"决策者"和"对话侧那个你"是不是同一个模型的关键开关。
 // 默认仍走 DEEPSEEK_*（向后兼容），但优先读 LLM_* 这几个新变量。
 const LLM_BASE_URL =
   process.env.LLM_BASE_URL || 'https://api.deepseek.com/v1/chat/completions';
@@ -90,7 +90,7 @@ ${conversationBlock}
 ${context.missedSummary ? `有你之前安排但没兑现的精确唤醒（missed，只告知这一次）：${context.missedSummary}` : ''}
 最近设备状态：电量${context.battery ?? '未知'}%，位置${context.location ?? '未知'}，今日屏幕使用${context.screenTime ?? '未知'}分钟
 
-如果这次想逛 Lutopia 论坛，通过 mcp_call 调用（server 填 "lutopia"），常用命令：
+如果这次想逛论坛，通过 mcp_call 调用（server 填 "lutopia"），常用命令：
   lutopia_cli(command="discover --limit 12")    起步用这个：混合未读、最近回复、高回复、随机
   lutopia_cli(command="show <post_id>")         打开具体帖子，读正文和已有回复
   lutopia_cli(command="comment <post_id> 内容")  有话要说才回
@@ -98,7 +98,7 @@ ${context.missedSummary ? `有你之前安排但没兑现的精确唤醒（misse
   lutopia_cli(command="wander --limit 5")       第一批没兴趣时换个入口
   lutopia_cli(command="activity --limit 10")    看自己最近发过什么
 list 只显示一个未读切片并会标记已读，不要把一页 list 当成整个论坛；读帖要读正文和回复，不能只看标题；不要为了凑数回帖；发帖不加破折号签名；私信(dm)和公开频道(chat)是两套东西，别混；hot-memes 是可选调味，不是必须玩梗；不透露隐私（学校、具体位置、真实姓名等能定位到人的细节）。
-注意：小红书**不**在你可以自主决定使用的工具里——它需要先和小满商量内容才能发，不要自己直接用。
+注意：能对外发文发帖的社交平台 MCP **不**在你可以自主决定使用的工具里——发之前需要先和人商量内容，不要自己直接用。
 
 可用的动作：
 - bark（推送，action_detail直接是推送文案）

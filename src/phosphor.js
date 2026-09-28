@@ -98,7 +98,7 @@ async function runDecisionCycle({ kind, scheduledAt = null, selfNote = null }) {
   const wakeState = getWakeState();
   const latestDevice = getLatestDeviceReport();
   const { breathSummary, feelSummary } = await getMemorySummary();
-  // 最近对话：所有 Aru 窗口的聊天 + heartbeat/phosphor 的事件，换窗口不会丢（见 context.js）
+  // 最近对话：所有聊天窗口的记录 + 唤醒事件，换窗口不会丢（见 context.js）
   const density = countRecentChat(2 * 60 * 60 * 1000);
   const recentMessages = getSharedContext(20);
   const gapMinutes = wakeState.updated_at ? (Date.now() - wakeState.updated_at) / 60000 : 0;
@@ -152,7 +152,7 @@ async function runDecisionCycle({ kind, scheduledAt = null, selfNote = null }) {
     error: errorMessage,
   });
 
-  // 做了事就写回 heartbeat 的时间线，让 heartbeat 和聊天窗口里的 TA 都知道
+  // 做了事就写回共享时间线，让另一边醒来时也知道
   if (!errorMessage) await postSharedEvent(describeAction(decision, result));
 
   if (missed.length) acknowledgeMissed(missed.map((m) => m.id));
@@ -244,7 +244,7 @@ async function main() {
   process.on('SIGINT', () => shutdown('SIGINT'));
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   console.log(
-    `phosphor: 最长唤醒间隔 ${MAX_WAKE_MINUTES} 分钟；共享 heartbeat 事件：${isSharedTimelineEnabled() ? '已开启' : '未开启'}；聊天来源：conversation_log（跨窗口）`
+    `phosphor: 最长唤醒间隔 ${MAX_WAKE_MINUTES} 分钟；共享时间线：${isSharedTimelineEnabled() ? '已开启' : '未开启'}；聊天来源：conversation_log（跨窗口）`
   );
   await connectAll();
   await tick();

@@ -67,7 +67,7 @@ curl -s -X POST 服务器:3001/wake/mode \
 ```bash
 curl -s -X POST 服务器:3001/wake/self-wake \
   -H "x-api-key: 你的key" -H "content-type: application/json" \
-  -d '{"after_minutes":15,"note":"小满说下班了"}'
+  -d '{"after_minutes":15,"note":"说下班了"}'
 ```
 
 `note` 会原样告诉醒来的 TA。
@@ -77,11 +77,13 @@ curl -s -X POST 服务器:3001/wake/self-wake \
 ```bash
 curl -s -X POST 服务器:3001/wake/conversation \
   -H "x-api-key: 你的key" -H "content-type: application/json" \
-  -d '{"speaker":"小满","content":"我到家了"}'
+  -d '{"speaker":"user","content":"我到家了"}'
 
 # 批量
-# -d '{"messages":[{"speaker":"小满","content":"..."},{"speaker":"允朔","content":"..."}]}'
+# -d '{"messages":[{"speaker":"user","content":"..."},{"speaker":"assistant","content":"..."}]}'
 ```
+
+`speaker` 填什么就显示成什么。走网关自动记录时，用的是 `.env` 里的 `USER_DISPLAY_NAME` / `AI_DISPLAY_NAME`。
 
 手机上报状态（适合做成 iOS 快捷指令定时跑）：
 
@@ -112,17 +114,20 @@ curl -s -X POST 服务器:3001/report-status \
 
 | 方法 | 路径 | 作用 |
 |---|---|---|
-| GET | `/v1/models` | 列出可用模型名（Aru "拉取"按钮用） |
+| GET | `/v1/models` | 列出可用模型名（客户端"拉取"按钮用） |
 | POST | `/v1/chat/completions` | OpenAI 兼容对话接口，按 `model` 分流 |
 
 ### 路由表
 
 | 请求里的 model | 转发到 | 会记录对话吗 |
 |---|---|---|
-| `aru-chat` | `ARU_UPSTREAM_*` | **会** |
+| `chat` | `CLIENT_UPSTREAM_*` | **会** |
 | `vesper-decide` | `DECIDE_UPSTREAM_*` | 不会 |
+| `heartbeat-wake` | `DECIDE_UPSTREAM_*` | 不会，但会注入跨窗口的共享上下文 |
 
 转发时会把 `model` 换成上游的真实模型名，其余请求内容原样透传，流式也照常边收边发。
+
+> 旧名 `aru-chat` 仍指向 `chat` 同一条上游，已经配好的不用改。
 
 ### 测试
 
@@ -132,12 +137,12 @@ curl -s 服务器:3002/v1/chat/completions \
   -d '{"model":"vesper-decide","messages":[{"role":"user","content":"说一个字"}]}'
 ```
 
-用 `vesper-decide` 测试不会往对话记录里写东西，用 `aru-chat` 会。
+用 `vesper-decide` 测试不会往对话记录里写东西，用 `chat` 会。
 
 ### 网关日志怎么看
 
 ```
-gateway: source=aru model=aru-chat->deepseek-flash target=https://api.deepseek.com status=200 1834ms
+gateway: source=client model=chat->deepseek-flash target=https://api.deepseek.com status=200 1834ms
 ```
 
 - `status` 是**上游**返回的状态码
@@ -149,7 +154,7 @@ gateway: source=aru model=aru-chat->deepseek-flash target=https://api.deepseek.c
 
 | 工具 | 作用 | 什么时候用 |
 |---|---|---|
-| `breath()` | 看看自己现在记得什么 | 最省 token，默认就是它 |
+| `breath()` | 看看自己现在记得什么 | 最省 token，每次醒来自动调一次 |
 | `breath_search(query)` | 按关键词/语义检索 | 想找具体的事 |
-| `feel(query)` | 翻感受类记忆 | 每次醒来 phosphor 都会自动调一次拿"最近感受" |
+| `feel(query)` | 翻感受类记忆 | 每次醒来 phosphor 也会自动调一次 |
 | `hold(content, ...)` | 写一条长期记忆 | **只在真觉得值得记住时**，不要每次醒来都写 |

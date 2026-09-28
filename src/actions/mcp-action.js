@@ -1,7 +1,7 @@
 import { callTool } from '../mcp-manager.js';
 
 // `detail` is expected to be a JSON string like:
-// {"server":"xiaohongshu","tool":"search_notes","args":{"keyword":"..."}}
+// {"server":"forum","tool":"search","args":{"keyword":"..."}}
 export default async function mcpAction(detail) {
   let parsed;
   try {

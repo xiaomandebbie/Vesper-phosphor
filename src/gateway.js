@@ -11,25 +11,38 @@ app.use(express.json({ limit: '10mb' }));
 const PORT = process.env.GATEWAY_PORT || 3002;
 const GATEWAY_API_KEY = process.env.GATEWAY_API_KEY;
 
+// 记录对话时用的两个称呼。默认是中性的，
+// 想显示成自己的叫法，在 .env 里设 USER_DISPLAY_NAME / AI_DISPLAY_NAME。
+const USER_NAME = process.env.USER_DISPLAY_NAME || 'user';
+const AI_NAME = process.env.AI_DISPLAY_NAME || 'assistant';
+
 const decideUpstream = {
   baseURL: process.env.DECIDE_UPSTREAM_BASE_URL || 'https://api.deepseek.com',
   apiKey: process.env.DECIDE_UPSTREAM_API_KEY || process.env.DEEPSEEK_API_KEY,
   upstreamModel: process.env.DECIDE_UPSTREAM_MODEL || 'deepseek-flash',
 };
 
+const clientUpstream = {
+  source: 'client',
+  baseURL:
+    process.env.CLIENT_UPSTREAM_BASE_URL || process.env.ARU_UPSTREAM_BASE_URL || 'https://api.deepseek.com',
+  apiKey:
+    process.env.CLIENT_UPSTREAM_API_KEY || process.env.ARU_UPSTREAM_API_KEY || process.env.DEEPSEEK_API_KEY,
+  upstreamModel: process.env.CLIENT_UPSTREAM_MODEL || process.env.ARU_UPSTREAM_MODEL || 'deepseek-flash',
+};
+
 const routingTable = {
-  'aru-chat': {
-    source: 'aru',
-    baseURL: process.env.ARU_UPSTREAM_BASE_URL || 'https://api.deepseek.com',
-    apiKey: process.env.ARU_UPSTREAM_API_KEY || process.env.DEEPSEEK_API_KEY,
-    upstreamModel: process.env.ARU_UPSTREAM_MODEL || 'deepseek-flash',
-  },
-  'vesper-decide': { source: 'decide.js', ...decideUpstream },
-  // dylan-heartbeat 自己醒来时用这条（heartbeat .env 里 MODEL_NAME=heartbeat-wake）。
+  // 聊天前端走这条，对话会被记录
+  chat: clientUpstream,
+  vesper-decide: { source: 'decide.js', ...decideUpstream },
+  // 另一个唤醒项目（heartbeat）自己醒来时用这条（它的 .env 里 MODEL_NAME=heartbeat-wake）。
   // 上游和 vesper-decide 一样，区别是会把请求里的"最近记录"换成跨窗口的共享上下文，
-  // 这样 heartbeat 和 phosphor 看到的是同一份，换了 Aru 窗口也不会丢。
+  // 这样两边看到的是同一份，换了聊天窗口也不会丢。
   'heartbeat-wake': { source: 'heartbeat', injectSharedContext: true, ...decideUpstream },
 };
+
+// 旧名字兼容：以前这个路由叫 aru-chat。已经配好的客户端不用改。
+routingTable['aru-chat'] = clientUpstream;
 
 function requireGatewayAuth(req, res, next) {
   const auth = req.headers['authorization'];
@@ -53,8 +66,8 @@ function contentToText(content) {
   return '';
 }
 
-// Aru 会把 <environment> 环境块和 <sent_at> 时间戳拼进用户消息里。
-// 这些是给对话侧看的上下文，不是小满本人说的话；原样记进 conversation_log 的话，
+// 聊天前端会把 <environment> 环境块和 <sent_at> 时间戳拼进用户消息里。
+// 这些是给对话侧看的上下文，不是对方本人说的话；原样记进 conversation_log 的话，
 // decide.js 拿到的"最近对话"会全是环境噪音，真正说了什么反而被挤掉。
 function stripInjectedBlocks(content) {
   return contentToText(content)
@@ -63,10 +76,10 @@ function stripInjectedBlocks(content) {
     .trim();
 }
 
-// 只记 Aru 那条线路的对话，方向按上游协议来：
-// messages 里 role=user 是小满说的，role=assistant 是允朔说的。
+// 只记聊天那条线路的对话，方向按上游协议来：
+// messages 里 role=user 是对方说的，role=assistant 是这一侧说的。
 // assistant 那条不在这里记——由响应侧统一补，免得同一句话落两遍。
-// 工具循环里最后一条是 role=tool，这里会直接跳过，不会把工具结果当成小满说的话。
+// 工具循环里最后一条是 role=tool，这里会直接跳过，不会把工具结果当成对方说的话。
 function recordUserMessage(messages) {
   if (!Array.isArray(messages) || !messages.length) return;
   const last = messages[messages.length - 1];
@@ -74,14 +87,14 @@ function recordUserMessage(messages) {
   const cleaned = stripInjectedBlocks(last.content);
   if (!cleaned) return;
   try {
-    addConversationMessage('小满', cleaned);
+    addConversationMessage(USER_NAME, cleaned);
   } catch (err) {
     console.error('gateway: addConversationMessage(user) failed:', err.message);
   }
 }
 
 // heartbeat 醒来时发的 user 消息里有一段"最近记录："，后面是它从自己时间线文件里拼的聊天。
-// 那个文件只有当前 Aru 窗口的内容，换窗口就丢。这里把标记后面的内容换成跨窗口的共享上下文，
+// 那个文件只有当前窗口的内容，换窗口就丢。这里把标记后面的内容换成跨窗口的共享上下文，
 // 和 phosphor 做决定时读的是同一份。找不到标记或共享上下文是空的，就原样转发。
 const HISTORY_MARKER = '最近记录：';
 const HEARTBEAT_CONTEXT_LIMIT = Number(process.env.HEARTBEAT_CONTEXT_LIMIT) || 30;
@@ -124,7 +137,7 @@ function injectSharedContext(messages) {
 // 非流式响应最多缓存这么大，防止异常大的 body 撑爆内存
 const MAX_RAW_BYTES = 2 * 1024 * 1024;
 
-// 上游回的是 SSE，允朔说的话散在 delta 里。
+// 上游回的是 SSE，回复文本散在 delta 里。
 // 这个 Transform 一边把数据放行给前端，一边把文本捞出来，流结束时交回去。
 function makeAssistantCapture(onComplete) {
   const decoder = new StringDecoder('utf8');
@@ -183,7 +196,7 @@ function makeAssistantCapture(onComplete) {
       }
 
       // 没捞到正文时区分原因。
-      // 工具调用轮（Aru 让模型调工具时）本来就没有正文，是正常情况，不出声。
+      // 工具调用轮本来就没有正文，是正常情况，不出声。
       if (!text.trim() && !sawToolCalls) {
         if (sawReasoning) {
           console.warn('gateway: assistant reply had reasoning but no content — nothing to record');
@@ -218,7 +231,7 @@ app.post('/v1/chat/completions', requireGatewayAuth, async (req, res) => {
     return res.status(400).json({ error: { message: `Unknown model "${model}"` } });
   }
 
-  const recordConversation = route.source === 'aru';
+  const recordConversation = route.source === 'client';
   if (recordConversation) recordUserMessage(req.body.messages);
 
   const messages = route.injectSharedContext
@@ -252,7 +265,7 @@ app.post('/v1/chat/completions', requireGatewayAuth, async (req, res) => {
 
     const source = Readable.fromWeb(upstreamRes.body);
 
-    // 上游报错（非 2xx）时原样透传，不当成允朔的话记录
+    // 上游报错（非 2xx）时原样透传，不当成正常回复记录
     if (!recordConversation || !upstreamRes.ok) {
       source.pipe(res);
       return;
@@ -264,7 +277,7 @@ app.post('/v1/chat/completions', requireGatewayAuth, async (req, res) => {
           const trimmed = text.trim();
           if (!trimmed) return;
           try {
-            addConversationMessage('允朔', trimmed);
+            addConversationMessage(AI_NAME, trimmed);
           } catch (err) {
             console.error('gateway: addConversationMessage(assistant) failed:', err.message);
           }

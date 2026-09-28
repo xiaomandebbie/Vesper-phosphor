@@ -1,6 +1,6 @@
 # 02 · 在 VPS 上部署（推荐）
 
-以腾讯云轻量服务器（OpenCloudOS / CentOS 系）为例。Ubuntu 的差别会单独标出来。
+以常见的云服务器（OpenCloudOS / CentOS 系）为例。Ubuntu 的差别会单独标出来。
 
 整个过程分 8 步，**按顺序做，每步做完看一眼"检查"再往下走**。
 
@@ -49,23 +49,27 @@ pm2 -v
 
 ## 第 4 步：拉代码
 
+把下面的 `<你的用户名>` 换成你自己的 GitHub 用户名。
+
 ```bash
-cd /root
-git clone https://github.com/xiaomandebbie/Vesper-phosphor.git vesper-phosphor
+cd ~
+git clone https://github.com/<你的用户名>/vesper-phosphor.git
 cd vesper-phosphor
 ```
 
 **国内服务器连 GitHub 经常超时**（报 `Empty reply from server` 或卡住不动），换镜像：
 
 ```bash
-git clone https://gh-proxy.com/https://github.com/xiaomandebbie/Vesper-phosphor.git vesper-phosphor
+# 用任意可用的 GitHub 镜像前缀
+MIRROR=https://gh-proxy.com/https://github.com
+git clone $MIRROR/<你的用户名>/vesper-phosphor.git
 cd vesper-phosphor
-git remote set-url origin https://github.com/xiaomandebbie/Vesper-phosphor.git
+git remote set-url origin https://github.com/<你的用户名>/vesper-phosphor.git
 ```
 
 最后一行把远程地址改回正常的 GitHub，以后 `git pull` 失败再临时用镜像拉。
 
-> ⚠️ **不要把 GitHub token 写进 remote 地址**（`https://用户名:token@github.com/...`）。仓库是公开的，只拉代码不需要 token；写进去后换 key 就会莫名其妙拉不下来。
+> ⚠️ **不要把 GitHub token 写进 remote 地址**（`https://用户名:token@github.com/...`）。只拉代码不需要 token；写进去后换 key 就会莫名其妙拉不下来。
 
 ## 第 5 步：装依赖
 
@@ -109,14 +113,14 @@ vi .env        # 不会用 vi 就用 nano .env
 openssl rand -hex 24
 ```
 
-其余变量（Bark、Ombre Brain、Lutopia、ElevenLabs）按需填，不填对应功能会自动跳过，不会崩。
+其余变量（Bark、Ombre Brain、论坛、ElevenLabs）按需填，不填对应功能会自动跳过，不会崩。
 
 每个变量的详细含义见 [04 · 配置项详解](04-config.md)。
 
 ## 第 7 步：启动
 
 ```bash
-cd /root/vesper-phosphor
+cd ~/vesper-phosphor
 pm2 start src/vesper.js   --name vesper
 pm2 start src/gateway.js  --name vesper-gateway
 pm2 start src/phosphor.js --name phosphor
@@ -145,7 +149,7 @@ curl -s localhost:3001/health -u 你的BASIC_USER:你的BASIC_PASS
 # {"ok":true,"service":"vesper"}
 
 curl -s localhost:3002/v1/models -H "Authorization: Bearer 你的GATEWAY_API_KEY"
-# 能看到 aru-chat 和 vesper-decide
+# 能看到 chat 和 vesper-decide
 ```
 
 等 1～2 分钟看 phosphor 第一次醒来：
@@ -158,36 +162,38 @@ pm2 logs phosphor --lines 40 --nostream
 
 ## 第 8 步：开防火墙端口
 
-腾讯云轻量：控制台 → 服务器 → 防火墙 → 添加规则，TCP `3001` 和 `3002`。
+云服务器控制台 → 防火墙 → 添加规则，TCP `3001` 和 `3002`。
 
 只需要从外面访问的才开：
 
 - 手机要上报状态、浏览器要看日记 → 开 3001
-- Aru 要走网关 → 开 3002
+- 聊天客户端要走网关 → 开 3002
 
 > ⚠️ 开端口前**务必确认第 6 步三个 key 都填了**。开了端口 + 没填 key = 公网裸奔。
 
 ---
 
-## 让 Aru 走这个网关
+## 让聊天客户端走这个网关
 
-Aru → 模型设置 → 自定义服务：
+以 Aru 为例，模型设置 → 自定义服务：
 
 | 项 | 填 |
 |---|---|
 | Base URL | `http://你的服务器IP:3002/v1` |
-| API Key | `.env` 里的 `GATEWAY_API_KEY`（**不是** DeepSeek 的 key） |
-| 模型 | `aru-chat`（或点"拉取"） |
+| API Key | `.env` 里的 `GATEWAY_API_KEY`（**不是**上游模型自己的 key） |
+| 模型 | `chat`（或点"拉取"） |
 
-再在 `.env` 里填上 `aru-chat` 实际转发到哪：
+再在 `.env` 里填上 `chat` 实际转发到哪：
 
 ```
-ARU_UPSTREAM_BASE_URL=https://api.deepseek.com
-ARU_UPSTREAM_API_KEY=你的上游key
-ARU_UPSTREAM_MODEL=deepseek-flash
+CLIENT_UPSTREAM_BASE_URL=https://api.deepseek.com
+CLIENT_UPSTREAM_API_KEY=你的上游key
+CLIENT_UPSTREAM_MODEL=deepseek-flash
 ```
 
-> ⚠️ `ARU_UPSTREAM_BASE_URL` **不要带 `/v1`**，网关会自己拼上 `/v1/chat/completions`。写成 `https://api.deepseek.com/v1` 会变成 `/v1/v1/...`，上游返回 404。
+> 旧的变量名 `ARU_UPSTREAM_*` 和模型名 `aru-chat` 仍然兼容，已经配好的不用改。
+
+> ⚠️ `CLIENT_UPSTREAM_BASE_URL` **不要带 `/v1`**，网关会自己拼上 `/v1/chat/completions`。写成 `https://api.deepseek.com/v1` 会变成 `/v1/v1/...`，上游返回 404。
 
 ## 让 phosphor 也走网关（可选）
 
@@ -216,12 +222,14 @@ pm2 restart vesper vesper-gateway phosphor --update-env
 ## 以后更新代码
 
 ```bash
-cd /root/vesper-phosphor
+cd ~/vesper-phosphor
 git status                 # 先看有没有本地改动，有的话先别 pull
-git pull || git pull https://gh-proxy.com/https://github.com/xiaomandebbie/Vesper-phosphor.git main
+git pull
 npm ci                     # package.json 有变化时才需要
 pm2 restart vesper vesper-gateway phosphor
 ```
+
+拉不动就走镜像（见第 4 步）。
 
 > 💡 **不要直接在服务器上改代码**。改了之后 `git pull` 会冲突，而且 GitHub 上的版本会和服务器上跑的不一样，排查问题时会被误导。要改就在 GitHub 上改，服务器只负责 pull。
 
@@ -230,8 +238,8 @@ pm2 restart vesper vesper-gateway phosphor
 这两样**不在 git 里，重新 clone 不会回来**：
 
 ```bash
-cp /root/vesper-phosphor/.env          ~/backup-vesper.env
-cp /root/vesper-phosphor/data/state.db ~/backup-state-$(date +%F).db
+cp ~/vesper-phosphor/.env          ~/backup-vesper.env
+cp ~/vesper-phosphor/data/state.db ~/backup-state-$(date +%F).db
 ```
 
 备份数据库前最好先 `pm2 stop phosphor vesper vesper-gateway`，备份完再 `pm2 start` 回来。
