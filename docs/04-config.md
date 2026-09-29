@@ -98,10 +98,10 @@ curl -s -X POST localhost:3001/wake/self-wake -H "x-api-key: $KEY" -H "content-t
 
 | 变量 | 说明 |
 |---|---|
-| `USER_DISPLAY_NAME` | 对话记录里怎么标"对方说的话"。不填是 `user` |
-| `AI_DISPLAY_NAME` | 对话记录里怎么标"TA 说的话"。不填是 `assistant` |
+| `USER_DISPLAY_NAME` | 对话记录、动态页留言里怎么标"你"。不填：对话记录里是 `user`，动态页是"我" |
+| `AI_DISPLAY_NAME` | 对话记录、动态页回复里怎么标"TA"。不填：对话记录里是 `assistant`，动态页是"TA" |
 
-这两个名字会写进 `conversation_log`，也会出现在给模型的 prompt 里。
+这两个名字会写进 `conversation_log`，也会出现在给模型的 prompt 和动态页上。
 
 ## 网关（vesper-gateway，3002 端口）
 
@@ -125,11 +125,11 @@ curl -s -X POST localhost:3001/wake/self-wake -H "x-api-key: $KEY" -H "content-t
 | 变量 | 说明 |
 |---|---|
 | `VESPER_PORT` | 端口，默认 `3001` |
-| `REPORT_STATUS_API_KEY` | 保护 `/report-status` 和所有 `/wake/*`。请求头 `x-api-key` 带它。**不填 = 谁都能调** |
-| `VESPER_BASIC_USER` | 日记页 `/diary`、`/health`、`/media` 的登录用户名 |
-| `VESPER_BASIC_PASS` | 登录密码。两个都留空 = 不用登录，公网上谁都能看 |
-| `MEDIA_DIR` | 日记音频/图片存哪。默认 `/opt/vesper/media`，**本地电脑要改成 `./media`** |
-| `MEDIA_MAX_AGE_DAYS` | 媒体文件保留几天，默认 `30`，过期自动删 |
+| `REPORT_STATUS_API_KEY` | 保护 `/report-status` 和所有 `/wake/*`（包括 `/wake/moments`）。请求头 `x-api-key` 带它。**不填 = 谁都能调** |
+| `VESPER_BASIC_USER` | 动态页 `/moments`、`/health`、`/media` 的登录用户名 |
+| `VESPER_BASIC_PASS` | 登录密码。两个都留空 = 不用登录，**公网上谁都能看、谁都能冒充你留言** |
+| `MEDIA_DIR` | 动态的图片/音频存哪。默认 `/opt/vesper/media`，**本地电脑要改成 `./media`** |
+| `MEDIA_MAX_AGE_DAYS` | 图片/音频保留几天，默认 `30`，过期自动删。动态正文和留言不删 |
 
 ## 推送
 
@@ -154,14 +154,59 @@ curl -s -X POST localhost:3001/wake/self-wake -H "x-api-key: $KEY" -H "content-t
 
 旧名 `LUTOPIA_MCP_ARGS` 仍然兼容。
 
-## 日记配音 ElevenLabs
+## 动态配图与配音
+
+两样都是可选的。**不配的话动态照样发，只是没图、没声音**，而且 TA 会被告知"现在没配，先别写"，不会白写 `image_prompt`。
+
+### 配图
 
 | 变量 | 说明 |
 |---|---|
-| `ELEVENLABS_API_KEY` | 不填 = 日记没有声音，正文照常保存 |
-| `ELEVENLABS_VOICE_ID` | 音色 id，去 ElevenLabs 后台 Voice Library 复制。**两个都填了才会生成语音** |
+| `IMAGE_API_URL` | **完整**地址，带 `/images/generations` |
+| `IMAGE_API_KEY` | 生图服务的 key |
+| `IMAGE_MODEL` | 生图模型名 |
+| `IMAGE_API_FORMAT` | `openai`（默认）或 `siliconflow`。两家请求体写法不一样，填错会报 400 |
+| `IMAGE_SIZE` | 尺寸，默认 `1024x1024` |
+| `IMAGE_TIMEOUT_MS` | 最多等多久（毫秒），默认 `180000` |
 
-模型固定 `eleven_v3`，代码里写死的，不用配。
+**前三个都填了才会生成。** 生成的图会下载到 `MEDIA_DIR/images/` 存在本地，不直接用服务商给的链接（那种链接通常几小时就过期）。
+
+常见两种填法：
+
+```
+# SiliconFlow
+IMAGE_API_URL=https://api.siliconflow.cn/v1/images/generations
+IMAGE_API_KEY=你的key
+IMAGE_MODEL=Kwai-Kolors/Kolors
+IMAGE_API_FORMAT=siliconflow
+
+# OpenAI 兼容的中转站
+IMAGE_API_URL=https://你的中转站/v1/images/generations
+IMAGE_API_KEY=你的key
+IMAGE_MODEL=gpt-image-2.5
+IMAGE_API_FORMAT=openai
+```
+
+### 配音（ElevenLabs）
+
+| 变量 | 说明 |
+|---|---|
+| `ELEVENLABS_API_KEY` | ElevenLabs 后台 → Profile → API Keys |
+| `ELEVENLABS_VOICE_ID` | 音色 id，去 ElevenLabs 后台 Voice Library 复制 |
+
+**两个都填了才会生成语音。** 模型固定 `eleven_v3`，代码里写死的，不用配：只有它认 `[breathing]`、`[whispers]` 这类标签，换成别的模型会把标签原样念出来。
+
+> 💡 聊天客户端里配的语音（比如 Aru 设置里的 ElevenLabs）和这里**是两套，互不相通**。客户端里的 key 存在手机上，服务器拿不到，要在服务器 `.env` 里再填一遍。
+
+### 确认开了没有
+
+```bash
+cd ~/vesper-phosphor
+pm2 restart phosphor --update-env
+pm2 logs phosphor --lines 20 --nostream | grep 动态
+```
+
+显示 `动态配图：已开启；动态语音：已开启` 就对了。
 
 ---
 
@@ -185,7 +230,7 @@ MEDIA_DIR=./media
 
 ```bash
 cd ~/vesper-phosphor
-node -e "require('dotenv').config(); for (const k of ['DEEPSEEK_API_KEY','LLM_BASE_URL','GATEWAY_API_KEY','REPORT_STATUS_API_KEY','PHOSPHOR_MAX_WAKE_MINUTES']) console.log(k, process.env[k] ? '已填' : '—空—')"
+node -e "require('dotenv').config(); for (const k of ['DEEPSEEK_API_KEY','LLM_BASE_URL','GATEWAY_API_KEY','REPORT_STATUS_API_KEY','PHOSPHOR_MAX_WAKE_MINUTES','IMAGE_API_URL','IMAGE_API_KEY','IMAGE_MODEL','ELEVENLABS_API_KEY','ELEVENLABS_VOICE_ID']) console.log(k, process.env[k] ? '已填' : '—空—')"
 ```
 
 只显示"已填/空"，不会把 key 打出来。

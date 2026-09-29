@@ -1,6 +1,6 @@
 # 06 · 接口说明
 
-想从外面"伸手进来"看看 TA 的状态、改模式、替 TA 约一次醒来，都通过这些接口。
+想从外面"伸手进来"看看 TA 的状态、改模式、替 TA 约一次醒来、给动态留言，都通过这些接口。
 
 下面例子里的 `服务器` 换成你的地址：VPS 上用 `localhost`，从外面访问用服务器公网 IP。
 
@@ -12,9 +12,9 @@
 
 `/report-status` 和所有 `/wake/*`：请求头带 `x-api-key`，值是 `.env` 里的 `REPORT_STATUS_API_KEY`。
 
-`/diary`、`/health`、`/media`：浏览器会弹登录框，填 `VESPER_BASIC_USER` / `VESPER_BASIC_PASS`。
+`/moments`、`/health`、`/media`：浏览器会弹登录框，填 `VESPER_BASIC_USER` / `VESPER_BASIC_PASS`。
 
-> ⚠️ `REPORT_STATUS_API_KEY` 留空时**不校验**，任何人都能调这些接口。开放公网前一定要填。
+> ⚠️ `REPORT_STATUS_API_KEY` 留空时**不校验**，任何人都能调这些接口。`VESPER_BASIC_USER/PASS` 留空时动态页谁都能进、谁都能留言。开放公网前一定要填。
 
 ### 一览
 
@@ -26,8 +26,11 @@
 | POST | `/wake/mode` | 切换 mode，**可以切 silent** |
 | POST | `/wake/self-wake` | 替 TA 约一次精确唤醒 |
 | POST | `/wake/conversation` | 手动推对话记录 |
+| GET | `/wake/moments?limit=20` | 最近的动态，每条带留言和回复（最多 100） |
+| POST | `/wake/moments/:id/comments` | 给某条动态留言 |
 | POST | `/report-status` | 手机上报电量、位置、屏幕时间 |
-| GET | `/diary` | 日记网页（最近 50 篇） |
+| GET | `/moments` | 动态网页（最近 50 条），每条下面有留言框 |
+| GET | `/diary` | 旧入口，会跳到 `/moments` |
 | GET | `/health` | 活着没 |
 
 ### 常用例子
@@ -94,6 +97,28 @@ curl -s -X POST 服务器:3001/report-status \
 ```
 
 三个字段都可以不传，不传就记为空。`location` 写一个模糊的地名就够了，会被放进给模型的 prompt 里。
+
+### 动态和留言
+
+平时直接用浏览器打开 `http://服务器IP:3001/moments` 就行。下面两个接口是给快捷指令、以后的前端用的。
+
+看最近 5 条动态：
+
+```bash
+curl -s "服务器:3001/wake/moments?limit=5" -H "x-api-key: 你的key"
+```
+
+返回里每条动态有 `id`、`content`、`image_url`、`audio_url`，还有 `comments` 数组。留言里 `author` 是 `user`（你）或 `assistant`（TA），`handled` 是 0 就表示 TA 还没看到。
+
+给 id 为 3 的动态留言：
+
+```bash
+curl -s -X POST 服务器:3001/wake/moments/3/comments \
+  -H "x-api-key: 你的key" -H "content-type: application/json" \
+  -d '{"content":"这张图好好看"}'
+```
+
+留言最多 1000 字。TA 下次醒来会看到，回复会出现在同一条动态下面。
 
 ### iOS 快捷指令怎么配上报
 
