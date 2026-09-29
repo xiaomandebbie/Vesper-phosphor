@@ -42,6 +42,8 @@ CREATE TABLE IF NOT EXISTS wake_log (
 CREATE TABLE IF NOT EXISTS device_reports (
   ts TEXT, battery REAL, location TEXT, screen_time_min INTEGER
 );
+
+-- 旧的日记表。日记已经换成"动态"，这张表留着不删，启动时会把里面的内容搬进 moments。
 CREATE TABLE IF NOT EXISTS diary (
   ts TEXT, content TEXT, image_url TEXT, audio_url TEXT
 );
@@ -52,6 +54,32 @@ CREATE TABLE IF NOT EXISTS conversation_log (
   speaker TEXT,
   content TEXT
 );
+
+-- 动态：TA 发的，像朋友圈。可以配图、配音。
+CREATE TABLE IF NOT EXISTS moments (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts INTEGER NOT NULL,
+  content TEXT,
+  image_url TEXT,
+  audio_url TEXT
+);
+
+-- 动态下的留言。author 是 'user'（你）或 'assistant'（TA）。
+-- handled：你的留言 TA 有没有看过（看过但没回也算）。TA 的回复写入时直接是 1。
+CREATE TABLE IF NOT EXISTS moment_comments (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  moment_id INTEGER NOT NULL,
+  ts INTEGER NOT NULL,
+  author TEXT NOT NULL,
+  content TEXT NOT NULL,
+  reply_to INTEGER,
+  handled INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_moment_comments_moment ON moment_comments (moment_id);
+CREATE INDEX IF NOT EXISTS idx_moment_comments_pending ON moment_comments (author, handled);
+
+-- 记录哪些一次性迁移已经做过
+CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
 `);
 
 // 兼容旧数据库：这几列是后加的，已存在时会报错，直接忽略。
@@ -86,6 +114,30 @@ function stmt(sql) {
   return s;
 }
 
+// 旧日记搬进动态，只做一次。
+// 三个进程启动时都会跑到这里（pm2 会同时拉起它们），所以用 IMMEDIATE 事务先拿写锁，
+// 再查 meta 表里有没有做过的标记。拿不到锁的进程会等前一个做完，然后看到标记就跳过，不会搬两遍。
+const migrateDiaryToMoments = db.transaction(() => {
+  if (stmt("SELECT 1 FROM meta WHERE key = 'diary_migrated'").get()) return 0;
+  let count = 0;
+  // moments 已经有东西（比如手动搬过）就只打标记，不再搬
+  if (stmt('SELECT COUNT(*) AS c FROM moments').get().c === 0) {
+    const insert = stmt('INSERT INTO moments (ts, content, image_url, audio_url) VALUES (?, ?, ?, ?)');
+    for (const d of stmt('SELECT * FROM diary ORDER BY ts ASC').all()) {
+      insert.run(Date.parse(d.ts) || Date.now(), d.content ?? '', d.image_url ?? null, d.audio_url ?? null);
+      count++;
+    }
+  }
+  stmt("INSERT INTO meta (key, value) VALUES ('diary_migrated', ?)").run(String(Date.now()));
+  return count;
+});
+try {
+  const n = migrateDiaryToMoments.immediate();
+  if (n) console.log(`state: 已把 ${n} 篇旧日记搬进动态`);
+} catch (err) {
+  console.error('state: 旧日记搬进动态失败（不影响运行，下次启动会再试）:', err.message);
+}
+
 export function getWakeState() {
   return stmt('SELECT * FROM wake_state WHERE id = 1').get();
 }
@@ -118,8 +170,7 @@ export function acknowledgeMissed(ids) {
   stmt(`UPDATE pending_wake SET acknowledged = 1 WHERE id IN (${placeholders})`).run(...ids);
 }
 
-// logWake 现在接受一个完整对象，把每次唤醒（包括 noop 和出错）都落盘，
-// 这样 TA 自己不在的时候发生过什么，之后能通过 GET /wake/log 看回来。
+// logWake 把每次唤醒（包括 noop 和出错）都落盘，TA 不在时发生过什么能通过 GET /wake/log 看回来。
 export function logWake({ kind, scheduledAt, mode, gapMinutes, decision, result, error }) {
   stmt(
     `INSERT INTO wake_log (kind, scheduled_at, fired_at, actions, created_at, mode, gap_minutes, decision, result, error)
@@ -141,6 +192,14 @@ export function getRecentWakeLog(limit = 20) {
   return stmt('SELECT * FROM wake_log ORDER BY fired_at DESC LIMIT ?').all(limit);
 }
 
+// 最近几次醒来选的动作（从早到晚），给模型看，避免总选同一个。
+export function getRecentActions(limit = 8) {
+  const rows = stmt(
+    "SELECT fired_at, json_extract(decision, '$.action') AS action FROM wake_log WHERE decision IS NOT NULL ORDER BY fired_at DESC LIMIT ?"
+  ).all(limit);
+  return rows.reverse();
+}
+
 export function saveDeviceReport(r) {
   stmt(
     'INSERT INTO device_reports (ts, battery, location, screen_time_min) VALUES (@ts, @battery, @location, @screen_time_min)'
@@ -150,19 +209,46 @@ export function getLatestDeviceReport() {
   return stmt('SELECT * FROM device_reports ORDER BY ts DESC LIMIT 1').get();
 }
 
-export function saveDiary(entry) {
-  const merged = { image_url: null, audio_url: null, ...entry };
-  stmt(
-    'INSERT INTO diary (ts, content, image_url, audio_url) VALUES (@ts, @content, @image_url, @audio_url)'
-  ).run(merged);
+// ---------- 动态 ----------
+
+export function addMoment({ content, image_url = null, audio_url = null }) {
+  return stmt('INSERT INTO moments (ts, content, image_url, audio_url) VALUES (?, ?, ?, ?)').run(
+    Date.now(),
+    content ?? '',
+    image_url,
+    audio_url
+  ).lastInsertRowid;
 }
-export function listDiary(limit = 50) {
-  return stmt('SELECT * FROM diary ORDER BY ts DESC LIMIT ?').all(limit);
+export function getMoment(id) {
+  if (!Number.isInteger(id)) return undefined;
+  return stmt('SELECT * FROM moments WHERE id = ?').get(id);
+}
+export function listMoments(limit = 30) {
+  return stmt('SELECT * FROM moments ORDER BY ts DESC, id DESC LIMIT ?').all(limit);
+}
+export function listMomentComments(momentId) {
+  return stmt('SELECT * FROM moment_comments WHERE moment_id = ? ORDER BY ts ASC, id ASC').all(momentId);
+}
+export function addMomentComment({ momentId, author, content, replyTo = null, handled = 0 }) {
+  return stmt(
+    'INSERT INTO moment_comments (moment_id, ts, author, content, reply_to, handled) VALUES (?, ?, ?, ?, ?, ?)'
+  ).run(momentId, Date.now(), author, content, replyTo, handled ? 1 : 0).lastInsertRowid;
+}
+// 你留的、TA 还没看过的留言（从早到晚），带上那条动态的正文
+export function getPendingComments(limit = 5) {
+  return stmt(
+    `SELECT c.id, c.moment_id, c.ts, c.content, m.content AS moment_content
+     FROM moment_comments c JOIN moments m ON m.id = c.moment_id
+     WHERE c.author = 'user' AND c.handled = 0
+     ORDER BY c.ts ASC, c.id ASC LIMIT ?`
+  ).all(limit);
+}
+export function markCommentsHandled(ids) {
+  const update = stmt('UPDATE moment_comments SET handled = 1 WHERE id = ?');
+  for (const id of ids) update.run(id);
 }
 
-// 对话记录：由外部聊天前端主动上报，phosphor 拿它算密度、
-// decide.js 拿它当"最近聊了什么"的真实上下文。不是从这个项目里自动采集的——
-// 这个项目本身接触不到真实对话，需要有个地方把消息推进来。
+// 对话记录：由外部聊天前端主动上报，phosphor 拿它算密度、当"最近聊了什么"的真实上下文。
 export function addConversationMessage(speaker, content) {
   stmt('INSERT INTO conversation_log (ts, speaker, content) VALUES (?, ?, ?)').run(
     Date.now(),
@@ -188,8 +274,7 @@ export function closeDb() {
 
 // 三个进程（vesper / vesper-gateway / phosphor）都 import 这个文件，
 // 所以在这里统一挂退出收尾：pm2 stop / restart 发 SIGINT，kill 发 SIGTERM，
-// 正常退出或未捕获异常退出走 exit。原来只有 phosphor 处理了信号，
-// vesper 和 gateway 每次重启都是带着没关的库直接退，同样会撞上面那个断言。
+// 正常退出或未捕获异常退出走 exit。
 process.once('exit', closeDb);
 for (const signal of ['SIGINT', 'SIGTERM']) {
   process.once(signal, () => {

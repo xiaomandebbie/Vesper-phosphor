@@ -1,12 +1,14 @@
 import bark from './bark.js';
-import diary from './diary.js';
+import moment from './moment.js';
 import mcpAction from './mcp-action.js';
 import ombreBrain from './ombre-brain.js';
 import setMode from './set-mode.js';
 
 const actions = {
   bark,
-  diary,
+  moment,
+  // 旧名兼容：日记已经换成动态，模型偶尔还写 diary 时照样按动态发
+  diary: moment,
   mcp_call: mcpAction,
   ombre_brain: ombreBrain,
   set_mode: setMode,

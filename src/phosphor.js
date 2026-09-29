@@ -10,10 +10,15 @@ import {
   acknowledgeMissed,
   logWake,
   getLatestDeviceReport,
+  getRecentActions,
+  getPendingComments,
+  markCommentsHandled,
+  addMomentComment,
   closeDb,
 } from './state.js';
 import decide from './decide.js';
 import { executeAction } from './actions/index.js';
+import { isImageEnabled, isVoiceEnabled } from './actions/moment.js';
 import { listAllTools, connectAll, callTool, isConnected } from './mcp-manager.js';
 import { isSharedTimelineEnabled, describeAction, postSharedEvent } from './timeline.js';
 import { getSharedContext, countRecentChat } from './context.js';
@@ -23,6 +28,8 @@ const MISSED_GRACE_MS = 3 * 60 * 1000;
 const LOW_FREQ_MIN_GAP_MINUTES = 90;
 const DEFAULT_WAKE_MINUTES = 60;
 const MIN_WAKE_MINUTES = 5;
+const MAX_COMMENTS_PER_WAKE = 5;
+const MAX_REPLY_CHARS = 500;
 // 两次自然唤醒之间最长隔多久。模型给得再大也会被截到这个值。
 // .env 里 PHOSPHOR_MAX_WAKE_MINUTES 可改，不填是 1440（一天）。
 const MAX_WAKE_MINUTES = (() => {
@@ -59,6 +66,16 @@ function normalizeDecision(raw, fallbackMood) {
     }
   }
 
+  // 留言回复：只留 comment_id 是数字、reply 非空的
+  const commentReplies = Array.isArray(d.comment_replies)
+    ? d.comment_replies
+        .map((r) => ({
+          comment_id: Number(r?.comment_id),
+          reply: typeof r?.reply === 'string' ? r.reply.trim().slice(0, MAX_REPLY_CHARS) : '',
+        }))
+        .filter((r) => Number.isInteger(r.comment_id) && r.reply)
+    : [];
+
   return {
     ...d,
     next_wake_minutes: minutes,
@@ -66,7 +83,29 @@ function normalizeDecision(raw, fallbackMood) {
     action,
     action_detail: actionDetail,
     self_wake: selfWake,
+    comment_replies: commentReplies,
   };
+}
+
+// 回动态下的留言。不占这次醒来的动作，和 executeAction 互不影响。
+// 这次给模型看过的留言一律标记为已处理，没回的下次不再出现，免得每次醒来都被同一条催。
+function handleCommentReplies(decision, shownComments) {
+  if (!shownComments.length) return 0;
+  const byId = new Map(shownComments.map((c) => [c.id, c]));
+  let replied = 0;
+  for (const r of decision?.comment_replies ?? []) {
+    const c = byId.get(r.comment_id);
+    if (!c) continue; // 模型编了一个不存在的 id
+    try {
+      addMomentComment({ momentId: c.moment_id, author: 'assistant', content: r.reply, replyTo: c.id, handled: 1 });
+      replied++;
+    } catch (err) {
+      console.error('handleCommentReplies(): 写入回复失败', err.message);
+    }
+  }
+  markCommentsHandled(shownComments.map((c) => c.id));
+  if (replied) console.log(`phosphor: 回复了 ${replied} 条动态留言`);
+  return replied;
 }
 
 // 从 Ombre Brain 取一段文本。取不到就返回 null，不影响这一轮唤醒。
@@ -102,6 +141,7 @@ async function runDecisionCycle({ kind, scheduledAt = null, selfNote = null }) {
   const density = countRecentChat(2 * 60 * 60 * 1000);
   const recentMessages = getSharedContext(20);
   const gapMinutes = wakeState.updated_at ? (Date.now() - wakeState.updated_at) / 60000 : 0;
+  const pendingComments = getPendingComments(MAX_COMMENTS_PER_WAKE);
 
   const missed = getUnacknowledgedMissed();
   const missedSummary = missed.length
@@ -126,6 +166,11 @@ async function runDecisionCycle({ kind, scheduledAt = null, selfNote = null }) {
     location: latestDevice?.location ?? null,
     screenTime: latestDevice?.screen_time_min ?? null,
     availableTools: (await listAllTools()).map((t) => t.name),
+    recentActions: getRecentActions(8),
+    pendingComments,
+    imageEnabled: isImageEnabled(),
+    voiceEnabled: isVoiceEnabled(),
+    heartbeatActive: isSharedTimelineEnabled(),
   };
 
   let decision = null;
@@ -135,11 +180,26 @@ async function runDecisionCycle({ kind, scheduledAt = null, selfNote = null }) {
   try {
     decision = normalizeDecision(await decide(context), wakeState.mood);
     console.log(`[${kind}] decision:`, decision);
-    result = await executeAction(decision);
-    console.log(`[${kind}] action result:`, JSON.stringify(result));
   } catch (err) {
     errorMessage = err.message;
-    console.error(`[${kind}] runDecisionCycle failed:`, err);
+    console.error(`[${kind}] decide failed:`, err);
+  }
+
+  // 先回留言，再执行动作：动作失败也不影响回复
+  let repliedCount = 0;
+  if (decision) {
+    try {
+      repliedCount = handleCommentReplies(decision, pendingComments);
+    } catch (err) {
+      console.error(`[${kind}] handleCommentReplies failed:`, err);
+    }
+    try {
+      result = await executeAction(decision);
+      console.log(`[${kind}] action result:`, JSON.stringify(result));
+    } catch (err) {
+      errorMessage = err.message;
+      console.error(`[${kind}] executeAction failed:`, err);
+    }
   }
 
   logWake({
@@ -154,6 +214,9 @@ async function runDecisionCycle({ kind, scheduledAt = null, selfNote = null }) {
 
   // 做了事就写回共享时间线，让另一边醒来时也知道
   if (!errorMessage) await postSharedEvent(describeAction(decision, result));
+  if (repliedCount) {
+    await postSharedEvent(`自动唤醒：本次未发送推送｜回复了动态下的 ${repliedCount} 条留言`);
+  }
 
   if (missed.length) acknowledgeMissed(missed.map((m) => m.id));
 
@@ -244,7 +307,7 @@ async function main() {
   process.on('SIGINT', () => shutdown('SIGINT'));
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   console.log(
-    `phosphor: 最长唤醒间隔 ${MAX_WAKE_MINUTES} 分钟；共享时间线：${isSharedTimelineEnabled() ? '已开启' : '未开启'}；聊天来源：conversation_log（跨窗口）`
+    `phosphor: 最长唤醒间隔 ${MAX_WAKE_MINUTES} 分钟；共享时间线：${isSharedTimelineEnabled() ? '已开启' : '未开启'}；动态配图：${isImageEnabled() ? '已开启' : '未配置'}；动态语音：${isVoiceEnabled() ? '已开启' : '未配置'}`
   );
   await connectAll();
   await tick();

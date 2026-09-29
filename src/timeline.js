@@ -2,12 +2,11 @@
 //
 // heartbeat 把聊天记录和它自己的唤醒事件都存在一个 JSON 文件里（enhanced_messages.json）。
 // 这里做两件事：
-//   1. 读：phosphor 做决定时，直接读这个文件当"最近对话"，这样两边看到的内容完全一样，
-//      heartbeat 发过的推送也会出现在里面。
-//   2. 写：phosphor 做了事（推送、写日记、逛论坛……）之后，通过 heartbeat 的 /internal/wake-event
+//   1. 读：从这个文件里取"事件"（推送、未推送等），和 conversation_log 合并成共享上下文（见 context.js）。
+//   2. 写：phosphor 做了事（推送、发动态、逛论坛……）之后，通过 heartbeat 的 /internal/wake-event
 //      写回它的时间线。heartbeat 下次醒来、以及聊天前端下次聊天时都能看到。
 //
-// 两个环境变量都不填时，这个文件什么都不做，phosphor 照旧用自己的 conversation_log。
+// 两个环境变量都不填时，这个文件什么都不做。
 
 import fs from 'fs';
 
@@ -99,7 +98,7 @@ function loadEntries() {
   try {
     const raw = JSON.parse(fs.readFileSync(TIMELINE_FILE, 'utf-8'));
     if (!Array.isArray(raw)) {
-      console.error(`timeline: ${TIMELINE_FILE} 顶层不是数组，改用 conversation_log`);
+      console.error(`timeline: ${TIMELINE_FILE} 顶层不是数组`);
       return null;
     }
     return raw
@@ -107,7 +106,7 @@ function loadEntries() {
       .map(toEntry)
       .filter((e) => e.content);
   } catch (err) {
-    console.error(`timeline: 读取 ${TIMELINE_FILE} 失败，改用 conversation_log:`, err.message);
+    console.error(`timeline: 读取 ${TIMELINE_FILE} 失败:`, err.message);
     return null;
   }
 }
@@ -155,9 +154,13 @@ export function describeAction(decision, result) {
   switch (decision.action) {
     case 'bark':
       return result?.ok ? `刚刚给用户发了Bark推送：${short(result.message, 200)}` : null;
+    case 'moment':
     case 'diary': {
-      const j = tryJson(detail);
-      return `自动唤醒：本次未发送推送｜写了一篇日记：${short(j?.content ?? detail)}`;
+      if (!result?.ok) return null;
+      const extras = [result.has_image ? '配了图' : '', result.has_audio ? '配了语音' : '']
+        .filter(Boolean)
+        .join('、');
+      return `自动唤醒：本次未发送推送｜发了一条动态${extras ? `（${extras}）` : ''}：${short(result.content)}`;
     }
     case 'mcp_call': {
       const j = tryJson(detail);
