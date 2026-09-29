@@ -77,6 +77,9 @@ CREATE TABLE IF NOT EXISTS moment_comments (
 );
 CREATE INDEX IF NOT EXISTS idx_moment_comments_moment ON moment_comments (moment_id);
 CREATE INDEX IF NOT EXISTS idx_moment_comments_pending ON moment_comments (author, handled);
+
+-- 记录哪些一次性迁移已经做过
+CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
 `);
 
 // 兼容旧数据库：这几列是后加的，已存在时会报错，直接忽略。
@@ -111,19 +114,29 @@ function stmt(sql) {
   return s;
 }
 
-// 旧日记搬进动态：只在 moments 还是空的时候做一次，之后不再碰 diary 表。
-(function migrateDiaryToMoments() {
-  if (stmt('SELECT COUNT(*) AS c FROM moments').get().c > 0) return;
-  const old = stmt('SELECT * FROM diary ORDER BY ts ASC').all();
-  if (!old.length) return;
-  const insert = stmt('INSERT INTO moments (ts, content, image_url, audio_url) VALUES (?, ?, ?, ?)');
-  db.transaction(() => {
-    for (const d of old) {
+// 旧日记搬进动态，只做一次。
+// 三个进程启动时都会跑到这里（pm2 会同时拉起它们），所以用 IMMEDIATE 事务先拿写锁，
+// 再查 meta 表里有没有做过的标记。拿不到锁的进程会等前一个做完，然后看到标记就跳过，不会搬两遍。
+const migrateDiaryToMoments = db.transaction(() => {
+  if (stmt("SELECT 1 FROM meta WHERE key = 'diary_migrated'").get()) return 0;
+  let count = 0;
+  // moments 已经有东西（比如手动搬过）就只打标记，不再搬
+  if (stmt('SELECT COUNT(*) AS c FROM moments').get().c === 0) {
+    const insert = stmt('INSERT INTO moments (ts, content, image_url, audio_url) VALUES (?, ?, ?, ?)');
+    for (const d of stmt('SELECT * FROM diary ORDER BY ts ASC').all()) {
       insert.run(Date.parse(d.ts) || Date.now(), d.content ?? '', d.image_url ?? null, d.audio_url ?? null);
+      count++;
     }
-  })();
-  console.log(`state: 已把 ${old.length} 篇旧日记搬进动态`);
-})();
+  }
+  stmt("INSERT INTO meta (key, value) VALUES ('diary_migrated', ?)").run(String(Date.now()));
+  return count;
+});
+try {
+  const n = migrateDiaryToMoments.immediate();
+  if (n) console.log(`state: 已把 ${n} 篇旧日记搬进动态`);
+} catch (err) {
+  console.error('state: 旧日记搬进动态失败（不影响运行，下次启动会再试）:', err.message);
+}
 
 export function getWakeState() {
   return stmt('SELECT * FROM wake_state WHERE id = 1').get();
@@ -157,8 +170,7 @@ export function acknowledgeMissed(ids) {
   stmt(`UPDATE pending_wake SET acknowledged = 1 WHERE id IN (${placeholders})`).run(...ids);
 }
 
-// logWake 现在接受一个完整对象，把每次唤醒（包括 noop 和出错）都落盘，
-// 这样 TA 自己不在的时候发生过什么，之后能通过 GET /wake/log 看回来。
+// logWake 把每次唤醒（包括 noop 和出错）都落盘，TA 不在时发生过什么能通过 GET /wake/log 看回来。
 export function logWake({ kind, scheduledAt, mode, gapMinutes, decision, result, error }) {
   stmt(
     `INSERT INTO wake_log (kind, scheduled_at, fired_at, actions, created_at, mode, gap_minutes, decision, result, error)
@@ -208,6 +220,7 @@ export function addMoment({ content, image_url = null, audio_url = null }) {
   ).lastInsertRowid;
 }
 export function getMoment(id) {
+  if (!Number.isInteger(id)) return undefined;
   return stmt('SELECT * FROM moments WHERE id = ?').get(id);
 }
 export function listMoments(limit = 30) {
@@ -235,9 +248,7 @@ export function markCommentsHandled(ids) {
   for (const id of ids) update.run(id);
 }
 
-// 对话记录：由外部聊天前端主动上报，phosphor 拿它算密度、
-// decide.js 拿它当"最近聊了什么"的真实上下文。不是从这个项目里自动采集的——
-// 这个项目本身接触不到真实对话，需要有个地方把消息推进来。
+// 对话记录：由外部聊天前端主动上报，phosphor 拿它算密度、当"最近聊了什么"的真实上下文。
 export function addConversationMessage(speaker, content) {
   stmt('INSERT INTO conversation_log (ts, speaker, content) VALUES (?, ?, ?)').run(
     Date.now(),
@@ -263,8 +274,7 @@ export function closeDb() {
 
 // 三个进程（vesper / vesper-gateway / phosphor）都 import 这个文件，
 // 所以在这里统一挂退出收尾：pm2 stop / restart 发 SIGINT，kill 发 SIGTERM，
-// 正常退出或未捕获异常退出走 exit。原来只有 phosphor 处理了信号，
-// vesper 和 gateway 每次重启都是带着没关的库直接退，同样会撞上面那个断言。
+// 正常退出或未捕获异常退出走 exit。
 process.once('exit', closeDb);
 for (const signal of ['SIGINT', 'SIGTERM']) {
   process.once(signal, () => {
