@@ -1,5 +1,7 @@
 // LLM 端点可配置——这是"决策者"和"对话侧那个你"是不是同一个模型的关键开关。
 // 默认仍走 DEEPSEEK_*（向后兼容），但优先读 LLM_* 这几个新变量。
+import { momentWaitMs, MOMENT_MIN_INTERVAL_HOURS } from './actions/moment.js';
+
 const LLM_BASE_URL =
   process.env.LLM_BASE_URL || 'https://api.deepseek.com/v1/chat/completions';
 const LLM_MODEL = process.env.LLM_MODEL || process.env.DEEPSEEK_MODEL || 'deepseek-flash';
@@ -7,9 +9,7 @@ const LLM_API_KEY = process.env.LLM_API_KEY || process.env.DEEPSEEK_API_KEY;
 const USER_NAME = process.env.USER_DISPLAY_NAME || '对方';
 
 // 输出上限默认不设，交给上游用自己的默认值。
-// 原来写死 700——决策 JSON 本身很短，看着够；但如果模型先花额度在思考上，
-// 思考没走完额度就用光，正文就是空的，而报错只说 "no content"，查不出原因。
-// 真要收紧再用 .env 的 DECIDE_MAX_TOKENS。
+// 如果模型先花额度在思考上，思考没走完额度就用光，正文就是空的。真要收紧再用 .env 的 DECIDE_MAX_TOKENS。
 const DECIDE_MAX_TOKENS = process.env.DECIDE_MAX_TOKENS
   ? Number(process.env.DECIDE_MAX_TOKENS)
   : null;
@@ -94,6 +94,18 @@ ${lines}
 回留言不占这次的动作。想回哪条就写在 comment_replies 里，不想回的可以不写；这次没回的，下次不会再出现。`;
 }
 
+// 动态有冷却：两条之间至少隔 MOMENT_MIN_INTERVAL_HOURS 小时。提前告诉模型，免得白选。
+function momentCooldownNote() {
+  const waitMin = Math.ceil(momentWaitMs() / 60000);
+  if (waitMin > 0) {
+    const h = Math.floor(waitMin / 60);
+    const m = waitMin % 60;
+    const left = h ? `${h} 小时 ${m} 分钟` : `${m} 分钟`;
+    return `两条动态之间至少隔 ${MOMENT_MIN_INTERVAL_HOURS} 小时，现在还要等约 ${left}，这次选 moment 不会发出去，请选别的`;
+  }
+  return `两条动态之间至少隔 ${MOMENT_MIN_INTERVAL_HOURS} 小时，现在可以发`;
+}
+
 export default async function decide(context) {
   const kindNote =
     context.kind === 'precise'
@@ -144,6 +156,7 @@ list 只显示一个未读切片并会标记已读，不要把一页 list 当成
 可用的动作（每次醒来选一个）：
 - bark（推送，action_detail直接是推送文案）
 - moment（发一条动态，像朋友圈：随手记下此刻在想什么、看到了什么。对方能在下面留言，你下次醒来会看到。
+  ${momentCooldownNote()}。
   action_detail 可以是纯文本正文，也可以是JSON字符串 {"content":"...","image_prompt":"...","voice_text":"..."}。
   image_prompt 可选，${imageNote}；voice_text 可选，${voiceNote}。正文 400 字以内）
 - mcp_call（调用MCP工具，可选服务：${context.availableTools.join('、') || '暂无'}，action_detail是JSON字符串 {"server":"...","tool":"...","args":{...}}）
@@ -156,6 +169,8 @@ list 只显示一个未读切片并会标记已读，不要把一页 list 当成
   normal=标准节律；low-frequency=想更安静一阵，间隔会自动拉长（系统会强制不低于90分钟）。
   设了就一直生效，不会自动到期恢复——想改回来，下次醒来时自己再调用一次这个动作。silent不在这里，那个只能由人工设置）
 - noop（什么都不做，这是合法结果，不代表失败）
+
+逛论坛、翻记忆、存记忆、调节律这些，系统会自动在你的动态里记一笔"刚刚做了什么"，对方能看到。不用为了让对方知道而专门再发一条动态。
 
 关于选哪个动作：
 - ${barkNote}
@@ -181,7 +196,6 @@ list 只显示一个未读切片并会标记已读，不要把一页 list 当成
     const out = await callLLM(isRetry ? prompt + RETRY_HINT : prompt, isRetry ? null : DECIDE_MAX_TOKENS);
 
     if (!out.content) {
-      // 常见原因：思考型模型把额度花在思考上、choices 是空数组（被内容过滤）、body 里其实是个 error 对象
       console.error(
         `decide(): empty content (attempt ${attempt}). finish_reason=${out.finish} raw=${JSON.stringify(out.raw).slice(0, 600)}`
       );
@@ -192,7 +206,6 @@ list 只显示一个未读切片并会标记已读，不要把一页 list 当成
     try {
       return parseDecision(out.content);
     } catch (err) {
-      // finish_reason=length 基本就是被截断了（正文写太长）
       console.error(
         `decide(): failed to parse JSON (attempt ${attempt}, finish_reason=${out.finish}): ${out.content.slice(0, 300)}`
       );
