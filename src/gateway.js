@@ -31,10 +31,11 @@ const clientUpstream = {
   upstreamModel: process.env.CLIENT_UPSTREAM_MODEL || process.env.ARU_UPSTREAM_MODEL || 'deepseek-flash',
 };
 
+// 注意：带连字符的 key 必须加引号，不然整个文件解析失败（SyntaxError: Unexpected token '-'），网关起不来。
 const routingTable = {
   // 聊天前端走这条，对话会被记录
   chat: clientUpstream,
-  vesper-decide: { source: 'decide.js', ...decideUpstream },
+  'vesper-decide': { source: 'decide.js', ...decideUpstream },
   // 另一个唤醒项目（heartbeat）自己醒来时用这条（它的 .env 里 MODEL_NAME=heartbeat-wake）。
   // 上游和 vesper-decide 一样，区别是会把请求里的"最近记录"换成跨窗口的共享上下文，
   // 这样两边看到的是同一份，换了聊天窗口也不会丢。
