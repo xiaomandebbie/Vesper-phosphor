@@ -1,19 +1,15 @@
 // 发一条动态（替代原来的日记）。
 // 正文必填；image_prompt 选填，配了生图就真的生成一张图；voice_text 选填，配了 ElevenLabs 就生成语音。
-// 用户可以在 /moments 页面给动态留言，TA 下次醒来会看到并回复（回复不占这次醒来的动作）。
+// 两条动态之间至少隔 MOMENT_MIN_INTERVAL_HOURS 小时（默认 6）。逛论坛、翻记忆这类行为记录不算。
 import fs from 'fs';
 import path from 'path';
 import { addMoment } from '../state.js';
+import { getLastPostTs } from '../moments-store.js';
 
 const MEDIA_DIR = process.env.MEDIA_DIR || '/opt/vesper/media';
 const IMAGES_DIR = path.join(MEDIA_DIR, 'images');
 const AUDIO_DIR = path.join(MEDIA_DIR, 'audio');
 
-// 生图：OpenAI 兼容的 /images/generations 接口。前三个都填了才会生成。
-//   IMAGE_API_URL     完整地址，例如 https://api.siliconflow.cn/v1/images/generations
-//   IMAGE_API_KEY
-//   IMAGE_MODEL       例如 Kwai-Kolors/Kolors
-//   IMAGE_API_FORMAT  openai（默认）或 siliconflow。两家请求体写法不一样
 const IMAGE_API_URL = (process.env.IMAGE_API_URL || '').trim();
 const IMAGE_API_KEY = (process.env.IMAGE_API_KEY || '').trim();
 const IMAGE_MODEL = (process.env.IMAGE_MODEL || '').trim();
@@ -24,6 +20,20 @@ const IMAGE_TIMEOUT_MS = Number(process.env.IMAGE_TIMEOUT_MS) || 180000;
 export const isImageEnabled = () => Boolean(IMAGE_API_URL && IMAGE_API_KEY && IMAGE_MODEL);
 export const isVoiceEnabled = () =>
   Boolean(process.env.ELEVENLABS_API_KEY && process.env.ELEVENLABS_VOICE_ID);
+
+// 两条动态最少隔多久。填 0 就是不限制。
+export const MOMENT_MIN_INTERVAL_HOURS = (() => {
+  const raw = process.env.MOMENT_MIN_INTERVAL_HOURS;
+  const h = Number(raw);
+  return raw !== undefined && raw !== '' && Number.isFinite(h) && h >= 0 ? h : 6;
+})();
+
+// 距离下一条动态可以发还要等几毫秒，0 就是现在就能发
+export function momentWaitMs(now = Date.now()) {
+  const last = getLastPostTs();
+  if (!last) return 0;
+  return Math.max(0, last + MOMENT_MIN_INTERVAL_HOURS * 3600000 - now);
+}
 
 function timestampName(ext) {
   const ts = new Date().toISOString().replace(/[:.]/g, '-');
@@ -44,19 +54,17 @@ function saveImage(buffer, ext) {
   return `/media/images/${filename}`;
 }
 
-// 生成失败一律返回 null：动态照发，只是没图。宁可没有图，也不放一张破图。
+// 生成失败一律返回 null：动态照发，只是没图。
 async function generateImage(prompt) {
   if (!prompt) return null;
   if (!isImageEnabled()) {
     console.warn('moment: 没配生图（IMAGE_API_URL / IMAGE_API_KEY / IMAGE_MODEL），这条动态不配图');
     return null;
   }
-
   const body =
     IMAGE_API_FORMAT === 'siliconflow'
       ? { model: IMAGE_MODEL, prompt, image_size: IMAGE_SIZE, batch_size: 1 }
       : { model: IMAGE_MODEL, prompt, n: 1, ...(IMAGE_SIZE ? { size: IMAGE_SIZE } : {}) };
-
   try {
     const res = await fetch(IMAGE_API_URL, {
       method: 'POST',
@@ -69,11 +77,9 @@ async function generateImage(prompt) {
       return null;
     }
     const data = await res.json();
-    // OpenAI 是 data[0]，SiliconFlow 是 images[0]；有的给 b64_json，有的给 url
     const item = data?.data?.[0] ?? data?.images?.[0];
     if (item?.b64_json) return saveImage(Buffer.from(item.b64_json, 'base64'), 'png');
     if (item?.url) {
-      // 服务商给的链接通常几小时就过期，下载到本地存着
       const img = await fetch(item.url, { signal: AbortSignal.timeout(60000) });
       if (!img.ok) {
         console.error('moment: 下载生成的图片失败', img.status);
@@ -89,9 +95,7 @@ async function generateImage(prompt) {
   }
 }
 
-// ElevenLabs 文字转语音。模型固定 eleven_v3，voice id 从 .env 读。
-// 方括号标签（[breathing] / [whispers] 等）只有 eleven_v3 才会按语气演绎，
-// 换成 eleven_multilingual_v2 会把标签原样念出来，别换模型。
+// ElevenLabs 文字转语音。模型固定 eleven_v3：只有它认 [breathing] / [whispers] 这类标签。
 async function generateAudio(text) {
   if (!text || !isVoiceEnabled()) return null;
   try {
@@ -121,7 +125,6 @@ export default async function moment(detail) {
   let content = typeof detail === 'string' ? detail : '';
   let imagePrompt = null;
   let voiceText = null;
-
   try {
     const parsed = JSON.parse(detail);
     if (parsed && typeof parsed === 'object') {
@@ -137,6 +140,14 @@ export default async function moment(detail) {
   if (!content && !imagePrompt) {
     console.warn('moment: 正文和配图都是空的，不发');
     return { ok: false, reason: 'empty' };
+  }
+
+  // 先查间隔再生成图片和语音，免得白花钱
+  const wait = momentWaitMs();
+  if (wait > 0) {
+    const minutes = Math.ceil(wait / 60000);
+    console.warn(`moment: 距上一条动态不到 ${MOMENT_MIN_INTERVAL_HOURS} 小时，还要等 ${minutes} 分钟，这次不发`);
+    return { ok: false, reason: 'cooldown', wait_minutes: minutes };
   }
 
   const [image_url, audio_url] = await Promise.all([generateImage(imagePrompt), generateAudio(voiceText)]);
