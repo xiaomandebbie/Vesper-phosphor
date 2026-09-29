@@ -146,10 +146,11 @@ function tryJson(value) {
 }
 
 // 把这次醒来做的事写成一句 heartbeat 认得的事件。没做成、或不值得记的返回 null。
-// executeAction() 失败时返回 null，所以 result === null 一律当作没做成。
+// executeAction() 失败时返回 null；MCP 工具报错时返回 { isError: true }。两种都当作没做成，
+// 不然工具明明报错了，时间线上还会写"记下了一条长期记忆"。
 // 措辞要和 heartbeat 的 special_events.js 对得上，改之前先确认那边也认。
 export function describeAction(decision, result) {
-  if (!decision || result === null) return null;
+  if (!decision || result == null || result?.isError) return null;
   const detail = decision.action_detail || '';
   switch (decision.action) {
     case 'bark':
