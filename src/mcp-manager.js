@@ -3,38 +3,96 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 
 const clients = {};
+// 每个服务怎么重新连接。远端会话过期（Session not found）时用它重连。
+const connectors = {};
+// 正在重连的服务，避免同时发起两次重连
+const reconnecting = {};
 
-// stdio 连接：本地进程形式的 MCP server
-export async function connectMcpStdio(name, command, args) {
-  const client = new Client({ name: `phosphor-${name}`, version: '1.0.0' });
-  const transport = new StdioClientTransport({ command, args });
-  await client.connect(transport);
-  clients[name] = client;
-  return client;
-}
-
-// Streamable HTTP 连接：远程 MCP server（Ombre Brain、论坛都是这种）。
-// headers 可选，比如 Ombre Brain 用静态 Token 鉴权时传 Authorization。
-export async function connectMcpHttp(name, url, headers) {
+async function openHttpClient(name, url, headers) {
   const client = new Client({ name: `phosphor-${name}`, version: '1.0.0' });
   const transport = new StreamableHTTPClientTransport(
     new URL(url),
     headers ? { requestInit: { headers } } : undefined
   );
   await client.connect(transport);
-  clients[name] = client;
   return client;
+}
+
+// stdio 连接：本地进程形式的 MCP server
+export async function connectMcpStdio(name, command, args) {
+  connectors[name] = async () => {
+    const client = new Client({ name: `phosphor-${name}`, version: '1.0.0' });
+    await client.connect(new StdioClientTransport({ command, args }));
+    return client;
+  };
+  clients[name] = await connectors[name]();
+  return clients[name];
+}
+
+// Streamable HTTP 连接：远程 MCP server（Ombre Brain、论坛都是这种）。
+// headers 可选，比如 Ombre Brain 用静态 Token 鉴权时传 Authorization。
+export async function connectMcpHttp(name, url, headers) {
+  // 先登记重连方式：启动时连不上，之后第一次调用时也能再试
+  connectors[name] = () => openHttpClient(name, url, headers);
+  clients[name] = await connectors[name]();
+  return clients[name];
 }
 
 export function isConnected(name) {
   return Boolean(clients[name]);
 }
 
+// 远端把会话丢了（服务重启、闲置太久过期），老的 session id 就会被拒：
+// {"code":-32600,"message":"Session not found"}，或者直接 HTTP 404。这时候重连一次就好。
+function isSessionError(err) {
+  const msg = String(err?.message ?? '');
+  return /session not found|session.{0,20}(expired|invalid)|\b404\b/i.test(msg) || err?.code === 404;
+}
+
+async function reconnect(name) {
+  if (!connectors[name]) throw new Error(`MCP server "${name}" is not configured`);
+  if (!reconnecting[name]) {
+    reconnecting[name] = (async () => {
+      const old = clients[name];
+      delete clients[name];
+      try {
+        await old?.close();
+      } catch {
+        // 老连接已经坏了，关不掉也没关系
+      }
+      const client = await connectors[name]();
+      clients[name] = client;
+      console.log(`reconnected MCP: ${name}`);
+      return client;
+    })().finally(() => {
+      delete reconnecting[name];
+    });
+  }
+  return reconnecting[name];
+}
+
+// 调用一次；遇到会话失效就重连后再试一次。启动时没连上的服务，这里也会先连一次。
+async function withClient(name, fn) {
+  let client = clients[name];
+  if (!client) {
+    if (!connectors[name]) throw new Error(`MCP server "${name}" is not connected`);
+    client = await reconnect(name);
+  }
+  try {
+    return await fn(client);
+  } catch (err) {
+    if (!isSessionError(err)) throw err;
+    console.warn(`MCP "${name}" 会话失效，重新连接后重试：${err.message}`);
+    const fresh = await reconnect(name);
+    return fn(fresh);
+  }
+}
+
 export async function listAllTools() {
   const all = [];
-  for (const [name, client] of Object.entries(clients)) {
+  for (const name of Object.keys(connectors)) {
     try {
-      const { tools } = await client.listTools();
+      const { tools } = await withClient(name, (c) => c.listTools());
       all.push(...tools.map((t) => ({ ...t, _server: name })));
     } catch (err) {
       console.error(`failed to list tools for ${name}:`, err.message);
@@ -44,8 +102,7 @@ export async function listAllTools() {
 }
 
 export async function callTool(serverName, toolName, args) {
-  if (!clients[serverName]) throw new Error(`MCP server "${serverName}" is not connected`);
-  return clients[serverName].callTool({ name: toolName, arguments: args });
+  return withClient(serverName, (c) => c.callTool({ name: toolName, arguments: args }));
 }
 
 // Call this once at startup (e.g. from phosphor.js) to connect everything
