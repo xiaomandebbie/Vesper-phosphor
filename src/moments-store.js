@@ -1,7 +1,7 @@
-// 动态页需要的额外表和查询：纪念日、按日期查动态、行为动态、发动态的间隔。
+// 动态页需要的额外表和查询：纪念日、按日期查动态、行为提示、发动态的间隔。
 // 和 state.js 共用同一个数据库连接。
 import db from './state.js';
-import { formatDate } from './wall-time.js';
+import { formatDateTime } from './wall-time.js';
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS anniversaries (
@@ -12,7 +12,7 @@ CREATE TABLE IF NOT EXISTS anniversaries (
 );
 `);
 
-// 动态分两种：post（TA 自己发的）和 activity（逛论坛、翻记忆这类行为的自动记录）。
+// 动态分两种：post（TA 自己发的）和 activity（逛论坛、翻记忆这类行为的提示卡）。
 // 老数据默认都是 post。列已存在时会报错，忽略即可。
 try {
   db.exec("ALTER TABLE moments ADD COLUMN kind TEXT NOT NULL DEFAULT 'post'");
@@ -30,14 +30,14 @@ function stmt(sql) {
   return s;
 }
 
-// 行为动态：格式固定两行，第一行日期，第二行做了什么
+// 行为提示：两行，第一行 "MM-DD HH:mm"，第二行做了什么
 export function addActivityMoment(text) {
-  const content = `${formatDate()}\n${text}`;
+  const content = `${formatDateTime().slice(5)}\n${text}`;
   return stmt("INSERT INTO moments (ts, content, kind) VALUES (?, ?, 'activity')").run(Date.now(), content)
     .lastInsertRowid;
 }
 
-// 上一条 TA 自己发的动态（不算行为记录）是什么时候，没有就是 null
+// 上一条 TA 自己发的动态（不算行为提示）是什么时候，没有就是 null
 export function getLastPostTs() {
   return stmt("SELECT MAX(ts) AS ts FROM moments WHERE kind = 'post'").get()?.ts ?? null;
 }

@@ -1,4 +1,4 @@
-// 发推送、发动态以外的行动，自动在动态里记一笔，比如"TA刚刚逛了 Lutopia 论坛"。
+// 发推送、发动态、回留言以外的行动，自动在动态页里记一张提示卡，比如"TA 刚刚存入了一条记忆"。
 // 由 actions/index.js 在动作执行成功后调用；这里只负责把这次做的事写成一句话。
 // 称呼用 .env 的 AI_DISPLAY_NAME。
 const AI_NAME = process.env.AI_DISPLAY_NAME || 'TA';
@@ -28,7 +28,8 @@ function tryJson(value) {
   }
 }
 
-// 返回一句话，或者 null（不需要记：推送、发动态、noop、没做成的）
+// 返回一句话，或者 null（不需要提示：推送、发动态、noop、没做成的）。
+// 回留言不走 executeAction，本来就不会到这里。
 export function describeActivity(decision, result) {
   if (!decision || result == null || result?.isError) return null;
   const detail = decision.action_detail || '';
@@ -53,7 +54,7 @@ export function describeActivity(decision, result) {
         case 'feel':
           return `${AI_NAME}刚刚在浏览 OB 记忆库${j.query ? `，翻了翻关于「${short(j.query, 40)}」的感受` : ''}`;
         case 'hold':
-          return `${AI_NAME}刚刚往 OB 记忆库里存了一条记忆${j.title || j.content ? `：${short(j.title || j.content)}` : ''}`;
+          return `${AI_NAME}刚刚存入了一条记忆${j.title || j.content ? `：${short(j.title || j.content)}` : ''}`;
         default:
           return `${AI_NAME}刚刚在浏览 OB 记忆库`;
       }

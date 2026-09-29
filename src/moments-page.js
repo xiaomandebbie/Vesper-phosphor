@@ -175,9 +175,9 @@ function renderMoment(m, back, showDate) {
   const comments = listMomentComments(m.id).map(renderComment).join('');
   const commentsHtml = comments ? `<div class="comments">${comments}</div>` : '';
 
-  // 行为记录：正文自带日期那一行，样式淡一点，留言框收起来
+  // 行为提示卡：暖黄底、白字。正文第一行是时间，第二行是做了什么；留言框收起来
   if (m.kind === 'activity') {
-    return `<article class="moment activity" id="m${m.id}">
+    return `<article class="moment activity" id="m${m.id}" aria-label="行为提示">
       <div class="content">${escapeHtml(m.content)}</div>
       ${commentsHtml}
       <details class="activity-reply"><summary>留言</summary>${commentForm(m, back)}</details>
@@ -198,7 +198,8 @@ function renderMoment(m, back, showDate) {
 }
 
 const STYLE = `
-  :root { --ink: #2b2233; --muted: #665a70; --accent: #7a3e5d; --gold: #b7792f; --card: #fffdfb; --line: #eadfe6; }
+  :root { --ink: #2b2233; --muted: #665a70; --accent: #7a3e5d; --gold: #b7792f; --card: #fffdfb; --line: #eadfe6;
+    --activity: #E6B652; }
   * { box-sizing: border-box; }
   body { margin: 0; min-height: 100vh; color: var(--ink); font-family: -apple-system, "PingFang SC", "Helvetica Neue", sans-serif;
     background: linear-gradient(180deg, #efe7f4 0%, #f9f0ee 55%, #fdf8f2 100%); }
@@ -250,9 +251,16 @@ const STYLE = `
   .moment .content { font-size: 15px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
   .moment img { max-width: 100%; border-radius: 8px; margin-top: 10px; display: block; }
   .moment audio { width: 100%; margin-top: 10px; }
-  .moment.activity { background: #f6f0f5; box-shadow: none; border: 1px dashed #d8c8d3; padding: 10px 14px; }
-  .moment.activity .content { font-size: 14px; line-height: 1.55; color: #4a3f52; }
-  .activity-reply summary { cursor: pointer; font-size: 13px; color: var(--accent); margin-top: 6px; }
+  /* 行为提示卡：暖黄底白字。白字在这个黄上对比度偏低，加一点深色投影帮助辨认 */
+  .moment.activity { background: var(--activity); color: #fff; border: none; padding: 12px 16px;
+    box-shadow: 0 1px 3px rgba(120, 80, 20, 0.18); }
+  .moment.activity .content { font-size: 15px; line-height: 1.55; font-weight: 600; color: #fff;
+    text-shadow: 0 1px 2px rgba(90, 55, 10, 0.45); }
+  .moment.activity .content::first-line { font-size: 12px; font-weight: 500; letter-spacing: 0.05em; }
+  .activity-reply summary { cursor: pointer; font-size: 13px; color: #fff; margin-top: 6px; padding: 4px 0;
+    text-shadow: 0 1px 2px rgba(90, 55, 10, 0.45); }
+  .moment.activity .comments { background: rgba(255, 253, 251, 0.94); color: var(--ink); }
+  .moment.activity a:focus-visible, .moment.activity summary:focus-visible { outline-color: #fff; }
   .comments { margin-top: 12px; background: #f3eef2; border-radius: 8px; padding: 8px 10px; }
   .comment { font-size: 14px; line-height: 1.5; padding: 3px 0; }
   .who { font-weight: 600; margin-right: 4px; }
