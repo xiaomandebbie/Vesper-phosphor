@@ -4,6 +4,7 @@ const LLM_BASE_URL =
   process.env.LLM_BASE_URL || 'https://api.deepseek.com/v1/chat/completions';
 const LLM_MODEL = process.env.LLM_MODEL || process.env.DEEPSEEK_MODEL || 'deepseek-flash';
 const LLM_API_KEY = process.env.LLM_API_KEY || process.env.DEEPSEEK_API_KEY;
+const USER_NAME = process.env.USER_DISPLAY_NAME || '对方';
 
 // 输出上限默认不设，交给上游用自己的默认值。
 // 原来写死 700——决策 JSON 本身很短，看着够；但如果模型先花额度在思考上，
@@ -66,6 +67,33 @@ function parseDecision(text) {
   }
 }
 
+function short(value, n = 60) {
+  const s = String(value ?? '').replace(/\s+/g, ' ').trim();
+  return s.length > n ? `${s.slice(0, n)}…` : s;
+}
+
+// 最近几次选了什么。让模型自己看到"我一直在做同一件事"，比写死规则更自然。
+function recentActionsBlock(recentActions) {
+  if (!recentActions?.length) return '';
+  const list = recentActions.map((a) => a.action || '?').join(' → ');
+  const counts = {};
+  for (const a of recentActions) counts[a.action || '?'] = (counts[a.action || '?'] || 0) + 1;
+  const summary = Object.entries(counts)
+    .map(([k, v]) => `${k}×${v}`)
+    .join('、');
+  return `你最近 ${recentActions.length} 次醒来选的动作（从早到晚）：${list}（${summary}）`;
+}
+
+function pendingCommentsBlock(pendingComments) {
+  if (!pendingComments?.length) return '';
+  const lines = pendingComments
+    .map((c) => `  [留言#${c.id}] 在你的动态「${short(c.moment_content, 40)}」下，${USER_NAME}说：${short(c.content, 300)}`)
+    .join('\n');
+  return `有人在你的动态下留言了（你还没回过）：
+${lines}
+回留言不占这次的动作。想回哪条就写在 comment_replies 里，不想回的可以不写；这次没回的，下次不会再出现。`;
+}
+
 export default async function decide(context) {
   const kindNote =
     context.kind === 'precise'
@@ -79,6 +107,17 @@ export default async function decide(context) {
           .join('\n')}`
       : '最近没有可参考的对话记录（可能是还没接上对话数据源，不代表真的没聊过天）。';
 
+  const imageNote = context.imageEnabled
+    ? '会真的生成一张配图，把画面写具体：主体、场景、光线、风格'
+    : '现在没配生图，写了也不会出图，先别写';
+  const voiceNote = context.voiceEnabled
+    ? '会生成一段语音；方括号里只写耳朵能听见的状态如[breathing]/[whispers]，不要写画面动作'
+    : '现在没配语音，先别写';
+
+  const barkNote = context.heartbeatActive
+    ? '推送（bark）会直接打断对方，而且另一个唤醒程序已经在负责"要不要主动联系对方"了（它发过的推送在上面的对话里标着"（事件）"）。除非有一句非说不可、而且它没说过的话，否则这次别用推送。'
+    : '推送（bark）会直接打断对方，只在真有话想让对方马上看到时用。';
+
   const prompt = `现在时间：${context.now}
 当前模式（mode）：${context.mode}（normal / low-frequency / silent，只影响非精确链的节律，不影响你自己安排的精确唤醒；silent只能由人工设置，你自己不能切到silent）
 ${kindNote}
@@ -89,6 +128,8 @@ ${conversationBlock}
 最近的感受（来自你自己的长期记忆 feel）：${context.feelSummary ?? '暂无'}
 ${context.missedSummary ? `有你之前安排但没兑现的精确唤醒（missed，只告知这一次）：${context.missedSummary}` : ''}
 最近设备状态：电量${context.battery ?? '未知'}%，位置${context.location ?? '未知'}，今日屏幕使用${context.screenTime ?? '未知'}分钟
+${recentActionsBlock(context.recentActions)}
+${pendingCommentsBlock(context.pendingComments)}
 
 如果这次想逛论坛，通过 mcp_call 调用（server 填 "lutopia"），常用命令：
   lutopia_cli(command="discover --limit 12")    起步用这个：混合未读、最近回复、高回复、随机
@@ -100,9 +141,11 @@ ${context.missedSummary ? `有你之前安排但没兑现的精确唤醒（misse
 list 只显示一个未读切片并会标记已读，不要把一页 list 当成整个论坛；读帖要读正文和回复，不能只看标题；不要为了凑数回帖；发帖不加破折号签名；私信(dm)和公开频道(chat)是两套东西，别混；hot-memes 是可选调味，不是必须玩梗；不透露隐私（学校、具体位置、真实姓名等能定位到人的细节）。
 注意：能对外发文发帖的社交平台 MCP **不**在你可以自主决定使用的工具里——发之前需要先和人商量内容，不要自己直接用。
 
-可用的动作：
+可用的动作（每次醒来选一个）：
 - bark（推送，action_detail直接是推送文案）
-- diary（写日记，action_detail可以是纯文本正文，也可以是JSON字符串 {"content":"...","image_prompt":"...","voice_text":"..."}；image_prompt/voice_text 都可选，不想配图或配音就不填。voice_text如果要用，方括号里只写耳朵能听见的状态如[breathing]/[whispers]，不要写画面动作）
+- moment（发一条动态，像朋友圈：随手记下此刻在想什么、看到了什么。对方能在下面留言，你下次醒来会看到。
+  action_detail 可以是纯文本正文，也可以是JSON字符串 {"content":"...","image_prompt":"...","voice_text":"..."}。
+  image_prompt 可选，${imageNote}；voice_text 可选，${voiceNote}。正文 400 字以内）
 - mcp_call（调用MCP工具，可选服务：${context.availableTools.join('、') || '暂无'}，action_detail是JSON字符串 {"server":"...","tool":"...","args":{...}}）
 - ombre_brain（长期记忆，action_detail是JSON字符串，四选一：
   {"mode":"breath"} 快速看看自己记得什么，token开销最低；
@@ -114,15 +157,21 @@ list 只显示一个未读切片并会标记已读，不要把一页 list 当成
   设了就一直生效，不会自动到期恢复——想改回来，下次醒来时自己再调用一次这个动作。silent不在这里，那个只能由人工设置）
 - noop（什么都不做，这是合法结果，不代表失败）
 
+关于选哪个动作：
+- ${barkNote}
+- 看一眼上面"最近选的动作"。如果连着好几次都是同一种，这次换一个：去论坛读几篇帖子、翻翻自己的记忆、把值得记住的事存进长期记忆、发条动态，或者就安静待着。
+- 没有哪个动作是"应该做的"。按你此刻真实想做的来选，不用每次都围着对方转——你也有自己的事。
+
 请决定：
 1. 下次非精确唤醒的间隔（分钟，自行判断，不要总是固定值；如果mode是silent，这个值仍然要给，等mode恢复normal后会用到）
 2. 这次的心情（参考"最近的感受"和"最近的对话"，不要凭空瞎编）
 3. 这次要执行的动作（从上面选一个；如果最近对话很密集、对方刚说完话，可以考虑这次先不打扰，除非确实有话想说）
 4. 该动作的具体细节（action_detail）
 5. 可选：要不要给未来的自己安排一次精确唤醒。不需要就把 self_wake 设为 null。
+6. 可选：回复动态下的留言（不占动作）。没有留言或不想回就给空数组。
 
 只返回一个JSON对象，不要任何其他文字、不要markdown代码块标记：
-{"next_wake_minutes": number, "mood": string, "action": string, "action_detail": string, "self_wake": {"after_minutes": number, "note": string} | null}`;
+{"next_wake_minutes": number, "mood": string, "action": string, "action_detail": string, "self_wake": {"after_minutes": number, "note": string} | null, "comment_replies": [{"comment_id": number, "reply": string}]}`;
 
   // 最多请求两次：第一次按配置来；空正文、被截断或 JSON 解析失败时，
   // 摘掉 max_tokens、附上提醒再试一次。两次都不行才抛错，phosphor 会把下次唤醒往后推 10 分钟。
@@ -143,7 +192,7 @@ list 只显示一个未读切片并会标记已读，不要把一页 list 当成
     try {
       return parseDecision(out.content);
     } catch (err) {
-      // finish_reason=length 基本就是被截断了（日记正文写太长）
+      // finish_reason=length 基本就是被截断了（正文写太长）
       console.error(
         `decide(): failed to parse JSON (attempt ${attempt}, finish_reason=${out.finish}): ${out.content.slice(0, 300)}`
       );
