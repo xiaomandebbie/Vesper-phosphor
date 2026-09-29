@@ -14,6 +14,7 @@ pm2 restart vesper vesper-gateway phosphor --update-env
 - 值**不用加引号**
 - `#` 开头是注释
 - 留空（`名字=`）等于没填
+- **同一个变量只写一次**。写了两遍的话，有些工具会读到两个值拼在一起
 
 ---
 
@@ -31,6 +32,67 @@ pm2 restart vesper vesper-gateway phosphor --update-env
 优先级：`LLM_*` > `DEEPSEEK_API_KEY` + `deepseek-flash`。
 
 > 💡 **做决定的模型最好和聊天的模型是同一个**，不然"窗口里的 TA"和"后台做决定的 TA"会像两个人。最简单的办法是让两边都走 vesper-gateway（见 [02](02-deploy-vps.md)）。
+
+## 唤醒节律
+
+| 变量 | 说明 |
+|---|---|
+| `PHOSPHOR_MAX_WAKE_MINUTES` | 两次自然唤醒之间最长隔多久（分钟）。模型给的间隔再长也会被截到这个值。**不填 = 1440（一天）**，最小 5 |
+
+平时下次什么时候醒是 TA 每次醒来自己定的（`next_wake_minutes`），代码只把它限制在 5～1440 分钟之间。这个变量就是把上面那个 1440 改小。
+
+### 设置最长间隔
+
+一条一条执行，下面以 120 分钟为例：
+
+```bash
+cd ~/vesper-phosphor
+
+# 先删掉可能已有的旧值，避免同一个变量写两遍
+sed -i '/^PHOSPHOR_MAX_WAKE_MINUTES=/d' .env
+
+# 写入新值
+echo "PHOSPHOR_MAX_WAKE_MINUTES=120" >> .env
+
+# 重启 phosphor，必须带 --update-env
+pm2 restart phosphor --update-env
+
+# 确认
+pm2 logs phosphor --lines 20 --nostream | grep 最长
+```
+
+日志里出现 `phosphor: 最长唤醒间隔 120 分钟` 就生效了。
+
+### 取消上限
+
+```bash
+cd ~/vesper-phosphor
+sed -i '/^PHOSPHOR_MAX_WAKE_MINUTES=/d' .env
+pm2 restart phosphor --update-env
+pm2 logs phosphor --lines 20 --nostream | grep 最长
+```
+
+显示 `最长唤醒间隔 1440 分钟` 就回到默认了。
+
+### 想让新上限马上生效
+
+改了上限以后，**已经排好的下一次唤醒不会跟着变**，要等那次醒来之后才按新规则算。不想等的话，替 TA 约一次 1 分钟后的精确唤醒：
+
+```bash
+cd ~/vesper-phosphor
+KEY=$(grep '^REPORT_STATUS_API_KEY=' .env | cut -d= -f2-)
+curl -s -X POST localhost:3001/wake/self-wake -H "x-api-key: $KEY" -H "content-type: application/json" -d '{"after_minutes":1,"note":"刚调整了唤醒间隔"}'
+```
+
+### 注意
+
+- **只管"自然唤醒"**。TA 自己约的精确唤醒（`self_wake`）、你用 `/wake/self-wake` 约的，都不受这个上限影响，到点照样醒
+- **`low-frequency` 模式优先**。TA 切到 low-frequency 时间隔至少 90 分钟，就算上限设得比 90 小，也按 90 算
+- **`silent` 模式下完全不自然唤醒**，上限也不起作用
+- **填错会被忽略**：不是数字、或者小于 5，都当作没填，回到 1440
+- **不要改 tick**。phosphor 每 60 秒检查一次"该不该醒"，这一步不调模型、不花钱；改慢了会让精确唤醒错过 3 分钟的宽限期，变成 `missed`
+- **间隔越短越花钱**。每次醒来都会调一次模型
+- 和 dylan-heartbeat 一起跑时，heartbeat 白天大约 10 分钟检查一次，不设上限也不会太安静
 
 ## 称呼
 
@@ -123,7 +185,7 @@ MEDIA_DIR=./media
 
 ```bash
 cd ~/vesper-phosphor
-node -e "require('dotenv').config(); for (const k of ['DEEPSEEK_API_KEY','LLM_BASE_URL','GATEWAY_API_KEY','REPORT_STATUS_API_KEY']) console.log(k, process.env[k] ? '已填' : '—空—')"
+node -e "require('dotenv').config(); for (const k of ['DEEPSEEK_API_KEY','LLM_BASE_URL','GATEWAY_API_KEY','REPORT_STATUS_API_KEY','PHOSPHOR_MAX_WAKE_MINUTES']) console.log(k, process.env[k] ? '已填' : '—空—')"
 ```
 
 只显示"已填/空"，不会把 key 打出来。
