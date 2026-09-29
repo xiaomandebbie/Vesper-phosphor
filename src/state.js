@@ -42,6 +42,8 @@ CREATE TABLE IF NOT EXISTS wake_log (
 CREATE TABLE IF NOT EXISTS device_reports (
   ts TEXT, battery REAL, location TEXT, screen_time_min INTEGER
 );
+
+-- 旧的日记表。日记已经换成"动态"，这张表留着不删，启动时会把里面的内容搬进 moments。
 CREATE TABLE IF NOT EXISTS diary (
   ts TEXT, content TEXT, image_url TEXT, audio_url TEXT
 );
@@ -52,6 +54,29 @@ CREATE TABLE IF NOT EXISTS conversation_log (
   speaker TEXT,
   content TEXT
 );
+
+-- 动态：TA 发的，像朋友圈。可以配图、配音。
+CREATE TABLE IF NOT EXISTS moments (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts INTEGER NOT NULL,
+  content TEXT,
+  image_url TEXT,
+  audio_url TEXT
+);
+
+-- 动态下的留言。author 是 'user'（你）或 'assistant'（TA）。
+-- handled：你的留言 TA 有没有看过（看过但没回也算）。TA 的回复写入时直接是 1。
+CREATE TABLE IF NOT EXISTS moment_comments (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  moment_id INTEGER NOT NULL,
+  ts INTEGER NOT NULL,
+  author TEXT NOT NULL,
+  content TEXT NOT NULL,
+  reply_to INTEGER,
+  handled INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_moment_comments_moment ON moment_comments (moment_id);
+CREATE INDEX IF NOT EXISTS idx_moment_comments_pending ON moment_comments (author, handled);
 `);
 
 // 兼容旧数据库：这几列是后加的，已存在时会报错，直接忽略。
@@ -85,6 +110,20 @@ function stmt(sql) {
   }
   return s;
 }
+
+// 旧日记搬进动态：只在 moments 还是空的时候做一次，之后不再碰 diary 表。
+(function migrateDiaryToMoments() {
+  if (stmt('SELECT COUNT(*) AS c FROM moments').get().c > 0) return;
+  const old = stmt('SELECT * FROM diary ORDER BY ts ASC').all();
+  if (!old.length) return;
+  const insert = stmt('INSERT INTO moments (ts, content, image_url, audio_url) VALUES (?, ?, ?, ?)');
+  db.transaction(() => {
+    for (const d of old) {
+      insert.run(Date.parse(d.ts) || Date.now(), d.content ?? '', d.image_url ?? null, d.audio_url ?? null);
+    }
+  })();
+  console.log(`state: 已把 ${old.length} 篇旧日记搬进动态`);
+})();
 
 export function getWakeState() {
   return stmt('SELECT * FROM wake_state WHERE id = 1').get();
@@ -141,6 +180,14 @@ export function getRecentWakeLog(limit = 20) {
   return stmt('SELECT * FROM wake_log ORDER BY fired_at DESC LIMIT ?').all(limit);
 }
 
+// 最近几次醒来选的动作（从早到晚），给模型看，避免总选同一个。
+export function getRecentActions(limit = 8) {
+  const rows = stmt(
+    "SELECT fired_at, json_extract(decision, '$.action') AS action FROM wake_log WHERE decision IS NOT NULL ORDER BY fired_at DESC LIMIT ?"
+  ).all(limit);
+  return rows.reverse();
+}
+
 export function saveDeviceReport(r) {
   stmt(
     'INSERT INTO device_reports (ts, battery, location, screen_time_min) VALUES (@ts, @battery, @location, @screen_time_min)'
@@ -150,14 +197,42 @@ export function getLatestDeviceReport() {
   return stmt('SELECT * FROM device_reports ORDER BY ts DESC LIMIT 1').get();
 }
 
-export function saveDiary(entry) {
-  const merged = { image_url: null, audio_url: null, ...entry };
-  stmt(
-    'INSERT INTO diary (ts, content, image_url, audio_url) VALUES (@ts, @content, @image_url, @audio_url)'
-  ).run(merged);
+// ---------- 动态 ----------
+
+export function addMoment({ content, image_url = null, audio_url = null }) {
+  return stmt('INSERT INTO moments (ts, content, image_url, audio_url) VALUES (?, ?, ?, ?)').run(
+    Date.now(),
+    content ?? '',
+    image_url,
+    audio_url
+  ).lastInsertRowid;
 }
-export function listDiary(limit = 50) {
-  return stmt('SELECT * FROM diary ORDER BY ts DESC LIMIT ?').all(limit);
+export function getMoment(id) {
+  return stmt('SELECT * FROM moments WHERE id = ?').get(id);
+}
+export function listMoments(limit = 30) {
+  return stmt('SELECT * FROM moments ORDER BY ts DESC, id DESC LIMIT ?').all(limit);
+}
+export function listMomentComments(momentId) {
+  return stmt('SELECT * FROM moment_comments WHERE moment_id = ? ORDER BY ts ASC, id ASC').all(momentId);
+}
+export function addMomentComment({ momentId, author, content, replyTo = null, handled = 0 }) {
+  return stmt(
+    'INSERT INTO moment_comments (moment_id, ts, author, content, reply_to, handled) VALUES (?, ?, ?, ?, ?, ?)'
+  ).run(momentId, Date.now(), author, content, replyTo, handled ? 1 : 0).lastInsertRowid;
+}
+// 你留的、TA 还没看过的留言（从早到晚），带上那条动态的正文
+export function getPendingComments(limit = 5) {
+  return stmt(
+    `SELECT c.id, c.moment_id, c.ts, c.content, m.content AS moment_content
+     FROM moment_comments c JOIN moments m ON m.id = c.moment_id
+     WHERE c.author = 'user' AND c.handled = 0
+     ORDER BY c.ts ASC, c.id ASC LIMIT ?`
+  ).all(limit);
+}
+export function markCommentsHandled(ids) {
+  const update = stmt('UPDATE moment_comments SET handled = 1 WHERE id = ?');
+  for (const id of ids) update.run(id);
 }
 
 // 对话记录：由外部聊天前端主动上报，phosphor 拿它算密度、
