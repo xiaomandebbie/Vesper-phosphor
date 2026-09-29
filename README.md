@@ -23,7 +23,7 @@
 | [01 · 它是怎么工作的](docs/01-how-it-works.md) | 两条唤醒链、一次醒来的完整流程、动作列表、数据库里有什么 |
 | [02 · 在 VPS 上部署](docs/02-deploy-vps.md) | **推荐**。从装 Node 到开防火墙，8 步，每步带检查 |
 | [03 · 在自己电脑上部署](docs/03-deploy-local.md) | Mac / Windows，适合先试试 |
-| [04 · `.env` 配置项详解](docs/04-config.md) | 每个变量是什么、不填会怎样、最小可用配置 |
+| [04 · `.env` 配置项详解](docs/04-config.md) | 每个变量是什么、不填会怎样、最小可用配置、唤醒间隔上限 |
 | [05 · 易错点与排错](docs/05-pitfalls.md) | **出问题先看这篇**。按症状查 |
 | [06 · 接口说明](docs/06-api.md) | `/wake/*`、网关、iOS 快捷指令上报 |
 | [07 · 接入更多 MCP](docs/07-mcp.md) | 已内置的两个怎么工作；想加新的三步 |
@@ -51,6 +51,27 @@ pm2 logs phosphor --lines 40 --nostream
 看到 `[non_precise] decision:` 和 `action result:` 就是通了。
 
 国内服务器 clone 卡住或报 `Empty reply from server`，见 [02](docs/02-deploy-vps.md) 第 4 步。
+
+## ⏱ 觉得 TA 睡太久？设置最长唤醒间隔
+
+默认下次什么时候醒完全由 TA 自己决定，最长 1440 分钟（一天）。想让 TA 至少每隔一段时间醒一次，在 `.env` 里加一行上限（单位分钟，最小 5）：
+
+```bash
+cd ~/vesper-phosphor
+sed -i '/^PHOSPHOR_MAX_WAKE_MINUTES=/d' .env
+echo "PHOSPHOR_MAX_WAKE_MINUTES=120" >> .env
+pm2 restart phosphor --update-env
+pm2 logs phosphor --lines 20 --nostream | grep 最长
+```
+
+看到 `最长唤醒间隔 120 分钟` 就生效了。想取消，删掉这一行再重启：
+
+```bash
+sed -i '/^PHOSPHOR_MAX_WAKE_MINUTES=/d' .env
+pm2 restart phosphor --update-env
+```
+
+已经排好的下一次唤醒不会跟着变，从那次醒来之后才按新规则算。细节和注意事项见 [04](docs/04-config.md#唤醒节律)。
 
 ## ⚠️ 最容易踩的 6 个坑
 
