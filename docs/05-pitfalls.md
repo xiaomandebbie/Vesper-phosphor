@@ -31,7 +31,7 @@ pm2 logs phosphor --lines 50 --nostream         # 最近的普通日志
 
 ### `decide(): failed to parse JSON`
 
-模型输出的 JSON 不完整，最常见是日记写太长被截断。现在会自动重试一次并提醒模型写短一点。连续出现的话，同上检查 `DECIDE_MAX_TOKENS`。
+模型输出的 JSON 不完整，最常见是动态正文写太长被截断。现在会自动重试一次并提醒模型写短一点。连续出现的话，同上检查 `DECIDE_MAX_TOKENS`。
 
 ### `Assertion failed: (env) != nullptr` + 一大段 `Native stack trace`
 
@@ -72,9 +72,72 @@ node -e "const db=require('better-sqlite3')('data/state.db'); const s=db.prepare
 
 旧代码的 bug：模型没返回 `next_wake_minutes` 时 `next_wake_at` 变成空。更新到最新代码就好。
 
+### TA 总是选同一个动作（比如一直推送）
+
+新代码会把最近 8 次选过的动作拿给 TA 看，并提醒"连着好几次一样就换一个"。还是老选同一个的话，先看看它到底选了什么：
+
+```bash
+cd ~/vesper-phosphor
+node -e "const db=require('better-sqlite3')('data/state.db',{readonly:true}); console.log(db.prepare(\"select json_extract(decision,'\$.action') as action, count(*) as n from wake_log where fired_at > ? group by action\").all(Date.now()-86400000))"
+```
+
+- `mcp_call` 一次都没有：启动日志里找 `could not connect MCP`，论坛 / Ombre Brain 可能没连上
+- 和 heartbeat 一起跑时，大部分推送其实是 heartbeat 发的，不是 phosphor（见 [08](08-heartbeat.md)）
+
 ### 醒来后像失忆，只知道自己情绪、不知道在干什么
 
 决策上下文里只给了 `feel`、没给 `breath`。更新到最新代码，或在 Ombre Brain 那边确认 `breath` 工具可用（见 [07](07-mcp.md)）。
+
+---
+
+## 📸 动态相关
+
+### 动态页打不开 / 一直弹登录框
+
+- 地址是 `http://服务器IP:3001/moments`，不是 3002
+- 登录框填的是 `.env` 里的 `VESPER_BASIC_USER` / `VESPER_BASIC_PASS`
+- 外网打不开：云服务器防火墙要放行 3001
+
+### 旧日记不见了
+
+第一次启动新版本时，旧日记会自动搬进动态，日志里有 `已把 N 篇旧日记搬进动态`。旧的 `diary` 表没删，数据还在。
+
+没搬过来的话，看启动日志有没有 `旧日记搬进动态失败`。搬迁只在 `moments` 表还是空的时候做一次。
+
+### 我的留言 TA 一直没回
+
+- 留言后面标着"还没看到"：TA 还没醒过。急的话用 `POST /wake/self-wake` 约一次 1 分钟后的唤醒
+- "还没看到"消失了但没有回复：TA 看过了，这次选择不回。按设计看过就不再重复给 TA 看
+- 一次最多给 TA 看 5 条留言，多的会排到下次
+
+### 动态没有配图
+
+```bash
+pm2 logs phosphor --lines 20 --nostream | grep 动态
+```
+
+- `动态配图：未配置`：`IMAGE_API_URL`、`IMAGE_API_KEY`、`IMAGE_MODEL` 没填齐，或者填完没带 `--update-env` 重启
+- 已开启但还是没图：`pm2 logs phosphor --err --lines 50 --nostream | grep moment`
+  - `生图失败 400`：多半是 `IMAGE_API_FORMAT` 填错了（SiliconFlow 要填 `siliconflow`），或者模型不支持这个尺寸
+  - `生图失败 401`：`IMAGE_API_KEY` 不对
+  - `生图失败 404`：`IMAGE_API_URL` 要写**完整地址**，带 `/images/generations`
+  - `下载生成的图片失败`：国内服务器连不上生图服务的图片域名
+- TA 自己没写 `image_prompt`：不是每条动态都会配图，这是正常的
+
+### 动态页以前的图片不见了
+
+图片和音频超过 `MEDIA_MAX_AGE_DAYS`（默认 30 天）会被自动删掉，正文和留言还在。想长期保留就把这个数调大。
+
+### 动态没有声音
+
+```bash
+pm2 logs phosphor --lines 20 --nostream | grep 动态
+```
+
+- `动态语音：未配置`：`ELEVENLABS_API_KEY` 或 `ELEVENLABS_VOICE_ID` 没填。**两个都要有**
+- 聊天客户端里配过 ElevenLabs 不算：那把 key 存在手机上，服务器要在 `.env` 里再填一遍
+- 已开启但没声音：`pm2 logs phosphor --err --lines 50 --nostream | grep ElevenLabs`，401 是 key 错，其他多半是额度用完或 voice id 不对
+- 声音里把 `[breathing]` 这种标签念出来了：代码固定用 `eleven_v3`，如果你改过模型就改回来
 
 ---
 
@@ -108,7 +171,7 @@ node -e "const db=require('better-sqlite3')('data/state.db'); const s=db.prepare
 ### 对话记录是空的 / "最近对话"没东西
 
 - 客户端必须走网关的 `chat` 这条线路，直连上游不会被记录
-- 网关日志出现 `assistant capture got empty text`：上游不是标准 SSE，回复没捞到
+- 网关日志出现 `assistant capture got empty text`：上游不是标准 SSE，回复没捞到。工具调用那一轮本来就没正文，新代码已经不再为它报这条
 
 ---
 
@@ -158,13 +221,9 @@ git pull
 
 `MEDIA_DIR` 目录没权限或不存在。本地电脑改成 `MEDIA_DIR=./media`；VPS 上 `mkdir -p /opt/vesper/media`。
 
-### 日记页图片不显示
+### vesper 启动就崩，报 `does not provide an export named 'listDiary'`
 
-旧版本 `vesper.js` 里写成了 `< img`（多一个空格）。更新代码。另外目前配图功能本来就没接，只有音频。
-
-### 日记没有声音
-
-`ELEVENLABS_API_KEY` 或 `ELEVENLABS_VOICE_ID` 没填。两个都要有才会生成音频。
+代码只更新了一半（`state.js` 是新的，`vesper.js` 是旧的）。重新 `git pull` 一次，确认 `git status` 是干净的。
 
 ### Bark 没推送
 
