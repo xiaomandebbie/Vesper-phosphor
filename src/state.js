@@ -65,6 +65,7 @@ CREATE TABLE IF NOT EXISTS moments (
 );
 
 -- 动态下的留言。author 是 'user'（你）或 'assistant'（TA）。
+-- reply_to：回复的是哪条留言，直接给动态留言时是 NULL。
 -- handled：你的留言 TA 有没有看过（看过但没回也算）。TA 的回复写入时直接是 1。
 CREATE TABLE IF NOT EXISTS moment_comments (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -234,11 +235,15 @@ export function addMomentComment({ momentId, author, content, replyTo = null, ha
     'INSERT INTO moment_comments (moment_id, ts, author, content, reply_to, handled) VALUES (?, ?, ?, ?, ?, ?)'
   ).run(momentId, Date.now(), author, content, replyTo, handled ? 1 : 0).lastInsertRowid;
 }
-// 你留的、TA 还没看过的留言（从早到晚），带上那条动态的正文
+// 你留的、TA 还没看过的留言（从早到晚），带上那条动态的正文。
+// 如果是回复某条留言，再带上被回复的那条（谁说的、说了什么），TA 才知道你在接哪句话。
 export function getPendingComments(limit = 5) {
   return stmt(
-    `SELECT c.id, c.moment_id, c.ts, c.content, m.content AS moment_content
-     FROM moment_comments c JOIN moments m ON m.id = c.moment_id
+    `SELECT c.id, c.moment_id, c.ts, c.content, m.content AS moment_content,
+            p.author AS parent_author, p.content AS parent_content
+     FROM moment_comments c
+     JOIN moments m ON m.id = c.moment_id
+     LEFT JOIN moment_comments p ON p.id = c.reply_to
      WHERE c.author = 'user' AND c.handled = 0
      ORDER BY c.ts ASC, c.id ASC LIMIT ?`
   ).all(limit);
