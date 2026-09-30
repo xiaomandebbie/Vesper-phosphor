@@ -18,7 +18,7 @@
 
 | pm2 进程名 | 端口 | 干什么 |
 |---|---|---|
-| `phosphor` | 无 | 心脏。每分钟看一眼该不该醒，该醒就做决定、执行动作 |
+| `phosphor` | 无 | 心脏。每分钟看一眼该不该醒，该醒就做决定、执行动作；每 24 小时清理一次旧对话记录 |
 | `vesper` | 3001 | 接收手机上报、`/wake/*` 控制接口、动态页 `/moments` |
 | `vesper-gateway` | 3002 | 模型网关。聊天客户端和 phosphor 都从这里调模型，顺便记录对话 |
 
@@ -107,6 +107,24 @@ pm2 logs phosphor --lines 300 --nostream | grep 缓存命中
 
 第一次醒来命中是 0，之后 Y 占 X 的一大半就说明缓存在起作用。能不能命中还取决于上游：DeepSeek、OpenAI 是自动缓存；Claude 默认缓存只留 5 分钟，醒来间隔长的话基本命中不上。
 
+## 🧹 对话记录清理
+
+网关每条聊天都会往 `conversation_log` 里记一行，做决定却只用最近几条。所以 phosphor 每 24 小时清理一次：
+
+- 删掉 24 小时以前的记录（`CONVERSATION_LOG_CLEAN_HOURS` 可改，填 0 不清理）
+- 不管多旧，最新 30 条总是留着（`CONVERSATION_LOG_KEEP` 可改），聊得少的时候也不会被清空
+- 真删掉了东西，TA 会马上醒一次（`wake_log` 里 `kind = after_cleanup`）：照常翻 breath / feel 回想一下，想留住的自己 hold 进长期记忆。一天多一次模型调用；一条没删、或者 silent 模式下不醒
+- 上次清理的时间存在数据库里，重启不会重新计时。第一次部署后要过 24 小时才第一次清
+
+```bash
+pm2 logs phosphor --lines 20 --nostream | grep 对话记录清理     # 启动时：每 24 小时，保留最新 30 条
+pm2 logs phosphor --lines 2000 --nostream | grep 清理对话记录   # 清理时：删掉 N 条
+```
+
+> ⚠️ 删掉的原文找不回来，也不会自动存进 Ombre Brain。想留底，部署前先备份 `data/state.db`。
+
+细节见 [04](docs/04-config.md#对话记录清理)。
+
 ## ⏱ 觉得 TA 睡太久？设置最长唤醒间隔
 
 默认下次什么时候醒完全由 TA 自己决定，最长 1440 分钟（一天）。想让 TA 至少每隔一段时间醒一次，在 `.env` 里加一行上限（单位分钟，最小 5）：
@@ -145,13 +163,13 @@ pm2 restart phosphor --update-env
 - **决策上下文里没有随机数和算出来的"强度"**，只给真实、可解释的输入
 - **每次醒来都记账**，包括 noop 和出错，TA 不在时发生过什么都能从 `GET /wake/log` 看回来
 - **醒来先读记忆再做决定**。只给情绪、不给主线，TA 会像失忆一样"知道自己闷但想不起为什么"
+- **清掉旧聊天之后醒来回想一下**。旧的原话没了，长期记忆还在，清完翻一眼，别让 TA 觉得昨天是空白
 - **让 TA 看到自己最近选过什么**。连着好几次都是同一个动作时会被提醒换一个；和 heartbeat 一起跑时，推送交给 heartbeat
 - **回留言不占动作**。留言是你主动递过来的话，不该让 TA 在"回你"和"做自己的事"之间二选一
 
 ## 待补充 / TODO
 
 - 对话记录只取最后一条、不去重：重发或重新生成时同一条会写两遍；一次带多条新消息时会丢中间的
-- `conversation_log` 没有清理机制，会一直涨
 - 回复的捕获依赖上游是标准 SSE，非标准格式时捞不到文本，只打一行 warn
 - 动态的图片/音频超过 `MEDIA_MAX_AGE_DAYS` 会被删，正文和留言保留，页面上就不显示那张图了
 - 聊天客户端前端怎么接 `/wake/*` 接口：待补充
@@ -160,7 +178,7 @@ pm2 restart phosphor --update-env
 
 ```
 src/
-├── phosphor.js        主循环：两条唤醒链、字段兜底、回留言、退出时关库
+├── phosphor.js        主循环：两条唤醒链、定时清理对话记录、字段兜底、回留言、退出时关库
 ├── decide.js          拼 system + user 两条消息、调模型、自动重试、解析 JSON
 ├── context.js         合并 conversation_log 与 heartbeat 事件
 ├── timeline.js        读写 heartbeat 的时间线
