@@ -1,7 +1,14 @@
-// 动态页需要的额外表和查询：纪念日、按日期查动态、行为提示、发动态的间隔、点赞、单条留言。
+// 动态页需要的额外表和查询：纪念日、按日期查动态、行为提示、发动态的间隔、点赞、单条留言、头像和名字。
 // 和 state.js 共用同一个数据库连接。
+import fs from 'fs';
+import path from 'path';
 import db from './state.js';
 import { formatDateTime } from './wall-time.js';
+
+const MEDIA_DIR = process.env.MEDIA_DIR || '/opt/vesper/media';
+const AVATAR_DIR = path.join(MEDIA_DIR, 'avatars');
+// 头像在浏览器里已经裁成 256×256 的 JPEG，一般几十 KB。这里再兜一道上限
+const MAX_AVATAR_BYTES = 512 * 1024;
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS anniversaries (
@@ -17,6 +24,14 @@ CREATE TABLE IF NOT EXISTS moment_likes (
   author TEXT NOT NULL,
   ts INTEGER NOT NULL,
   PRIMARY KEY (moment_id, author)
+);
+
+-- 头像和名字。who 是 'user'（你）或 'assistant'（TA）。name 为空就用 .env 里的称呼，avatar_url 为空就用名字首字
+CREATE TABLE IF NOT EXISTS profiles (
+  who TEXT PRIMARY KEY,
+  name TEXT,
+  avatar_url TEXT,
+  updated_at INTEGER NOT NULL
 );
 `);
 
@@ -99,4 +114,81 @@ export function toggleLike(momentId, author) {
 // 这条动态谁赞过，先赞的在前
 export function listLikes(momentId) {
   return stmt('SELECT author, ts FROM moment_likes WHERE moment_id = ? ORDER BY ts ASC').all(momentId);
+}
+
+// ---------- 头像和名字 ----------
+// 只影响动态页上怎么显示。TA 做决定时怎么称呼你，还是看 .env 的 USER_DISPLAY_NAME / AI_DISPLAY_NAME。
+
+export const PROFILE_WHO = ['assistant', 'user'];
+
+export function defaultName(who) {
+  return who === 'user' ? process.env.USER_DISPLAY_NAME || '我' : process.env.AI_DISPLAY_NAME || 'TA';
+}
+
+// 返回 { who, name, customName, avatarUrl }。name 是最终显示的名字，customName 是自己填的（可能为空）
+export function getProfile(who) {
+  const key = who === 'user' ? 'user' : 'assistant';
+  const row = stmt('SELECT name, avatar_url FROM profiles WHERE who = ?').get(key);
+  const customName = String(row?.name ?? '').trim();
+  return { who: key, name: customName || defaultName(key), customName, avatarUrl: row?.avatar_url || null };
+}
+
+function ensureProfile(who) {
+  stmt('INSERT OR IGNORE INTO profiles (who, name, avatar_url, updated_at) VALUES (?, NULL, NULL, ?)').run(
+    who,
+    Date.now()
+  );
+}
+
+// 名字传空字符串就是恢复默认
+export function saveProfileName(who, name) {
+  ensureProfile(who);
+  stmt('UPDATE profiles SET name = ?, updated_at = ? WHERE who = ?').run(name || null, Date.now(), who);
+}
+
+// 只认真正的 JPEG / PNG / WebP 文件头，不信 data URL 里自己写的类型
+function sniffImage(buf) {
+  if (buf.length > 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return 'jpg';
+  if (buf.length > 8 && buf[0] === 0x89 && buf.toString('ascii', 1, 4) === 'PNG') return 'png';
+  if (buf.length > 12 && buf.toString('ascii', 0, 4) === 'RIFF' && buf.toString('ascii', 8, 12) === 'WEBP') return 'webp';
+  return null;
+}
+
+// 只删自己存的头像文件，路径不对就不动
+function removeAvatarFile(url) {
+  const m = /^\/media\/avatars\/([\w.-]+)$/.exec(String(url ?? ''));
+  if (!m) return;
+  try {
+    fs.unlinkSync(path.join(AVATAR_DIR, m[1]));
+  } catch {
+    // 文件已经不在了
+  }
+}
+
+// dataUrl 是浏览器裁好的 data:image/jpeg;base64,...。成功返回 { url }，失败返回 { error }
+export function saveProfileAvatar(who, dataUrl) {
+  const m = /^data:image\/(?:jpeg|png|webp);base64,([A-Za-z0-9+/]+={0,2})$/.exec(String(dataUrl ?? '').trim());
+  if (!m) return { error: '头像格式不对，换一张图片试试' };
+  const buf = Buffer.from(m[1], 'base64');
+  if (!buf.length || buf.length > MAX_AVATAR_BYTES) return { error: '头像太大了，换一张小一点的' };
+  const ext = sniffImage(buf);
+  if (!ext) return { error: '头像格式不对，换一张图片试试' };
+
+  fs.mkdirSync(AVATAR_DIR, { recursive: true });
+  const filename = `${who}-${Date.now()}.${ext}`;
+  fs.writeFileSync(path.join(AVATAR_DIR, filename), buf);
+  const url = `/media/avatars/${filename}`;
+
+  const old = getProfile(who).avatarUrl;
+  ensureProfile(who);
+  stmt('UPDATE profiles SET avatar_url = ?, updated_at = ? WHERE who = ?').run(url, Date.now(), who);
+  if (old && old !== url) removeAvatarFile(old);
+  return { url };
+}
+
+export function resetProfileAvatar(who) {
+  const old = getProfile(who).avatarUrl;
+  ensureProfile(who);
+  stmt('UPDATE profiles SET avatar_url = NULL, updated_at = ? WHERE who = ?').run(Date.now(), who);
+  removeAvatarFile(old);
 }
