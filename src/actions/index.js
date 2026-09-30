@@ -3,7 +3,7 @@ import moment from './moment.js';
 import mcpAction from './mcp-action.js';
 import ombreBrain from './ombre-brain.js';
 import setMode from './set-mode.js';
-import { describeActivity } from './activity.js';
+import { describeActivity, describeActivityDetail } from './activity.js';
 import { addActivityMoment } from '../moments-store.js';
 
 const actions = {
@@ -27,11 +27,11 @@ export async function executeAction(decision) {
     return null;
   }
 
-  // 推送、发动态以外的行动（逛论坛、翻记忆、调节律），在动态里记一笔。
+  // 推送、发动态以外的行动（逛论坛、翻记忆、调节律），在动态里记一笔，点开能看详情。
   // 行为记录不占"6 小时一条"的动态间隔。
   try {
     const text = describeActivity(decision, result);
-    if (text) addActivityMoment(text);
+    if (text) addActivityMoment(text, describeActivityDetail(decision, result));
   } catch (err) {
     console.error('executeAction(): 记录行为动态失败', err.message);
   }
