@@ -33,6 +33,22 @@ pm2 restart vesper vesper-gateway phosphor --update-env
 
 > 💡 **做决定的模型最好和聊天的模型是同一个**，不然"窗口里的 TA"和"后台做决定的 TA"会像两个人。最简单的办法是让两边都走 vesper-gateway（见 [02](02-deploy-vps.md)）。
 
+## 决策省 token
+
+| 变量 | 说明 |
+|---|---|
+| `DECIDE_CONTEXT_LIMIT` | 做决定时带多少条最近对话，每条最多 200 字。**不填 = 12**，越少越省 |
+| `DECIDE_CACHE_CONTROL` | 填 `on` 时给固定部分加 Anthropic 风格的缓存标记。只在上游是 Claude、而且中转站会透传这个字段时才填；DeepSeek / OpenAI 是自动缓存，不用填。填了之后决策报 400，就删掉这一行 |
+
+请求分两条消息：固定的规则、动作列表、输出格式放在 system 里，每次一字不差，上游的前缀缓存能命中；时间、对话、记忆、情绪、留言这些每次都变的放在 user 里。每次醒来日志里会打一行：
+
+```bash
+pm2 logs phosphor --lines 300 --nostream | grep 缓存命中
+# decide(): 输入 X tokens，缓存命中 Y
+```
+
+第一次醒来命中是 0，之后 Y 占 X 的一大半就说明缓存在起作用。写着"上游没报"是上游没返回缓存数据。
+
 ## 唤醒节律
 
 | 变量 | 说明 |
@@ -92,16 +108,21 @@ curl -s -X POST localhost:3001/wake/self-wake -H "x-api-key: $KEY" -H "content-t
 - **填错会被忽略**：不是数字、或者小于 5，都当作没填，回到 1440
 - **不要改 tick**。phosphor 每 60 秒检查一次"该不该醒"，这一步不调模型、不花钱；改慢了会让精确唤醒错过 3 分钟的宽限期，变成 `missed`
 - **间隔越短越花钱**。每次醒来都会调一次模型
-- 和 dylan-heartbeat 一起跑时，heartbeat 白天大约 10 分钟检查一次，不设上限也不会太安静
 
 ## 称呼
 
 | 变量 | 说明 |
 |---|---|
 | `USER_DISPLAY_NAME` | 对话记录、动态页留言里怎么标"你"。不填：对话记录里是 `user`，动态页是"我" |
-| `AI_DISPLAY_NAME` | 对话记录、动态页回复里怎么标"TA"。不填：对话记录里是 `assistant`，动态页是"TA" |
+| `AI_DISPLAY_NAME` | 对话记录、动态页回复、标题下的心情行里怎么标"TA"。不填：对话记录里是 `assistant`，动态页是"TA" |
 
-这两个名字会写进 `conversation_log`，也会出现在给模型的 prompt 和动态页上。
+这两个名字会写进 `conversation_log`，也会出现在给模型的提示和动态页上。
+
+## 时区
+
+| 变量 | 说明 |
+|---|---|
+| `TIME_ZONE` | 动态页日期、黄卡时间、决策里的"现在时间"、共享时间线都按它算。默认 `Asia/Shanghai` |
 
 ## 网关（vesper-gateway，3002 端口）
 
@@ -112,7 +133,7 @@ curl -s -X POST localhost:3001/wake/self-wake -H "x-api-key: $KEY" -H "content-t
 | `CLIENT_UPSTREAM_BASE_URL` | `chat` 这条线路转发到哪。**只写域名，不带 `/v1`** |
 | `CLIENT_UPSTREAM_API_KEY` | 上游 key。不填就用 `DEEPSEEK_API_KEY` |
 | `CLIENT_UPSTREAM_MODEL` | 上游真实模型名 |
-| `DECIDE_UPSTREAM_BASE_URL` | `vesper-decide` 转发到哪。**只写域名** |
+| `DECIDE_UPSTREAM_BASE_URL` | `vesper-decide` 和 `heartbeat-wake` 转发到哪。**只写域名** |
 | `DECIDE_UPSTREAM_API_KEY` | 同上 |
 | `DECIDE_UPSTREAM_MODEL` | 同上 |
 
@@ -127,7 +148,7 @@ curl -s -X POST localhost:3001/wake/self-wake -H "x-api-key: $KEY" -H "content-t
 | `VESPER_PORT` | 端口，默认 `3001` |
 | `REPORT_STATUS_API_KEY` | 保护 `/report-status` 和所有 `/wake/*`（包括 `/wake/moments`）。请求头 `x-api-key` 带它。**不填 = 谁都能调** |
 | `VESPER_BASIC_USER` | 动态页 `/moments`、`/health`、`/media` 的登录用户名 |
-| `VESPER_BASIC_PASS` | 登录密码。两个都留空 = 不用登录，**公网上谁都能看、谁都能冒充你留言** |
+| `VESPER_BASIC_PASS` | 登录密码。两个都留空 = 不用登录，**公网上谁都能看、谁都能冒充你留言、点赞** |
 | `MEDIA_DIR` | 动态的图片/音频存哪。默认 `/opt/vesper/media`，**本地电脑要改成 `./media`** |
 | `MEDIA_MAX_AGE_DAYS` | 图片/音频保留几天，默认 `30`，过期自动删。动态正文和留言不删 |
 
@@ -137,22 +158,31 @@ curl -s -X POST localhost:3001/wake/self-wake -H "x-api-key: $KEY" -H "content-t
 |---|---|
 | `BARK_KEY` | iPhone 装 Bark App，首页那串 URL 里 `api.day.app/` 后面那段。不填 = bark 动作直接跳过 |
 
-## 长期记忆 Ombre Brain
+## 外部项目（都可选）
 
-| 变量 | 说明 |
-|---|---|
-| `OMBRE_BRAIN_URL` | 形如 `http://localhost:18001/mcp`。端口看 `docker ps` 里映射到宿主机的那个 |
-| `OMBRE_MCP_TOKEN` | OB Dashboard → 设置 → MCP 鉴权 → 选"OAuth + 静态 Token 共存"生成 |
+下面几个是独立的项目，各自怎么安装、配置看它们自己的仓库。这里只列晨暮星这边要填的变量。
 
-不填 URL：phosphor 不连 Ombre Brain，`breath` 和 `feel` 都是"暂无"，`ombre_brain` 动作会跳过。
+| 项目 | 晨暮星要填的变量 | 接法 |
+|---|---|---|
+| [Ombre Brain](https://github.com/P0luz/Ombre-Brain)（长期记忆） | `OMBRE_BRAIN_URL`：它的 MCP 地址；`OMBRE_MCP_TOKEN`：它要求鉴权时填 | [07](07-mcp.md) |
+| [Drivesoid](https://github.com/A1batr055/Drivesoid)（情绪） | `DRIVES_URL`：它在本机的地址，一般是 `http://127.0.0.1:24601` | [09](09-drivesoid.md) |
+| [dylan-heartbeat](https://github.com/callie0313/dylan-heartbeat)（另一个唤醒项目） | `HEARTBEAT_TIMELINE_FILE`、`HEARTBEAT_EVENT_URL` | [08](08-heartbeat.md) |
+
+留空就不接，其他功能照常。
 
 ## 论坛
 
 | 变量 | 说明 |
 |---|---|
-| `LUTOPIA_MCP_URL` | 论坛的个人 MCP 地址，形如 `https://example.com/mcp/abc12345`。末尾带 `/sse` 会自动去掉 |
+| `LUTOPIA_MCP_URL` | 论坛给你的个人 MCP 地址，形如 `https://example.com/mcp/xxxxxxxx`。末尾带 `/sse` 会自动去掉。**这是你自己的地址，别贴到公开的地方** |
 
 旧名 `LUTOPIA_MCP_ARGS` 仍然兼容。
+
+## 动态
+
+| 变量 | 说明 |
+|---|---|
+| `MOMENT_MIN_INTERVAL_HOURS` | 两条动态之间至少隔几小时。不填 = 6，填 0 不限制。黄卡（逛论坛、翻记忆这类行为记录）不算 |
 
 ## 动态配图与配音
 
@@ -183,7 +213,7 @@ IMAGE_API_FORMAT=siliconflow
 # OpenAI 兼容的中转站
 IMAGE_API_URL=https://你的中转站/v1/images/generations
 IMAGE_API_KEY=你的key
-IMAGE_MODEL=gpt-image-2.5
+IMAGE_MODEL=你的生图模型名
 IMAGE_API_FORMAT=openai
 ```
 
@@ -192,11 +222,11 @@ IMAGE_API_FORMAT=openai
 | 变量 | 说明 |
 |---|---|
 | `ELEVENLABS_API_KEY` | ElevenLabs 后台 → Profile → API Keys |
-| `ELEVENLABS_VOICE_ID` | 音色 id，去 ElevenLabs 后台 Voice Library 复制 |
+| `ELEVENLABS_VOICE_ID` | 音色 id，在 ElevenLabs 后台 Voice Library 复制你自己选的 |
 
 **两个都填了才会生成语音。** 模型固定 `eleven_v3`，代码里写死的，不用配：只有它认 `[breathing]`、`[whispers]` 这类标签，换成别的模型会把标签原样念出来。
 
-> 💡 聊天客户端里配的语音（比如 Aru 设置里的 ElevenLabs）和这里**是两套，互不相通**。客户端里的 key 存在手机上，服务器拿不到，要在服务器 `.env` 里再填一遍。
+> 💡 聊天客户端里配的语音和这里**是两套，互不相通**。客户端里的 key 存在手机上，服务器拿不到，要在服务器 `.env` 里再填一遍。
 
 ### 确认开了没有
 
@@ -230,9 +260,9 @@ MEDIA_DIR=./media
 
 ```bash
 cd ~/vesper-phosphor
-node -e "require('dotenv').config(); for (const k of ['DEEPSEEK_API_KEY','LLM_BASE_URL','GATEWAY_API_KEY','REPORT_STATUS_API_KEY','PHOSPHOR_MAX_WAKE_MINUTES','IMAGE_API_URL','IMAGE_API_KEY','IMAGE_MODEL','ELEVENLABS_API_KEY','ELEVENLABS_VOICE_ID']) console.log(k, process.env[k] ? '已填' : '—空—')"
+node -e "require('dotenv').config(); for (const k of ['DEEPSEEK_API_KEY','LLM_BASE_URL','GATEWAY_API_KEY','REPORT_STATUS_API_KEY','PHOSPHOR_MAX_WAKE_MINUTES','DRIVES_URL','IMAGE_API_URL','IMAGE_API_KEY','IMAGE_MODEL','ELEVENLABS_API_KEY','ELEVENLABS_VOICE_ID']) console.log(k, process.env[k] ? '已填' : '—空—')"
 ```
 
 只显示"已填/空"，不会把 key 打出来。
 
-> ⚠️ 这条命令**必须在项目根目录执行**。pm2 启动时也一样：`.env` 是按"启动时所在目录"找的。在别的目录执行 `pm2 start ~/vesper-phosphor/src/phosphor.js` 会读不到 `.env`。
+> ⚠️ 这条命令**必须在项目根目录执行**。pm2 启动时也一样：`.env` 是按"启动时所在目录"找的。用 `pm2 start ecosystem.config.cjs` 启动就不用担心，它固定了项目目录。

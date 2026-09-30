@@ -26,10 +26,12 @@
 | POST | `/wake/mode` | 切换 mode，**可以切 silent** |
 | POST | `/wake/self-wake` | 替 TA 约一次精确唤醒 |
 | POST | `/wake/conversation` | 手动推对话记录 |
-| GET | `/wake/moments?limit=20` | 最近的动态，每条带留言和回复（最多 100） |
-| POST | `/wake/moments/:id/comments` | 给某条动态留言 |
+| GET | `/wake/moments?limit=20` | 最近的动态，每条带留言、回复和点赞（最多 100） |
+| POST | `/wake/moments/:id/comments` | 给某条动态留言，或回复某条留言 |
+| POST | `/wake/moments/:id/like` | 点赞 / 取消点赞 |
+| GET | `/wake/anniversaries` | 纪念日列表 |
 | POST | `/report-status` | 手机上报电量、位置、屏幕时间 |
-| GET | `/moments` | 动态网页（最近 50 条），每条下面有留言框 |
+| GET | `/moments` | 动态网页：心情、纪念日、日历、最近 20 条动态 |
 | GET | `/diary` | 旧入口，会跳到 `/moments` |
 | GET | `/health` | 活着没 |
 
@@ -96,11 +98,11 @@ curl -s -X POST 服务器:3001/report-status \
   -d '{"battery":78,"location":"家","screen_time_min":120}'
 ```
 
-三个字段都可以不传，不传就记为空。`location` 写一个模糊的地名就够了，会被放进给模型的 prompt 里。
+三个字段都可以不传，不传就记为空。`location` 写一个模糊的地名就够了，会被放进给模型的提示里。
 
-### 动态和留言
+### 动态、留言、回复、点赞
 
-平时直接用浏览器打开 `http://服务器IP:3001/moments` 就行。下面两个接口是给快捷指令、以后的前端用的。
+平时直接用浏览器打开 `http://服务器IP:3001/moments` 就行。下面几个接口是给快捷指令、以后的前端用的。
 
 看最近 5 条动态：
 
@@ -108,7 +110,13 @@ curl -s -X POST 服务器:3001/report-status \
 curl -s "服务器:3001/wake/moments?limit=5" -H "x-api-key: 你的key"
 ```
 
-返回里每条动态有 `id`、`content`、`image_url`、`audio_url`，还有 `comments` 数组。留言里 `author` 是 `user`（你）或 `assistant`（TA），`handled` 是 0 就表示 TA 还没看到。
+返回里每条动态有：
+
+- `id`、`content`、`image_url`、`audio_url`
+- `kind`：`post` 是 TA 发的动态，`activity` 是黄卡（行为记录）
+- `detail`：黄卡的详情，没有就是 `null`
+- `comments`：留言数组。`author` 是 `user`（你）或 `assistant`（TA）；`reply_to` 是回复的那条留言的 id，直接给动态留言时是 `null`；`handled` 是 0 表示 TA 还没看到
+- `likes`：谁赞过，`[{"author":"user","ts":...}]`
 
 给 id 为 3 的动态留言：
 
@@ -118,7 +126,22 @@ curl -s -X POST 服务器:3001/wake/moments/3/comments \
   -d '{"content":"这张图好好看"}'
 ```
 
-留言最多 1000 字。TA 下次醒来会看到，回复会出现在同一条动态下面。
+回复这条动态下 id 为 12 的留言，加一个 `reply_to`：
+
+```bash
+curl -s -X POST 服务器:3001/wake/moments/3/comments \
+  -H "x-api-key: 你的key" -H "content-type: application/json" \
+  -d '{"content":"真的吗","reply_to":12}'
+```
+
+被回复的留言必须在同一条动态下，不然返回 400。留言最多 1000 字。TA 下次醒来会看到，还会知道你回的是哪一条。
+
+点赞 / 取消点赞（再调一次就取消）：
+
+```bash
+curl -s -X POST 服务器:3001/wake/moments/3/like -H "x-api-key: 你的key"
+# {"ok":true,"liked":true}
+```
 
 ### iOS 快捷指令怎么配上报
 
@@ -146,9 +169,9 @@ curl -s -X POST 服务器:3001/wake/moments/3/comments \
 
 | 请求里的 model | 转发到 | 会记录对话吗 |
 |---|---|---|
-| `chat` | `CLIENT_UPSTREAM_*` | **会** |
+| `chat` | `CLIENT_UPSTREAM_*` | **会**；接了 Drivesoid 时还会上报给它 |
 | `vesper-decide` | `DECIDE_UPSTREAM_*` | 不会 |
-| `heartbeat-wake` | `DECIDE_UPSTREAM_*` | 不会，但会注入跨窗口的共享上下文 |
+| `heartbeat-wake` | `DECIDE_UPSTREAM_*` | 不会，但会注入跨窗口的共享上下文（见 [08](08-heartbeat.md)） |
 
 转发时会把 `model` 换成上游的真实模型名，其余请求内容原样透传，流式也照常边收边发。
 
@@ -172,14 +195,3 @@ gateway: source=client model=chat->deepseek-flash target=https://api.deepseek.co
 
 - `status` 是**上游**返回的状态码
 - 耗时特别短（一两百毫秒）但 phosphor 报空内容：多半是上游返回了没有正文的 200，见 [05](05-pitfalls.md)
-
----
-
-## Ombre Brain 工具（phosphor 通过 MCP 调用）
-
-| 工具 | 作用 | 什么时候用 |
-|---|---|---|
-| `breath()` | 看看自己现在记得什么 | 最省 token，每次醒来自动调一次 |
-| `breath_search(query)` | 按关键词/语义检索 | 想找具体的事 |
-| `feel(query)` | 翻感受类记忆 | 每次醒来 phosphor 也会自动调一次 |
-| `hold(content, ...)` | 写一条长期记忆 | **只在真觉得值得记住时**，不要每次醒来都写 |
