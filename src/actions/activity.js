@@ -1,10 +1,16 @@
 // 发推送、发动态、回留言以外的行动，自动在动态页里记一张提示卡，比如"TA 刚刚存入了一条记忆"。
 // 由 actions/index.js 在动作执行成功后调用；这里负责把这次做的事写成一句话，以及点开后看到的详情。
 // 称呼用 .env 的 AI_DISPLAY_NAME。
+//
+// 卡片上不放命令原文（discover --limit 12 这种），只写做了什么；回帖、发帖写出回了什么、发了什么。
+// 以前存下来的老卡片里还带着命令，动态页显示前用 tidyActivityContent / tidyActivityDetail 整理一遍。
 const AI_NAME = process.env.AI_DISPLAY_NAME || 'TA';
 
 // 详情最多记这么多字。论坛列表、记忆检索结果可能很长，全存会把动态页撑得很大
 const MAX_DETAIL_CHARS = 3000;
+// 卡片上直接露出来的回帖 / 帖子正文最多多少字，完整的在详情里
+const CARD_COMMENT_CHARS = 300;
+const CARD_POST_CHARS = 120;
 
 // lutopia_cli 的命令 → 给人看的说法
 const LUTOPIA_OPS = {
@@ -50,6 +56,54 @@ function clip(s) {
   return s.length > MAX_DETAIL_CHARS ? `${s.slice(0, MAX_DETAIL_CHARS)}\n…（后面还有，太长没记下来）` : s;
 }
 
+// ---------- 论坛命令 → 给人看的话 ----------
+
+// 按空格拆参数，引号包起来的算一个（"..."、'...'、“...”）
+function splitArgs(command) {
+  const out = [];
+  const re = /"([^"]*)"|'([^']*)'|“([^”]*)”|(\S+)/g;
+  let m;
+  while ((m = re.exec(String(command ?? '')))) out.push(m[1] ?? m[2] ?? m[3] ?? m[4]);
+  return out;
+}
+
+const forumOp = (command) => (splitArgs(command)[0] || '').toLowerCase();
+
+// comment <post_id> 内容 → { op, text }；post <版块> 标题 正文 → { op, title, text }；别的命令 null
+function forumWriting(command) {
+  const t = splitArgs(command);
+  const op = (t[0] || '').toLowerCase();
+  if (op === 'comment') return { op, text: t.slice(2).join(' ').trim() };
+  if (op === 'post') return { op, title: (t[2] || '').trim(), text: t.slice(3).join(' ').trim() };
+  return null;
+}
+
+// 卡片上那一句：看帖只写做了什么；回帖带上回的内容，发帖带上标题和开头
+function forumSummary(command) {
+  const label = LUTOPIA_OPS[forumOp(command)] || '逛了逛';
+  const w = forumWriting(command);
+  if (w?.op === 'comment' && w.text) return `${label}：「${short(w.text, CARD_COMMENT_CHARS)}」`;
+  if (w?.op === 'post' && (w.title || w.text)) {
+    const title = w.title ? `「${short(w.title, 60)}」` : '';
+    const body = w.text ? `：${short(w.text, CARD_POST_CHARS)}` : '';
+    return `${label}${title}${body}`;
+  }
+  return label;
+}
+
+// 详情里的完整内容：回帖写全文，发帖写标题和全文；看帖不写（返回的帖子内容在"返回"里）
+function forumWritingDetail(command) {
+  const w = forumWriting(command);
+  if (!w) return null;
+  if (w.op === 'comment') return w.text ? `回复的内容：\n${w.text}` : null;
+  const parts = [];
+  if (w.title) parts.push(`标题：${w.title}`);
+  if (w.text) parts.push(`正文：\n${w.text}`);
+  return parts.join('\n') || null;
+}
+
+// ---------- 新卡片 ----------
+
 // 返回一句话，或者 null（不需要提示：推送、发动态、noop、没做成的）。
 // 回留言不走 executeAction，本来就不会到这里。
 export function describeActivity(decision, result) {
@@ -61,9 +115,7 @@ export function describeActivity(decision, result) {
       if (!j?.server || !j?.tool) return null;
       if (/lutopia/i.test(j.server)) {
         const cmd = String(j.args?.command ?? '').trim();
-        const op = cmd.split(/\s+/)[0] || '';
-        const label = LUTOPIA_OPS[op] || `用了 ${op || j.tool}`;
-        return `${AI_NAME}刚刚逛了 Lutopia 论坛，${label}${cmd ? `（${short(cmd)}）` : ''}`;
+        return `${AI_NAME}刚刚逛了 Lutopia 论坛，${forumSummary(cmd)}`;
       }
       return `${AI_NAME}刚刚用了 ${j.server} 的 ${j.tool}`;
     }
@@ -88,7 +140,7 @@ export function describeActivity(decision, result) {
   }
 }
 
-// 点开提示卡看到的详情：当时的心情、具体做了什么、工具返回了什么。
+// 点开提示卡看到的详情：当时的心情、回了什么 / 发了什么、工具返回了什么。命令原文和调用参数不放。
 // 和 describeActivity 用同一套条件，那边返回 null 的这里也返回 null。
 export function describeActivityDetail(decision, result) {
   if (!describeActivity(decision, result)) return null;
@@ -99,12 +151,9 @@ export function describeActivityDetail(decision, result) {
   switch (decision.action) {
     case 'mcp_call': {
       const j = tryJson(detail) ?? {};
-      const cmd = String(j.args?.command ?? '').trim();
-      if (cmd) {
-        parts.push(`命令：${cmd}`);
-      } else {
-        const hasArgs = j.args && Object.keys(j.args).length;
-        parts.push(`调用：${j.server} / ${j.tool}${hasArgs ? `\n参数：${JSON.stringify(j.args)}` : ''}`);
+      if (/lutopia/i.test(String(j.server ?? ''))) {
+        const writing = forumWritingDetail(String(j.args?.command ?? ''));
+        if (writing) parts.push(writing);
       }
       break;
     }
@@ -128,4 +177,33 @@ export function describeActivityDetail(decision, result) {
   if (out) parts.push(`返回：\n${out}`);
   const text = parts.join('\n\n').trim();
   return text ? clip(text) : null;
+}
+
+// ---------- 老卡片 ----------
+// 以前的卡片存的是"TA刚刚逛了 Lutopia 论坛，随便逛了逛（discover --limit 12）"，详情里有"命令：…""调用：…"。
+// 数据库不改，动态页显示前整理成新样子。新卡片过一遍也不会变。
+
+const OLD_FORUM_LINE = /^(.*?Lutopia 论坛，)[^（\n]*（(.*)）\s*$/;
+
+export function tidyActivityContent(content) {
+  return String(content ?? '')
+    .split('\n')
+    .map((line) => {
+      const m = OLD_FORUM_LINE.exec(line);
+      return m ? `${m[1]}${forumSummary(m[2])}` : line;
+    })
+    .join('\n');
+}
+
+export function tidyActivityDetail(detail) {
+  if (!detail) return detail || null;
+  const kept = String(detail)
+    .split('\n\n')
+    .map((seg) => {
+      if (seg.startsWith('命令：')) return forumWritingDetail(seg.slice(3)) ?? '';
+      if (seg.startsWith('调用：')) return '';
+      return seg;
+    })
+    .filter((seg) => seg.trim());
+  return kept.length ? kept.join('\n\n') : null;
 }
