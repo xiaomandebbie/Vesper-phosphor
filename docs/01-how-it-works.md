@@ -39,18 +39,18 @@ phosphor 每 **60 秒** 执行一次 `tick()`，每次检查两条互不干扰�
 - 到点了就醒，醒完由模型决定下次隔多久（`next_wake_minutes`）
 - `mode = silent` 时完全暂停
 - `mode = low-frequency` 时间隔强制不少于 **90 分钟**
-- **进程没跑的那段时间不追、不补**。停了一天再启动，只会醒一次，不会补醒几十次
+- **进程没跑的那段时间不追、不补**。停了一天再启动，只会醒一次
 
 ### 精确链（"承诺"）
 
 - TA 醒来时可以给未来的自己约一次：`self_wake: {after_minutes, note}`
 - 你也可以替 TA 约：`POST /wake/self-wake`
 - 存在 `pending_wake` 表里，**不受 mode 影响**，silent 也照样会醒
-- 到点超过 **3 分钟**还没执行（通常是因为进程当时没在跑），标记为 `missed`。下次真正醒来时，模型会被告知"有一次约好的没兑现"，只说一次
+- 到点超过 **3 分钟**还没执行，标记为 `missed`。下次真正醒来时，模型会被告知"有一次约好的没兑现"，只说一次
 
 ## 一次醒来的完整流程
 
-1. **收集情况**：当前 mode、距上次醒来多久、手机最近上报的电量/位置/屏幕时间、过去 2 小时对话条数（对话密度）、最近 12 条对话（每条最多 200 字）、长期记忆里的 `breath` 与 `feel`（各最多 1200 字）、情绪状态（接了 Drivesoid 时）、有没有 missed 的精确唤醒、现在能用哪些 MCP 工具、**最近 8 次选过的动作**、**你在动态下还没被看过的留言**（最多 5 条，回复的话带上你回的是哪一条）
+1. **收集情况**：当前 mode、距上次醒来多久、手机最近上报的电量/位置/屏幕时间、过去 2 小时对话条数、最近 12 条对话（每条最多 200 字）、长期记忆里的 `breath` 与 `feel`（各最多 1200 字）、情绪状态（接了 Drivesoid 时）、有没有 missed 的精确唤醒、现在能用哪些 MCP 工具、**最近 8 次选过的动作**、**你在动态下还没被看过的留言**（最多 5 条，回复的话带上你回的是哪一条）
 2. **做决定**：`decide.js` 把这些拼成两条消息发给模型。固定的规则、动作列表、输出格式放在 system 里，每次一字不差，方便上游缓存；每次都变的放在 user 里。要求模型只返回一个 JSON：
    ```json
    {"next_wake_minutes": 96, "mood": "...", "action": "moment", "action_detail": "...", "self_wake": null,
@@ -65,9 +65,7 @@ phosphor 每 **60 秒** 执行一次 `tick()`，每次检查两条互不干扰�
 
 ### 记忆那一步为什么要两个都拉
 
-`breath` 给的是"我是谁、最近在干什么"，`feel` 给的是"我现在感觉怎么样"。
-
-只拉 `feel` 的话，后台这一侧就只剩情绪、看不到主线，表现出来像失忆：知道自己心里闷，但想不起为什么。两个一起拉才拼得出完整的自己。
+`breath` 给的是"我是谁、最近在干什么"，`feel` 给的是"我现在感觉怎么样"。只拉 `feel` 的话，后台这一侧就只剩情绪、看不到主线，表现出来像失忆：知道自己心里闷，但想不起为什么。
 
 ### 为什么要给 TA 看"最近选过的动作"
 
@@ -100,38 +98,34 @@ phosphor 每 **60 秒** 执行一次 `tick()`，每次检查两条互不干扰�
 |---|---|---|
 | `bark` | 给你手机推送一条通知 | `BARK_KEY` |
 | `moment` | 发一条动态，可选配图、配音。两条之间至少隔 6 小时 | 配图要 `IMAGE_*`；配音要 `ELEVENLABS_*` |
-| `mcp_call` | 调任意已连接的 MCP 工具（比如逛论坛） | 对应 MCP 已连上 |
+| `mcp_call` | 调任意已连接的 MCP 工具（比如逛论坛、回帖、发帖） | 对应 MCP 已连上 |
 | `ombre_brain` | 读/写长期记忆 | `OMBRE_BRAIN_URL` |
 | `set_mode` | 自己切 normal / low-frequency | 无 |
 | `noop` | 什么都不做（合法结果，不是失败） | 无 |
 
 补充说明：
 
-- 模型要是还写旧的 `diary`，会按动态发
+- **动态替代了原来的日记**。模型要是还写 `diary`，会按动态发
 - **配图是真的生成**：调 `IMAGE_API_URL` 那个生图接口，图片下载到 `MEDIA_DIR/images/` 存在本地。没配的话 TA 会被告知"先别写 image_prompt"
-- **配音**固定用 ElevenLabs `eleven_v3` 模型。只有它认 `[breathing]`、`[whispers]` 这类标签，换模型会把标签原样念出来
+- **配音**固定用 ElevenLabs `eleven_v3` 模型。只有它认 `[breathing]`、`[whispers]` 这类标签
 - **silent 故意不给 TA 自己切**。那等于从对方的世界里消失，这个开关只留给人：`POST /wake/mode`
-- **会对外发帖发文的 MCP 故意不自动连接**（见 [07](07-mcp.md)）。发之前要先和人商量
+- **论坛 TA 可以自己逛、回帖、发帖**，不用先问人。连上的 MCP 都算 TA 能自己用的（见 [07](07-mcp.md)）
 
 ## 动态、留言、回复、点赞
 
 1. TA 选了 `moment`，就在 `moments` 表里多一条（`kind = post`）；逛论坛、翻记忆这类动作会多一张黄卡（`kind = activity`），`detail` 里记着当时的心情、具体做了什么、返回了什么
 2. 你打开 `/moments`，给动态留言，或者点某条留言下的「↩️ 回复」。写进 `moment_comments`，`author = user`，`handled = 0`，回复时 `reply_to` 是被回的那条
-3. TA 下次醒来时，提示里会列出这些 `handled = 0` 的留言（带编号、原动态的开头，回复的话还有被回的那句）
-4. TA 在 `comment_replies` 里回想回的那几条；回复写进同一张表，`author = assistant`，`reply_to` 指向你那条，页面上就挂在你那条下面
-5. **这次给 TA 看过的留言全部标成 `handled = 1`**，没回的下次也不会再出现，免得 TA 每次醒来都被同一条催
+3. TA 下次醒来时，提示里会列出这些 `handled = 0` 的留言
+4. TA 在 `comment_replies` 里回想回的那几条；回复写进同一张表，`author = assistant`，`reply_to` 指向你那条
+5. **这次给 TA 看过的留言全部标成 `handled = 1`**，没回的下次也不会再出现
 6. 点赞写进 `moment_likes`，每人每条最多一个，再点就取消
-
-回留言和这次的动作是**两件独立的事**：TA 可以一边回你、一边去逛论坛。
 
 ## 对话记录是怎么来的
 
-phosphor 本身看不到你们的聊天。"最近聊了什么"和"对话密度"都来自 `conversation_log` 表，这张表的数据有两个来源：
+phosphor 本身看不到你们的聊天。"最近聊了什么"和"对话密度"都来自 `conversation_log` 表：
 
 1. **自动**：聊天客户端走 `vesper-gateway` 的 `chat` 线路时，网关在转发前记下用户最后一条消息，在回复流结束时记下回复。记录前会剥掉客户端注入的 `<environment>` 块和 `<sent_at>` 时间戳
-2. **手动**：`POST /wake/conversation`（见接口篇）
-
-没接上之前这张表一直是空的，只代表没有数据，不代表程序坏了。
+2. **手动**：`POST /wake/conversation`（见 [06](06-api.md)）
 
 ## 数据库里有什么
 
@@ -144,30 +138,11 @@ phosphor 本身看不到你们的聊天。"最近聊了什么"和"对话密度"�
 | `wake_log` | 每次醒来的完整记录：决定、结果、错误 |
 | `device_reports` | 手机上报的电量、位置、屏幕时间 |
 | `moments` | 动态和黄卡：正文、图片/音频地址、类型、详情 |
-| `moment_comments` | 留言和回复：谁写的、回复的是哪条、TA 看过没有 |
+| `moment_comments` | 留言和回复 |
 | `moment_likes` | 点赞 |
 | `anniversaries` | 纪念日 |
 | `conversation_log` | 对话记录 |
 | `diary` | 旧的日记表。第一次启动新版本时内容会搬进 `moments`，之后不再使用 |
 | `meta` | 记录一次性迁移做过没有 |
 
-所有时间戳都是**毫秒**（13 位数字），不是秒。新加的表和列启动时自动建，不用手动迁移。
-
-## 文件地图
-
-```
-src/
-├── phosphor.js        主循环：两条唤醒链、兜底、回留言、退出时关库
-├── decide.js          拼 system + user、调模型、重试、解析 JSON
-├── context.js         合并 conversation_log 与 heartbeat 事件
-├── timeline.js        读写 heartbeat 的时间线文件
-├── drives.js          Drivesoid 上报与读取情绪
-├── state.js           核心数据库读写；启动时自动建 data/ 目录、搬旧日记
-├── moments-store.js   纪念日、点赞、黄卡详情等动态页用的表
-├── moments-page.js    动态页与留言、回复、点赞接口
-├── wall-time.js       按 TIME_ZONE 处理日期时间
-├── vesper.js          3001 端口：上报、/wake/*、挂载动态页
-├── gateway.js         3002 端口：模型路由 + 对话记录
-├── mcp-manager.js     连接 Ombre Brain / 论坛
-└── actions/           每个动作一个文件（bark / moment / mcp-action / ombre-brain / set-mode / activity）
-```
+所有时间戳都是**毫秒**（13 位数字）。表和列启动时自动建，不用手动迁移。
