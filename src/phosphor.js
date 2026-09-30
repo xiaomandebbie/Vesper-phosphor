@@ -22,7 +22,7 @@ import { isImageEnabled, isVoiceEnabled } from './actions/moment.js';
 import { listAllTools, connectAll, callTool, isConnected } from './mcp-manager.js';
 import { isSharedTimelineEnabled, describeAction, postSharedEvent } from './timeline.js';
 import { getSharedContext, countRecentChat } from './context.js';
-import { getDrivesBlock, summarizeRecent, isDrivesEnabled, isSummaryEnabled } from './drives.js';
+import { getDrivesBlock, isDrivesEnabled } from './drives.js';
 
 const TICK_MS = 60 * 1000;
 const MISSED_GRACE_MS = 3 * 60 * 1000;
@@ -31,6 +31,12 @@ const DEFAULT_WAKE_MINUTES = 60;
 const MIN_WAKE_MINUTES = 5;
 const MAX_COMMENTS_PER_WAKE = 5;
 const MAX_REPLY_CHARS = 500;
+// 做决定时带多少条最近对话。每条在 decide.js 里还会再截短。
+// 条数越多越贵；.env 的 DECIDE_CONTEXT_LIMIT 可改，不填是 12。
+const DECIDE_CONTEXT_LIMIT = (() => {
+  const n = Number(process.env.DECIDE_CONTEXT_LIMIT);
+  return Number.isInteger(n) && n > 0 ? n : 12;
+})();
 // 两次自然唤醒之间最长隔多久。模型给得再大也会被截到这个值。
 // .env 里 PHOSPHOR_MAX_WAKE_MINUTES 可改，不填是 1440（一天）。
 const MAX_WAKE_MINUTES = (() => {
@@ -139,14 +145,9 @@ async function runDecisionCycle({ kind, scheduledAt = null, selfNote = null }) {
   const latestDevice = getLatestDeviceReport();
   // 最近对话：所有聊天窗口的记录 + 唤醒事件，换窗口不会丢（见 context.js）
   const density = countRecentChat(2 * 60 * 60 * 1000);
-  const recentMessages = getSharedContext(20);
-  // 长期记忆、Drivesoid 情绪、最近对话一句话提炼，三件事互不依赖，一起取。
-  // 任何一个取不到都是 null，不影响这一轮唤醒。
-  const [{ breathSummary, feelSummary }, drivesBlock, recentSummary] = await Promise.all([
-    getMemorySummary(),
-    getDrivesBlock(),
-    summarizeRecent(recentMessages),
-  ]);
+  const recentMessages = getSharedContext(DECIDE_CONTEXT_LIMIT);
+  // 长期记忆和 Drivesoid 情绪互不依赖，一起取。任何一个取不到都是 null，不影响这一轮唤醒。
+  const [{ breathSummary, feelSummary }, drivesBlock] = await Promise.all([getMemorySummary(), getDrivesBlock()]);
   const gapMinutes = wakeState.updated_at ? (Date.now() - wakeState.updated_at) / 60000 : 0;
   const pendingComments = getPendingComments(MAX_COMMENTS_PER_WAKE);
 
@@ -166,7 +167,6 @@ async function runDecisionCycle({ kind, scheduledAt = null, selfNote = null }) {
     gapMinutes,
     density,
     recentMessages,
-    recentSummary,
     drivesBlock,
     breathSummary,
     feelSummary,
@@ -316,7 +316,7 @@ async function main() {
   process.on('SIGINT', () => shutdown('SIGINT'));
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   console.log(
-    `phosphor: 最长唤醒间隔 ${MAX_WAKE_MINUTES} 分钟；共享时间线：${isSharedTimelineEnabled() ? '已开启' : '未开启'}；动态配图：${isImageEnabled() ? '已开启' : '未配置'}；动态语音：${isVoiceEnabled() ? '已开启' : '未配置'}；情绪（Drivesoid）：${isDrivesEnabled() ? '已接入' : '未接入'}；对话一句话提炼：${isSummaryEnabled() ? '已开启' : '未开启'}`
+    `phosphor: 最长唤醒间隔 ${MAX_WAKE_MINUTES} 分钟；决策带最近对话 ${DECIDE_CONTEXT_LIMIT} 条；共享时间线：${isSharedTimelineEnabled() ? '已开启' : '未开启'}；动态配图：${isImageEnabled() ? '已开启' : '未配置'}；动态语音：${isVoiceEnabled() ? '已开启' : '未配置'}；情绪（Drivesoid）：${isDrivesEnabled() ? '已接入' : '未接入'}`
   );
   await connectAll();
   await tick();
