@@ -84,14 +84,19 @@ function recentActionsBlock(recentActions) {
   return `你最近 ${recentActions.length} 次醒来选的动作（从早到晚）：${list}（${summary}）`;
 }
 
+// 留言如果是在回复某一条，带上被回复的那条，TA 才知道对方在接哪句话
 function pendingCommentsBlock(pendingComments) {
   if (!pendingComments?.length) return '';
   const lines = pendingComments
-    .map((c) => `  [留言#${c.id}] 在你的动态「${short(c.moment_content, 40)}」下，${USER_NAME}说：${short(c.content, 300)}`)
+    .map((c) => {
+      const who = c.parent_author === 'user' ? `${USER_NAME}自己` : '你';
+      const quote = c.parent_content ? `，回复的是${who}那条「${short(c.parent_content, 60)}」` : '';
+      return `  [留言#${c.id}] 在你的动态「${short(c.moment_content, 40)}」下${quote}，${USER_NAME}说：${short(c.content, 300)}`;
+    })
     .join('\n');
   return `有人在你的动态下留言了（你还没回过）：
 ${lines}
-回留言不占这次的动作。想回哪条就写在 comment_replies 里，不想回的可以不写；这次没回的，下次不会再出现。`;
+回留言不占这次的动作。想回哪条就写在 comment_replies 里，你的回复会挂在那条留言下面；不想回的可以不写；这次没回的，下次不会再出现。`;
 }
 
 // Drivesoid 算出来的情绪块（见 drives.js）。没接 Drivesoid 或者这次没读到时整段不出现。
