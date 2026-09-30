@@ -274,10 +274,7 @@ function renderLikeBar(m, back) {
 }
 
 function renderMoment(m, back, showDate) {
-  const commentsHtml = renderComments(m, back);
-  const likeBar = renderLikeBar(m, back);
-
-  // 行为提示卡：暖黄底、白字。正文第一行是时间，第二行是做了什么；有详情的点开能看；留言框收起来
+  // 行为提示卡：白底黄框。只留时间、做了什么，有详情的点开能看；不放点赞和留言
   if (m.kind === 'activity') {
     const body = `<span class="content">${escapeHtml(m.content)}</span>`;
     const main = m.detail
@@ -288,12 +285,11 @@ function renderMoment(m, back, showDate) {
       : body;
     return `<article class="moment activity" id="m${m.id}" aria-label="行为提示">
       ${main}
-      ${likeBar}
-      ${commentsHtml}
-      <details class="activity-reply"><summary>留言</summary>${commentForm(m, back)}</details>
     </article>`;
   }
 
+  const commentsHtml = renderComments(m, back);
+  const likeBar = renderLikeBar(m, back);
   const img = safeMediaUrl(m.image_url);
   const audio = safeMediaUrl(m.audio_url);
   const time = formatDateTime(m.ts);
@@ -310,7 +306,7 @@ function renderMoment(m, back, showDate) {
 
 const STYLE = `
   :root { --ink: #2b2233; --muted: #665a70; --accent: #7a3e5d; --gold: #b7792f; --card: #fffdfb; --line: #eadfe6;
-    --activity: #E6B652; }
+    --activity: #E6B652; --activity-ink: #8a5a14; }
   * { box-sizing: border-box; }
   body { margin: 0; min-height: 100vh; color: var(--ink); font-family: -apple-system, "PingFang SC", "Helvetica Neue", sans-serif;
     background: linear-gradient(180deg, #efe7f4 0%, #f9f0ee 55%, #fdf8f2 100%); }
@@ -371,29 +367,21 @@ const STYLE = `
   .moment .content { display: block; font-size: 15px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
   .moment img { max-width: 100%; border-radius: 8px; margin-top: 10px; display: block; }
   .moment audio { width: 100%; margin-top: 10px; }
-  /* 行为提示卡：暖黄底白字。白字在这个黄上对比度偏低，加一点深色投影帮助辨认 */
-  .moment.activity { background: var(--activity); color: #fff; border: none; padding: 12px 16px;
-    box-shadow: 0 1px 3px rgba(120, 80, 20, 0.18); }
-  .moment.activity .content { font-size: 15px; line-height: 1.55; font-weight: 600; color: #fff;
-    text-shadow: 0 1px 2px rgba(90, 55, 10, 0.45); }
-  .moment.activity .content::first-line { font-size: 12px; font-weight: 500; letter-spacing: 0.05em; }
+  /* 行为提示卡：白底，边框还是原来那个暖黄。第一行是时间，第二行是做了什么 */
+  .moment.activity { background: #fff; color: var(--ink); border: 1.5px solid var(--activity); padding: 12px 16px; }
+  .moment.activity .content { font-size: 15px; line-height: 1.55; font-weight: 600; color: var(--ink); }
+  .moment.activity .content::first-line { font-size: 12px; font-weight: 500; letter-spacing: 0.05em; color: var(--muted); }
   .activity-detail > summary { cursor: pointer; list-style: none; }
   .activity-detail > summary::-webkit-details-marker { display: none; }
-  .expand-hint { display: block; margin-top: 4px; font-size: 12px; font-weight: 500; color: #fff;
-    text-shadow: 0 1px 2px rgba(90, 55, 10, 0.45); }
+  .expand-hint { display: block; margin-top: 4px; font-size: 12px; font-weight: 500; color: var(--activity-ink); }
   .activity-detail[open] .expand-hint { display: none; }
-  .activity-detail .detail { margin-top: 10px; padding: 10px 12px; border-radius: 8px; background: rgba(255, 253, 251, 0.94);
+  .activity-detail .detail { margin-top: 10px; padding: 10px 12px; border-radius: 8px; background: #fdf6e6;
     color: var(--ink); font-size: 13px; line-height: 1.55; white-space: pre-wrap; word-break: break-word;
     max-height: 360px; overflow-y: auto; }
-  .activity-reply summary { cursor: pointer; font-size: 13px; color: #fff; margin-top: 6px; padding: 4px 0;
-    text-shadow: 0 1px 2px rgba(90, 55, 10, 0.45); }
-  .moment.activity .comments { background: rgba(255, 253, 251, 0.94); color: var(--ink); }
-  .moment.activity a:focus-visible, .moment.activity summary:focus-visible, .moment.activity button:focus-visible { outline-color: #fff; }
   .like-bar { display: flex; align-items: center; gap: 4px; margin-top: 8px; }
   .like-btn { background: none; color: var(--accent); font-size: 22px; line-height: 1; min-width: 44px; min-height: 44px;
     padding: 0; margin-left: -10px; }
   .like-names { font-size: 13px; color: var(--muted); }
-  .moment.activity .like-btn, .moment.activity .like-names { color: #fff; text-shadow: 0 1px 2px rgba(90, 55, 10, 0.45); }
   .comments { margin-top: 8px; background: #f3eef2; border-radius: 8px; padding: 8px 10px; }
   .thread + .thread { border-top: 1px solid var(--line); margin-top: 4px; padding-top: 4px; }
   .comment { font-size: 14px; line-height: 1.5; padding: 3px 0; }
