@@ -49,6 +49,27 @@ pm2 logs phosphor --lines 300 --nostream | grep 缓存命中
 
 第一次醒来命中是 0，之后 Y 占 X 的一大半就说明缓存在起作用。写着"上游没报"是上游没返回缓存数据。
 
+## 对话记录清理
+
+| 变量 | 说明 |
+|---|---|
+| `CONVERSATION_KEEP_HOURS` | 保留最近多少小时的对话记录。**不填 = 24**，填 0 = 不清理 |
+| `CONVERSATION_KEEP_MIN` | 不管多旧，最新多少条总是留着。**不填 = 30** |
+
+phosphor 每 24 小时清理一次 `conversation_log`，上次清理的时间记在数据库的 `meta` 表里，重启不会让它提前或重复清。进程第一次跑到这个版本时会马上清一次。
+
+为什么最少留 30 条：做决定用最近 12 条，heartbeat 共享上下文最多 30 条，Drivesoid 分类用最近 10 条。聊得少的时候最近几条可能都在一天以前，只按时间删会把它们全删掉。
+
+清完会调一次 Ombre Brain 的 `breath` 回忆一下（只读记忆库，不调模型），然后在动态页记一张黄卡，点开能看到清了多少条、想起了什么。没接 Ombre Brain 就只清理不回忆；这次什么都没清、也没想起什么，就不记黄卡。
+
+```bash
+pm2 logs phosphor --lines 300 --nostream | grep cleanup
+# cleanup: 清掉了 N 条 24 小时以前的对话记录（最新 30 条始终保留）
+# cleanup: 清理完回忆了一下（breath）
+```
+
+> 清理只动 `conversation_log`。动态、留言、唤醒记录、长期记忆都不受影响。
+
 ## 唤醒节律
 
 | 变量 | 说明 |
