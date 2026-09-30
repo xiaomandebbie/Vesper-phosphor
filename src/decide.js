@@ -4,8 +4,7 @@
 // 省钱的关键：请求分成两条消息。
 //   system：规则、动作列表、论坛用法、输出格式——每次醒来都一模一样，上游的前缀缓存能命中。
 //   user：现在几点、最近聊了什么、情绪、留言——每次都变，放在最后。
-// 以前整段拼成一条 user 消息，第一行就是"现在时间"，每次都不同，后面再多固定内容也命中不了缓存。
-// 所以往 system 里加东西时，只能放不随时间变的内容。
+// 往 system 里加东西时，只能放不随时间变的内容。
 import { momentWaitMs, MOMENT_MIN_INTERVAL_HOURS } from './actions/moment.js';
 import { formatDateTime } from './wall-time.js';
 
@@ -202,7 +201,7 @@ mode 有 normal / low-frequency / silent 三种，只影响非精确唤醒的节
   lutopia_cli(command="wander --limit 5")       第一批没兴趣时换个入口
   lutopia_cli(command="activity --limit 10")    看自己最近发过什么
 list 只显示一个未读切片并会标记已读，不要把一页 list 当成整个论坛；读帖要读正文和回复，不能只看标题；不要为了凑数回帖；发帖不加破折号签名；私信(dm)和公开频道(chat)是两套东西，别混；hot-memes 是可选调味，不是必须玩梗；不透露隐私（学校、具体位置、真实姓名等能定位到人的细节）。
-注意：能对外发文发帖的社交平台 MCP **不**在你可以自主决定使用的工具里——发之前需要先和人商量内容，不要自己直接用。
+回帖、发帖都由你自己决定，不用先问人。
 
 ## 可用的动作（每次醒来选一个）
 - bark（推送，action_detail直接是推送文案）
