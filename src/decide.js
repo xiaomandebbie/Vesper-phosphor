@@ -7,6 +7,7 @@
 // 以前整段拼成一条 user 消息，第一行就是"现在时间"，每次都不同，后面再多固定内容也命中不了缓存。
 // 所以往 system 里加东西时，只能放不随时间变的内容。
 import { momentWaitMs, MOMENT_MIN_INTERVAL_HOURS } from './actions/moment.js';
+import { formatDateTime } from './wall-time.js';
 
 const LLM_BASE_URL =
   process.env.LLM_BASE_URL || 'https://api.deepseek.com/v1/chat/completions';
@@ -22,6 +23,11 @@ const DECIDE_MAX_TOKENS = process.env.DECIDE_MAX_TOKENS
 
 // 单次请求最多等多久。不设的话上游卡住时这一轮 tick 会一直挂着。
 const LLM_TIMEOUT_MS = Number(process.env.DECIDE_TIMEOUT_MS || 120000);
+
+// 省 token：每条最近对话最多带多少字，长期记忆 breath / feel 各最多带多少字。
+// 做决定只需要知道"大概在聊什么"，不需要整段原文。
+const MSG_MAX_CHARS = 200;
+const MEMORY_MAX_CHARS = 1200;
 
 // 可选：给 system 消息打 Anthropic 风格的 cache_control 标记。
 // DeepSeek、OpenAI 这类是自动前缀缓存，不用开。上游是 Claude 且中转站支持透传 cache_control 时才开，
@@ -106,7 +112,15 @@ function short(value, n = 60) {
   return s.length > n ? `${s.slice(0, n)}…` : s;
 }
 
-// 最近几次选了什么。让模型自己看到"我一直在做同一件事"，比写死规则更自然。
+// 长期记忆可能很长，只截头部，保留换行
+function clipMemory(value) {
+  if (value == null) return '暂无';
+  const s = String(value).trim();
+  if (!s) return '暂无';
+  return s.length > MEMORY_MAX_CHARS ? `${s.slice(0, MEMORY_MAX_CHARS)}…` : s;
+}
+
+// 最近几次选了什么。让模型自己看到"我一直在做同一件事"，比写死规则更自然，也是选下一个动作的主要参考。
 function recentActionsBlock(recentActions) {
   if (!recentActions?.length) return '';
   const list = recentActions.map((a) => a.action || '?').join(' → ');
@@ -135,10 +149,6 @@ function pendingCommentsBlock(pendingComments) {
 function drivesStateBlock(block) {
   if (!block) return '';
   return `你现在的情绪状态（来自情绪系统，是你自己的，不是${USER_NAME}的；怎么读见上面的说明）：\n${block}`;
-}
-
-function recentSummaryLine(summary) {
-  return summary ? `最近对话一句话：${summary}` : '';
 }
 
 // 动态冷却还剩多久，每次都在变，所以放在 user 消息里
@@ -215,12 +225,12 @@ list 只显示一个未读切片并会标记已读，不要把一页 list 当成
 
 ## 关于选哪个动作
 - ${barkNote}
-- 看一眼用户消息里"最近选的动作"。如果连着好几次都是同一种，这次换一个：去论坛读几篇帖子、翻翻自己的记忆、把值得记住的事存进长期记忆、发条动态，或者就安静待着。
+- 看一眼用户消息里"最近选的动作"和"最近的对话"。如果连着好几次都是同一种，这次换一个：去论坛读几篇帖子、翻翻自己的记忆、把值得记住的事存进长期记忆、发条动态，或者就安静待着。
 - 没有哪个动作是"应该做的"。按你此刻真实想做的来选，不用每次都围着对方转——你也有自己的事。
 
 ## 请决定
 1. 下次非精确唤醒的间隔（分钟，自行判断，不要总是固定值；如果mode是silent，这个值仍然要给，等mode恢复normal后会用到）
-2. 这次的心情（有情绪状态时以它为底色，再结合"最近对话一句话"和"最近的感受"用自己的话写；没有就参考"最近的感受"和"最近的对话"；不要凭空瞎编）
+2. 这次的心情（有情绪状态时以它为底色，再结合"最近的对话"和"最近的感受"用自己的话写；没有就参考"最近的感受"和"最近的对话"；不要凭空瞎编）
 3. 这次要执行的动作（从上面选一个；如果最近对话很密集、对方刚说完话，可以考虑这次先不打扰，除非确实有话想说）
 4. 该动作的具体细节（action_detail）
 5. 可选：要不要给未来的自己安排一次精确唤醒。不需要就把 self_wake 设为 null。
@@ -234,26 +244,26 @@ list 只显示一个未读切片并会标记已读，不要把一页 list 当成
 function buildUserPrompt(context) {
   const kindNote =
     context.kind === 'precise'
-      ? `这次醒来是你自己之前安排的（精确唤醒），当时留的note是："${context.selfNote ?? '(无)'}"，原定时间：${new Date(context.scheduledAt).toLocaleString()}。`
+      ? `这次醒来是你自己之前安排的（精确唤醒），当时留的note是："${context.selfNote ?? '(无)'}"，原定时间：${formatDateTime(context.scheduledAt)}。`
       : `这次是机会型的自然唤醒（非精确）。`;
 
+  // 时间用 "MM-DD HH:mm"，每条截到 MSG_MAX_CHARS 字，够看出在聊什么
   const conversationBlock =
     context.recentMessages && context.recentMessages.length
       ? `最近的对话（按时间顺序，仅供参考，不是这次唤醒的对话）：\n${context.recentMessages
-          .map((m) => `[${new Date(m.ts).toLocaleString()}] ${m.speaker ?? '?'}: ${m.content}`)
+          .map((m) => `[${formatDateTime(m.ts).slice(5)}] ${m.speaker ?? '?'}: ${short(m.content, MSG_MAX_CHARS)}`)
           .join('\n')}`
       : '最近没有可参考的对话记录（可能是还没接上对话数据源，不代表真的没聊过天）。';
 
   const lines = [
-    `现在时间：${context.now}`,
+    `现在时间：${formatDateTime()}`,
     `当前模式（mode）：${context.mode}`,
     kindNote,
     `距离上次醒来：${Math.round(context.gapMinutes)}分钟`,
     `最近对话密度（过去2小时消息数）：${context.density}`,
-    recentSummaryLine(context.recentSummary),
     conversationBlock,
-    `你醒来时先想起的事（来自你自己的长期记忆 breath，是你自己记下的，不是系统总结）：${context.breathSummary ?? '暂无'}`,
-    `最近的感受（来自你自己的长期记忆 feel）：${context.feelSummary ?? '暂无'}`,
+    `你醒来时先想起的事（来自你自己的长期记忆 breath，是你自己记下的，不是系统总结）：${clipMemory(context.breathSummary)}`,
+    `最近的感受（来自你自己的长期记忆 feel）：${clipMemory(context.feelSummary)}`,
     drivesStateBlock(context.drivesBlock),
     context.missedSummary
       ? `有你之前安排但没兑现的精确唤醒（missed，只告知这一次）：${context.missedSummary}`
