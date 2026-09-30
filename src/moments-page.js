@@ -1,4 +1,4 @@
-// 动态页 /moments：标题、此刻心情、纪念日、小日历、按天看动态、留言、回复、点赞、头像和名字。
+// 动态页 /moments：标题、此刻心情、唤醒时间、纪念日、小日历、按天看动态、留言、回复、点赞、头像和名字。
 // vesper.js 里挂载：registerMomentRoutes(app, { requireBasicAuth, requireApiKey })
 // 页面是服务端渲染，没有 JavaScript 也能看、能留言。JavaScript 只做锦上添花的事：
 //   语音条点击播放（没有 JS 时退回浏览器自带的播放器）；
@@ -35,6 +35,7 @@ import {
   firstWeekday,
 } from './wall-time.js';
 import { getTopDrives } from './drives.js';
+import { getWakeTimes } from './wake-info.js';
 import { tidyActivityContent, tidyActivityDetail } from './actions/activity.js';
 
 const MEDIA_DIR = process.env.MEDIA_DIR || '/opt/vesper/media';
@@ -112,7 +113,8 @@ function currentMood() {
   try {
     const s = String(getWakeState()?.mood ?? '').replace(/\s+/g, ' ').trim();
     if (!s) return null;
-    return s.length > MAX_MOOD_CHARS ? `${s.slice(0, MAX_MOOD_CHARS)}…` : s;
+    const chars = Array.from(s);
+    return chars.length > MAX_MOOD_CHARS ? `${chars.slice(0, MAX_MOOD_CHARS).join('')}…` : s;
   } catch {
     return null;
   }
@@ -136,6 +138,44 @@ function renderMoodLine(mood, top) {
     inner = `看看${escapeHtml(aiName)}此刻的心绪`;
   }
   return `<p class="mood-line"><a class="mood-link" href="/drives">${inner}<span class="mood-more" aria-hidden="true">✦ 心绪 ›</span><span class="sr-only">，点开看心绪</span></a></p>`;
+}
+
+// 唤醒时间怎么写：今天的只写 HH:mm，别的天写 MM-DD HH:mm
+function whenLabel(ms, now) {
+  const t = formatDateTime(ms);
+  return t.slice(0, 10) === formatDateTime(now).slice(0, 10) ? t.slice(11) : t.slice(5);
+}
+
+// "TA此刻"下面那一行：上次唤醒、下次唤醒、自主唤醒（TA 自己约的精确唤醒里最早的那次）。
+// 只读库，不调模型。读不到就整行不显示，不影响页面其他部分
+function renderWakeLine() {
+  let w;
+  try {
+    w = getWakeTimes();
+  } catch (err) {
+    console.error('moments page: 读唤醒时间失败', err.message);
+    return '';
+  }
+  const now = Date.now();
+  const last = w.lastAt ? whenLabel(w.lastAt, now) : '还没醒过';
+  let next;
+  if (w.mode === 'silent') next = '暂停中';
+  else if (!w.nextAt) next = '—';
+  else if (w.nextAt <= now) next = '马上';
+  else next = whenLabel(w.nextAt, now);
+  const self = w.selfAt ? whenLabel(w.selfAt, now) : '没有约';
+  const selfTitle = w.selfAt && w.selfNote ? `${nameOf('assistant')}留的话：${w.selfNote}` : '';
+  const items = [
+    ['上次唤醒', last, ''],
+    ['下次唤醒', next, ''],
+    ['自主唤醒', self, selfTitle],
+  ];
+  return `<p class="wake-line">${items
+    .map(
+      ([k, v, title]) =>
+        `<span class="wake-item"${title ? ` title="${escapeHtml(title)}"` : ''}><span class="wake-k">${k}</span> ${escapeHtml(v)}</span>`
+    )
+    .join('<span class="wake-sep" aria-hidden="true">·</span>')}</p>`;
 }
 
 // 过去的日子显示已经多少天，将来的显示还有多少天
@@ -536,6 +576,12 @@ const STYLE = `
   .mood-num { font-family: Georgia, "Times New Roman", serif; font-size: 15px; color: var(--accent); }
   .mood-sep { color: var(--gold); }
   .mood-more { margin-left: 6px; color: var(--gold); font-size: 12px; white-space: nowrap; }
+  /* "TA此刻"下面的唤醒时间：比心情那行小一号，白底黄框、斜体。纯黄字在白底上看不清，字用深一点的金黄 */
+  .wake-line { display: flex; flex-wrap: wrap; justify-content: center; gap: 2px 6px; width: fit-content; max-width: 92%;
+    margin: 12px auto 0; padding: 3px 12px; font-size: 12px; line-height: 1.6; font-style: italic; color: var(--place);
+    background: #fff; border: 1px solid var(--activity); border-radius: 999px; }
+  .wake-k { font-weight: 600; }
+  .wake-sep { color: var(--activity); }
   .card { background: var(--card); border-radius: 16px; padding: 16px; margin-bottom: 14px; box-shadow: 0 1px 3px rgba(60, 30, 60, 0.08); }
   .section-title { font-size: 15px; margin: 0 0 10px; color: var(--accent); letter-spacing: 0.1em; }
   .anniv-list { list-style: none; margin: 0; padding: 0; }
@@ -724,6 +770,7 @@ function renderPage({ today, month, selected, anniversaries, marked, moments, ba
       <h1 class="title">晨暮星</h1>
       <p class="subtitle" lang="en">Vesper<span aria-hidden="true">✨</span><span class="sr-only"> </span>Phosphor</p>
       ${renderMoodLine(mood, top)}
+      ${renderWakeLine()}
     </header>
     ${renderAnniversaries(anniversaries, today, back)}
     ${renderCalendar({ y: month.y, m: month.m, today, selected, marked })}

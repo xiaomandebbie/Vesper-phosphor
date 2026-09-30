@@ -10,6 +10,7 @@
 // 前面的 system + user + 上一步的回答原样不动，所以也能吃到缓存，每步多花的主要是论坛返回的内容。
 import { momentWaitMs, MOMENT_MIN_INTERVAL_HOURS } from './actions/moment.js';
 import { formatDateTime } from './wall-time.js';
+import { clipText, wellFormedDeep } from './text.js';
 
 const LLM_BASE_URL =
   process.env.LLM_BASE_URL || 'https://api.deepseek.com/v1/chat/completions';
@@ -59,7 +60,8 @@ function systemMessage(text) {
 }
 
 async function callLLM(messages, maxTokens = DECIDE_MAX_TOKENS) {
-  const payload = { model: LLM_MODEL, messages };
+  // 发出去之前把半个 emoji 这类孤立代理项清掉，不然上游解析 JSON 报 400（见 text.js）
+  const payload = { model: LLM_MODEL, messages: wellFormedDeep(messages) };
   if (maxTokens) payload.max_tokens = maxTokens;
 
   const res = await fetch(LLM_BASE_URL, {
@@ -153,9 +155,9 @@ async function askJson(messages) {
   throw lastError;
 }
 
+// 截断都按完整字符算（见 text.js），不会把 emoji 切成两半
 function short(value, n = 60) {
-  const s = String(value ?? '').replace(/\s+/g, ' ').trim();
-  return s.length > n ? `${s.slice(0, n)}…` : s;
+  return clipText(String(value ?? '').replace(/\s+/g, ' ').trim(), n);
 }
 
 // 长期记忆可能很长，只截头部，保留换行
@@ -163,13 +165,13 @@ function clipMemory(value) {
   if (value == null) return '暂无';
   const s = String(value).trim();
   if (!s) return '暂无';
-  return s.length > MEMORY_MAX_CHARS ? `${s.slice(0, MEMORY_MAX_CHARS)}…` : s;
+  return clipText(s, MEMORY_MAX_CHARS);
 }
 
 function clipForumResult(value) {
   const s = String(value ?? '').trim();
   if (!s) return '（什么都没返回）';
-  return s.length > FORUM_RESULT_MAX_CHARS ? `${s.slice(0, FORUM_RESULT_MAX_CHARS)}\n…（后面太长，没放进来）` : s;
+  return clipText(s, FORUM_RESULT_MAX_CHARS, '\n…（后面太长，没放进来）');
 }
 
 // 最近几次选了什么。让模型自己看到"我一直在做同一件事"，比写死规则更自然，也是选下一个动作的主要参考。
