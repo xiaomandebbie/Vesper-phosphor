@@ -22,6 +22,7 @@ import { isImageEnabled, isVoiceEnabled } from './actions/moment.js';
 import { listAllTools, connectAll, callTool, isConnected } from './mcp-manager.js';
 import { isSharedTimelineEnabled, describeAction, postSharedEvent } from './timeline.js';
 import { getSharedContext, countRecentChat } from './context.js';
+import { getDrivesBlock, summarizeRecent, isDrivesEnabled, isSummaryEnabled } from './drives.js';
 
 const TICK_MS = 60 * 1000;
 const MISSED_GRACE_MS = 3 * 60 * 1000;
@@ -136,10 +137,16 @@ async function getMemorySummary() {
 async function runDecisionCycle({ kind, scheduledAt = null, selfNote = null }) {
   const wakeState = getWakeState();
   const latestDevice = getLatestDeviceReport();
-  const { breathSummary, feelSummary } = await getMemorySummary();
   // 最近对话：所有聊天窗口的记录 + 唤醒事件，换窗口不会丢（见 context.js）
   const density = countRecentChat(2 * 60 * 60 * 1000);
   const recentMessages = getSharedContext(20);
+  // 长期记忆、Drivesoid 情绪、最近对话一句话提炼，三件事互不依赖，一起取。
+  // 任何一个取不到都是 null，不影响这一轮唤醒。
+  const [{ breathSummary, feelSummary }, drivesBlock, recentSummary] = await Promise.all([
+    getMemorySummary(),
+    getDrivesBlock(),
+    summarizeRecent(recentMessages),
+  ]);
   const gapMinutes = wakeState.updated_at ? (Date.now() - wakeState.updated_at) / 60000 : 0;
   const pendingComments = getPendingComments(MAX_COMMENTS_PER_WAKE);
 
@@ -159,6 +166,8 @@ async function runDecisionCycle({ kind, scheduledAt = null, selfNote = null }) {
     gapMinutes,
     density,
     recentMessages,
+    recentSummary,
+    drivesBlock,
     breathSummary,
     feelSummary,
     missedSummary,
@@ -307,7 +316,7 @@ async function main() {
   process.on('SIGINT', () => shutdown('SIGINT'));
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   console.log(
-    `phosphor: 最长唤醒间隔 ${MAX_WAKE_MINUTES} 分钟；共享时间线：${isSharedTimelineEnabled() ? '已开启' : '未开启'}；动态配图：${isImageEnabled() ? '已开启' : '未配置'}；动态语音：${isVoiceEnabled() ? '已开启' : '未配置'}`
+    `phosphor: 最长唤醒间隔 ${MAX_WAKE_MINUTES} 分钟；共享时间线：${isSharedTimelineEnabled() ? '已开启' : '未开启'}；动态配图：${isImageEnabled() ? '已开启' : '未配置'}；动态语音：${isVoiceEnabled() ? '已开启' : '未配置'}；情绪（Drivesoid）：${isDrivesEnabled() ? '已接入' : '未接入'}；对话一句话提炼：${isSummaryEnabled() ? '已开启' : '未开启'}`
   );
   await connectAll();
   await tick();

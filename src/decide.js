@@ -94,6 +94,20 @@ ${lines}
 回留言不占这次的动作。想回哪条就写在 comment_replies 里，不想回的可以不写；这次没回的，下次不会再出现。`;
 }
 
+// Drivesoid 算出来的情绪块（见 drives.js）。没接 Drivesoid 或者这次没读到时整段不出现。
+function drivesStateBlock(block) {
+  if (!block) return '';
+  return `你现在的情绪状态（来自情绪系统，是你自己的，不是${USER_NAME}的）：
+${block}
+数值 0–1：低于 0.25 很淡，0.25–0.45 平常，0.45–0.65 明显，高于 0.65 强烈。
+各项含义：vitality 精力、fatigue 疲惫、longing 想念、intimacy 亲近感、possessiveness 独占感、lust 欲望、jealousy 醋意、anxiety 不安、protectiveness 保护欲、fear 害怕、contentment 满足、elation 雀跃、seeking 想找点事做或想找人、play 玩心、dejection 低落、irritability 烦躁。最后如果多出 frustration / pending 一行，表示有积压、还没被回应的渴望。
+让这些状态决定你这次的心情和想做什么；不要把数值或这些英文词写进推送、动态和留言回复里。`;
+}
+
+function recentSummaryLine(summary) {
+  return summary ? `最近对话一句话：${summary}` : '';
+}
+
 // 动态有冷却：两条之间至少隔 MOMENT_MIN_INTERVAL_HOURS 小时。提前告诉模型，免得白选。
 function momentCooldownNote() {
   const waitMin = Math.ceil(momentWaitMs() / 60000);
@@ -130,14 +144,21 @@ export default async function decide(context) {
     ? '推送（bark）会直接打断对方，而且另一个唤醒程序已经在负责"要不要主动联系对方"了（它发过的推送在上面的对话里标着"（事件）"）。除非有一句非说不可、而且它没说过的话，否则这次别用推送。'
     : '推送（bark）会直接打断对方，只在真有话想让对方马上看到时用。';
 
+  // 有情绪块时，心情以它为底色；没有就按原来的方式参考感受和对话。
+  const moodHint = context.drivesBlock
+    ? '以上面"你现在的情绪状态"为底色，再结合"最近对话一句话"和"最近的感受"，用自己的话写'
+    : '参考"最近的感受"和"最近的对话"';
+
   const prompt = `现在时间：${context.now}
 当前模式（mode）：${context.mode}（normal / low-frequency / silent，只影响非精确链的节律，不影响你自己安排的精确唤醒；silent只能由人工设置，你自己不能切到silent）
 ${kindNote}
 距离上次醒来：${Math.round(context.gapMinutes)}分钟
 最近对话密度（过去2小时消息数）：${context.density}
+${recentSummaryLine(context.recentSummary)}
 ${conversationBlock}
 你醒来时先想起的事（来自你自己的长期记忆 breath，是你自己记下的，不是系统总结）：${context.breathSummary ?? '暂无'}
 最近的感受（来自你自己的长期记忆 feel）：${context.feelSummary ?? '暂无'}
+${drivesStateBlock(context.drivesBlock)}
 ${context.missedSummary ? `有你之前安排但没兑现的精确唤醒（missed，只告知这一次）：${context.missedSummary}` : ''}
 最近设备状态：电量${context.battery ?? '未知'}%，位置${context.location ?? '未知'}，今日屏幕使用${context.screenTime ?? '未知'}分钟
 ${recentActionsBlock(context.recentActions)}
@@ -179,7 +200,7 @@ list 只显示一个未读切片并会标记已读，不要把一页 list 当成
 
 请决定：
 1. 下次非精确唤醒的间隔（分钟，自行判断，不要总是固定值；如果mode是silent，这个值仍然要给，等mode恢复normal后会用到）
-2. 这次的心情（参考"最近的感受"和"最近的对话"，不要凭空瞎编）
+2. 这次的心情（${moodHint}，不要凭空瞎编）
 3. 这次要执行的动作（从上面选一个；如果最近对话很密集、对方刚说完话，可以考虑这次先不打扰，除非确实有话想说）
 4. 该动作的具体细节（action_detail）
 5. 可选：要不要给未来的自己安排一次精确唤醒。不需要就把 self_wake 设为 null。

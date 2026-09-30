@@ -2,8 +2,9 @@ import 'dotenv/config';
 import express from 'express';
 import { Readable, Transform } from 'stream';
 import { StringDecoder } from 'string_decoder';
-import { addConversationMessage } from './state.js';
+import { addConversationMessage, getRecentConversation } from './state.js';
 import { getSharedContext, formatContextText } from './context.js';
+import { isDrivesEnabled, reportUserMessage, reportAssistantMessage } from './drives.js';
 
 const app = express();
 app.use(express.json({ limit: '10mb' }));
@@ -77,6 +78,26 @@ function stripInjectedBlocks(content) {
     .trim();
 }
 
+// Drivesoid 给消息分类时会参考前面几句。按它自带 hook 的做法，取最近约 600 字。
+// 要在把这一条记进 conversation_log 之前取，不然"前文"里会包含这条自己。
+const DRIVES_CONTEXT_CHARS = 600;
+function drivesContext() {
+  try {
+    const rows = getRecentConversation(10);
+    const out = [];
+    let used = 0;
+    for (let i = rows.length - 1; i >= 0 && used <= DRIVES_CONTEXT_CHARS; i--) {
+      const content = String(rows[i].content ?? '').slice(0, DRIVES_CONTEXT_CHARS);
+      out.unshift({ role: rows[i].speaker === USER_NAME ? 'user' : 'assistant', content });
+      used += content.length;
+    }
+    return out;
+  } catch (err) {
+    console.error('gateway: 取 Drivesoid 前文失败:', err.message);
+    return [];
+  }
+}
+
 // 只记聊天那条线路的对话，方向按上游协议来：
 // messages 里 role=user 是对方说的，role=assistant 是这一侧说的。
 // assistant 那条不在这里记——由响应侧统一补，免得同一句话落两遍。
@@ -87,11 +108,13 @@ function recordUserMessage(messages) {
   if (!last || last.role !== 'user') return;
   const cleaned = stripInjectedBlocks(last.content);
   if (!cleaned) return;
+  const context = isDrivesEnabled() ? drivesContext() : [];
   try {
     addConversationMessage(USER_NAME, cleaned);
   } catch (err) {
     console.error('gateway: addConversationMessage(user) failed:', err.message);
   }
+  reportUserMessage(cleaned, context);
 }
 
 // heartbeat 醒来时发的 user 消息里有一段"最近记录："，后面是它从自己时间线文件里拼的聊天。
@@ -282,6 +305,7 @@ app.post('/v1/chat/completions', requireGatewayAuth, async (req, res) => {
           } catch (err) {
             console.error('gateway: addConversationMessage(assistant) failed:', err.message);
           }
+          reportAssistantMessage();
         })
       )
       .pipe(res);
