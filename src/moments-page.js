@@ -1,6 +1,6 @@
-// 动态页 /moments：标题、纪念日、小日历、按天看动态、留言。
+// 动态页 /moments：标题、纪念日、小日历、按天看动态、留言、回复、点赞。
 // vesper.js 里挂载：registerMomentRoutes(app, { requireBasicAuth, requireApiKey })
-// 页面是纯服务端渲染，不依赖 JavaScript，手机浏览器直接能用。
+// 页面是纯服务端渲染，不依赖 JavaScript，手机浏览器直接能用。展开详情、回复框都用 <details>。
 import { getMoment, listMoments, listMomentComments, addMomentComment } from './state.js';
 import {
   listMomentsBetween,
@@ -8,6 +8,9 @@ import {
   listAnniversaries,
   addAnniversary,
   deleteAnniversary,
+  getComment,
+  toggleLike,
+  listLikes,
 } from './moments-store.js';
 import {
   pad,
@@ -37,6 +40,8 @@ function escapeHtml(value) {
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
 }
+
+const nameOf = (author) => (author === 'user' ? USER_NAME : AI_NAME);
 
 // 只放行本项目自己生成的媒体路径
 function safeMediaUrl(url) {
@@ -153,32 +158,105 @@ function renderCalendar({ y, m, today, selected, marked }) {
   </section>`;
 }
 
-function renderComment(c) {
-  const mine = c.author === 'user';
-  return `<div class="comment ${mine ? 'mine' : 'theirs'}">
-    <span class="who">${escapeHtml(mine ? USER_NAME : AI_NAME)}</span>
-    <span class="text">${escapeHtml(c.content)}</span>
-    <span class="when">${escapeHtml(formatDateTime(c.ts))}${mine && !c.handled ? ' · 还没看到' : ''}</span>
-  </div>`;
-}
-
-function commentForm(m, back) {
+// 留言框。replyTo 是要回复的那条留言；不传就是直接给动态留言
+function commentForm(m, back, replyTo = null) {
+  const inputId = replyTo ? `in-m${m.id}-r${replyTo.id}` : `in-m${m.id}`;
+  const label = replyTo ? `回复${nameOf(replyTo.author)}的留言` : '给这条动态留言';
+  const placeholder = replyTo ? `回复${nameOf(replyTo.author)}…` : '留言…';
   return `<form class="comment-form" method="post" action="/moments/${m.id}/comments">
     <input type="hidden" name="back" value="${escapeHtml(back)}" />
-    <label class="sr-only" for="c${m.id}">给这条动态留言</label>
-    <input id="c${m.id}" name="content" maxlength="${MAX_COMMENT_CHARS}" placeholder="留言…" required />
+    ${replyTo ? `<input type="hidden" name="reply_to" value="${replyTo.id}" />` : ''}
+    <label class="sr-only" for="${inputId}">${escapeHtml(label)}</label>
+    <input id="${inputId}" name="content" maxlength="${MAX_COMMENT_CHARS}" placeholder="${escapeHtml(placeholder)}" required />
     <button type="submit">发送</button>
   </form>`;
 }
 
-function renderMoment(m, back, showDate) {
-  const comments = listMomentComments(m.id).map(renderComment).join('');
-  const commentsHtml = comments ? `<div class="comments">${comments}</div>` : '';
+// 把留言按"楼"分组：没有 reply_to 的是一楼，回复（包括回复的回复）都挂在它所在那一楼下面。
+// 被回复的那条找不到了（理论上不会），就当它自己是一楼。
+function buildThreads(comments) {
+  const byId = new Map(comments.map((c) => [c.id, c]));
+  const rootOf = (c) => {
+    let cur = c;
+    const seen = new Set();
+    while (cur.reply_to && byId.has(cur.reply_to) && !seen.has(cur.id)) {
+      seen.add(cur.id);
+      cur = byId.get(cur.reply_to);
+    }
+    return cur;
+  };
+  const threads = [];
+  const threadOf = new Map();
+  for (const c of comments) {
+    const root = rootOf(c);
+    if (root.id === c.id) {
+      const t = { root: c, replies: [] };
+      threads.push(t);
+      threadOf.set(c.id, t);
+    } else {
+      threadOf.get(root.id)?.replies.push(c);
+    }
+  }
+  return { threads, byId };
+}
 
-  // 行为提示卡：暖黄底、白字。正文第一行是时间，第二行是做了什么；留言框收起来
+function renderComment(c, m, back, parent) {
+  const mine = c.author === 'user';
+  const to = parent ? `<span class="to">回复 ${escapeHtml(nameOf(parent.author))}</span>` : '';
+  const unseen = mine && !c.handled ? ' · 还没看到' : '';
+  return `<div class="comment ${mine ? 'mine' : 'theirs'}${parent ? ' reply' : ''}" id="cm${c.id}">
+    <div class="comment-line"><span class="who">${escapeHtml(nameOf(c.author))}</span>${to}<span class="sep">：</span><span class="text">${escapeHtml(c.content)}</span></div>
+    <div class="comment-meta">
+      <span class="when">${escapeHtml(formatDateTime(c.ts))}${unseen}</span>
+      <details class="reply-box"><summary aria-label="回复${escapeHtml(nameOf(c.author))}的这条留言"><span aria-hidden="true">↩️ 回复</span></summary>${commentForm(m, back, c)}</details>
+    </div>
+  </div>`;
+}
+
+function renderComments(m, back) {
+  const { threads, byId } = buildThreads(listMomentComments(m.id));
+  if (!threads.length) return '';
+  const html = threads
+    .map(
+      (t) =>
+        `<div class="thread">${renderComment(t.root, m, back, null)}${t.replies
+          .map((r) => renderComment(r, m, back, byId.get(r.reply_to)))
+          .join('')}</div>`
+    )
+    .join('');
+  return `<div class="comments">${html}</div>`;
+}
+
+// 点赞：再点一次取消。旁边写上谁赞过
+function renderLikeBar(m, back) {
+  const likes = listLikes(m.id);
+  const liked = likes.some((l) => l.author === 'user');
+  const names = likes.map((l) => nameOf(l.author)).join('、');
+  return `<div class="like-bar">
+    <form method="post" action="/moments/${m.id}/like">
+      <input type="hidden" name="back" value="${escapeHtml(back)}" />
+      <button type="submit" class="like-btn${liked ? ' on' : ''}" aria-pressed="${liked}" aria-label="${liked ? '取消点赞' : '点赞'}"><span aria-hidden="true">${liked ? '♥' : '♡'}</span></button>
+    </form>
+    ${names ? `<span class="like-names">${escapeHtml(names)} 赞了</span>` : ''}
+  </div>`;
+}
+
+function renderMoment(m, back, showDate) {
+  const commentsHtml = renderComments(m, back);
+  const likeBar = renderLikeBar(m, back);
+
+  // 行为提示卡：暖黄底、白字。正文第一行是时间，第二行是做了什么；有详情的点开能看；留言框收起来
   if (m.kind === 'activity') {
+    const body = `<span class="content">${escapeHtml(m.content)}</span>`;
+    const main = m.detail
+      ? `<details class="activity-detail">
+          <summary>${body}<span class="expand-hint" aria-hidden="true">点开看详情 ▾</span><span class="sr-only">，展开行动详情</span></summary>
+          <div class="detail">${escapeHtml(m.detail)}</div>
+        </details>`
+      : body;
     return `<article class="moment activity" id="m${m.id}" aria-label="行为提示">
-      <div class="content">${escapeHtml(m.content)}</div>
+      ${main}
+      ${likeBar}
       ${commentsHtml}
       <details class="activity-reply"><summary>留言</summary>${commentForm(m, back)}</details>
     </article>`;
@@ -192,6 +270,7 @@ function renderMoment(m, back, showDate) {
     <div class="content">${escapeHtml(m.content)}</div>
     ${img ? `<img src="${img}" alt="动态配图" loading="lazy" />` : ''}
     ${audio ? `<audio controls preload="none" src="${audio}"></audio>` : ''}
+    ${likeBar}
     ${commentsHtml}
     ${commentForm(m, back)}
   </article>`;
@@ -248,7 +327,7 @@ const STYLE = `
   .list-title { font-size: 15px; color: var(--accent); margin: 22px 4px 10px; letter-spacing: 0.1em; }
   .moment { background: var(--card); border-radius: 12px; padding: 14px 16px; margin-bottom: 12px; box-shadow: 0 1px 3px rgba(60, 30, 60, 0.08); }
   .moment .ts { color: var(--muted); font-size: 12px; margin-bottom: 6px; }
-  .moment .content { font-size: 15px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
+  .moment .content { display: block; font-size: 15px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
   .moment img { max-width: 100%; border-radius: 8px; margin-top: 10px; display: block; }
   .moment audio { width: 100%; margin-top: 10px; }
   /* 行为提示卡：暖黄底白字。白字在这个黄上对比度偏低，加一点深色投影帮助辨认 */
@@ -257,15 +336,39 @@ const STYLE = `
   .moment.activity .content { font-size: 15px; line-height: 1.55; font-weight: 600; color: #fff;
     text-shadow: 0 1px 2px rgba(90, 55, 10, 0.45); }
   .moment.activity .content::first-line { font-size: 12px; font-weight: 500; letter-spacing: 0.05em; }
+  .activity-detail > summary { cursor: pointer; list-style: none; }
+  .activity-detail > summary::-webkit-details-marker { display: none; }
+  .expand-hint { display: block; margin-top: 4px; font-size: 12px; font-weight: 500; color: #fff;
+    text-shadow: 0 1px 2px rgba(90, 55, 10, 0.45); }
+  .activity-detail[open] .expand-hint { display: none; }
+  .activity-detail .detail { margin-top: 10px; padding: 10px 12px; border-radius: 8px; background: rgba(255, 253, 251, 0.94);
+    color: var(--ink); font-size: 13px; line-height: 1.55; white-space: pre-wrap; word-break: break-word;
+    max-height: 360px; overflow-y: auto; }
   .activity-reply summary { cursor: pointer; font-size: 13px; color: #fff; margin-top: 6px; padding: 4px 0;
     text-shadow: 0 1px 2px rgba(90, 55, 10, 0.45); }
   .moment.activity .comments { background: rgba(255, 253, 251, 0.94); color: var(--ink); }
-  .moment.activity a:focus-visible, .moment.activity summary:focus-visible { outline-color: #fff; }
-  .comments { margin-top: 12px; background: #f3eef2; border-radius: 8px; padding: 8px 10px; }
+  .moment.activity a:focus-visible, .moment.activity summary:focus-visible, .moment.activity button:focus-visible { outline-color: #fff; }
+  .like-bar { display: flex; align-items: center; gap: 4px; margin-top: 8px; }
+  .like-btn { background: none; color: var(--accent); font-size: 22px; line-height: 1; min-width: 44px; min-height: 44px;
+    padding: 0; margin-left: -10px; }
+  .like-names { font-size: 13px; color: var(--muted); }
+  .moment.activity .like-btn, .moment.activity .like-names { color: #fff; text-shadow: 0 1px 2px rgba(90, 55, 10, 0.45); }
+  .comments { margin-top: 8px; background: #f3eef2; border-radius: 8px; padding: 8px 10px; }
+  .thread + .thread { border-top: 1px solid var(--line); margin-top: 4px; padding-top: 4px; }
   .comment { font-size: 14px; line-height: 1.5; padding: 3px 0; }
-  .who { font-weight: 600; margin-right: 4px; }
+  .comment-line { word-break: break-word; }
+  .who { font-weight: 600; }
   .theirs .who { color: var(--accent); }
-  .when { color: var(--muted); font-size: 11px; margin-left: 6px; }
+  .to { margin-left: 4px; font-size: 12px; color: var(--muted); }
+  .comment-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 0 10px; }
+  .when { color: var(--muted); font-size: 11px; }
+  .reply-box > summary { cursor: pointer; list-style: none; font-size: 12px; color: var(--muted); padding: 6px 0; }
+  .reply-box > summary::-webkit-details-marker { display: none; }
+  .reply-box[open] { flex-basis: 100%; }
+  .reply-box .comment-form { margin-top: 2px; }
+  /* 回复：缩进、小一号、灰一点 */
+  .comment.reply { margin-left: 12px; padding-left: 8px; border-left: 2px solid var(--line); font-size: 13px; color: var(--muted); }
+  .comment.reply .who { color: var(--muted); }
   .comment-form { display: flex; gap: 8px; margin-top: 10px; }
   .comment-form input { flex: 1; min-width: 0; }
   .empty { color: var(--muted); font-size: 14px; }
@@ -309,25 +412,38 @@ function errorPage(message, back) {
   return layout('出错了', `<div class="card"><p>${escapeHtml(message)}</p><p><a href="${escapeHtml(back)}">返回</a></p></div>`);
 }
 
-function createUserComment(momentId, content) {
+// 你的留言。replyTo 可选：要回复的那条留言 id，必须在同一条动态下
+function createUserComment(momentId, content, replyTo) {
   const text = String(content ?? '').trim();
   if (!text) return { error: '留言不能为空' };
   if (text.length > MAX_COMMENT_CHARS) return { error: `留言最多 ${MAX_COMMENT_CHARS} 字` };
   if (!getMoment(momentId)) return { error: '找不到这条动态' };
-  return { id: addMomentComment({ momentId, author: 'user', content: text }) };
+  let replyToId = null;
+  if (replyTo !== undefined && replyTo !== null && replyTo !== '') {
+    const parent = getComment(Number(replyTo));
+    if (!parent || parent.moment_id !== momentId) return { error: '要回复的那条留言找不到了' };
+    replyToId = parent.id;
+  }
+  return { id: addMomentComment({ momentId, author: 'user', content: text, replyTo: replyToId }) };
 }
 
 export function registerMomentRoutes(app, { requireBasicAuth, requireApiKey }) {
   // ---- 程序化访问（快捷指令、以后的前端）----
   app.get('/wake/moments', requireApiKey, (req, res) => {
     const limit = Math.min(Number(req.query.limit) || 20, 100);
-    res.json(listMoments(limit).map((m) => ({ ...m, comments: listMomentComments(m.id) })));
+    res.json(listMoments(limit).map((m) => ({ ...m, comments: listMomentComments(m.id), likes: listLikes(m.id) })));
   });
 
   app.post('/wake/moments/:id/comments', requireApiKey, (req, res) => {
-    const r = createUserComment(Number(req.params.id), req.body?.content);
+    const r = createUserComment(Number(req.params.id), req.body?.content, req.body?.reply_to);
     if (r.error) return res.status(400).json({ error: r.error });
     res.json({ ok: true, id: r.id });
+  });
+
+  app.post('/wake/moments/:id/like', requireApiKey, (req, res) => {
+    const id = Number(req.params.id);
+    if (!getMoment(id)) return res.status(404).json({ error: '找不到这条动态' });
+    res.json({ ok: true, liked: toggleLike(id, 'user') });
   });
 
   app.get('/wake/anniversaries', requireApiKey, (req, res) => res.json(listAnniversaries()));
@@ -382,8 +498,17 @@ export function registerMomentRoutes(app, { requireBasicAuth, requireApiKey }) {
     const back = safeBack(req.body?.back);
     if (!sameOrigin(req)) return res.status(403).send(errorPage('请求来源不对', back));
     const id = Number(req.params.id);
-    const r = createUserComment(id, req.body?.content);
+    const r = createUserComment(id, req.body?.content, req.body?.reply_to);
     if (r.error) return res.status(400).send(errorPage(r.error, back));
+    res.redirect(303, `${back}#m${id}`);
+  });
+
+  app.post('/moments/:id/like', requireBasicAuth, (req, res) => {
+    const back = safeBack(req.body?.back);
+    if (!sameOrigin(req)) return res.status(403).send(errorPage('请求来源不对', back));
+    const id = Number(req.params.id);
+    if (!getMoment(id)) return res.status(404).send(errorPage('找不到这条动态', back));
+    toggleLike(id, 'user');
     res.redirect(303, `${back}#m${id}`);
   });
 
