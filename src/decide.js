@@ -239,12 +239,23 @@ list 只显示一个未读切片并会标记已读，不要把一页 list 当成
 {"next_wake_minutes": number, "mood": string, "action": string, "action_detail": string, "self_wake": {"after_minutes": number, "note": string} | null, "comment_replies": [{"comment_id": number, "reply": string}]}`;
 }
 
+// 这次为什么醒。after_cleanup 是 phosphor 刚清理完 conversation_log 之后的那一次（见 phosphor.js 的 cleanupTick）。
+// 放在 user 消息里，不动 system，缓存照样命中。
+function kindNoteFor(context) {
+  if (context.kind === 'precise') {
+    return `这次醒来是你自己之前安排的（精确唤醒），当时留的note是："${context.selfNote ?? '(无)'}"，原定时间：${formatDateTime(context.scheduledAt)}。`;
+  }
+  if (context.kind === 'after_cleanup') {
+    const hours = context.cleanup?.hours ?? 24;
+    const deleted = context.cleanup?.deleted ?? 0;
+    return `这次醒来是因为对话记录刚整理过：${hours} 小时以前的 ${deleted} 条旧聊天已经从记录里清掉，找不回来了，下面"最近的对话"只剩最近这些。先看看你醒来想起的事和最近的感受，回想一下这段时间和${USER_NAME}之间发生了什么；如果有想留住、而长期记忆里还没有的，可以这次用 ombre_brain 的 hold 记下来。没有就照常选。`;
+  }
+  return `这次是机会型的自然唤醒（非精确）。`;
+}
+
 // ---------- user：这次醒来的具体情况，每次都变 ----------
 function buildUserPrompt(context) {
-  const kindNote =
-    context.kind === 'precise'
-      ? `这次醒来是你自己之前安排的（精确唤醒），当时留的note是："${context.selfNote ?? '(无)'}"，原定时间：${formatDateTime(context.scheduledAt)}。`
-      : `这次是机会型的自然唤醒（非精确）。`;
+  const kindNote = kindNoteFor(context);
 
   // 时间用 "MM-DD HH:mm"，每条截到 MSG_MAX_CHARS 字，够看出在聊什么
   const conversationBlock =
