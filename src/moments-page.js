@@ -1,6 +1,9 @@
-// 动态页 /moments：标题、此刻心情、纪念日、小日历、按天看动态、留言、回复、点赞。
+// 动态页 /moments：标题、此刻心情、纪念日、小日历、按天看动态、留言、回复、点赞、头像和名字。
 // vesper.js 里挂载：registerMomentRoutes(app, { requireBasicAuth, requireApiKey })
-// 页面是纯服务端渲染，不依赖 JavaScript，手机浏览器直接能用。展开详情、回复框都用 <details>。
+// 页面是服务端渲染，没有 JavaScript 也能看、能留言。JavaScript 只做两件锦上添花的事：
+//   语音条点击播放（没有 JS 时退回浏览器自带的播放器），设置页上传头像前在浏览器里裁成正方形。
+import fs from 'fs';
+import path from 'path';
 import { getMoment, listMoments, listMomentComments, addMomentComment, getWakeState } from './state.js';
 import {
   listMomentsBetween,
@@ -11,6 +14,12 @@ import {
   getComment,
   toggleLike,
   listLikes,
+  PROFILE_WHO,
+  defaultName,
+  getProfile,
+  saveProfileName,
+  saveProfileAvatar,
+  resetProfileAvatar,
 } from './moments-store.js';
 import {
   pad,
@@ -25,12 +34,14 @@ import {
 } from './wall-time.js';
 import { getTopDrives } from './drives.js';
 
-const USER_NAME = process.env.USER_DISPLAY_NAME || '我';
-const AI_NAME = process.env.AI_DISPLAY_NAME || 'TA';
+const MEDIA_DIR = process.env.MEDIA_DIR || '/opt/vesper/media';
 const MAX_COMMENT_CHARS = 1000;
 const MAX_ANNIV_NAME = 30;
 const MAX_MOOD_CHARS = 60;
+const MAX_NAME_CHARS = 20;
 const RECENT_LIMIT = 20;
+// 语音是 ElevenLabs 默认的 128kbps mp3，先按文件大小估时长；浏览器读到真实时长后再校正
+const AUDIO_BYTES_PER_SEC = 128000 / 8;
 const WEEKDAYS = ['一', '二', '三', '四', '五', '六', '日'];
 
 // 动态、留言、纪念日名字都是模型 / 用户写的文字，拼进 HTML 前必须转义
@@ -43,11 +54,12 @@ function escapeHtml(value) {
     .replace(/'/g, '&#39;');
 }
 
-const nameOf = (author) => (author === 'user' ? USER_NAME : AI_NAME);
+// 显示用的名字：设置页填过就用填的，没填用 .env 的称呼
+const nameOf = (author) => getProfile(author === 'user' ? 'user' : 'assistant').name;
 
 // 只放行本项目自己生成的媒体路径
 function safeMediaUrl(url) {
-  return typeof url === 'string' && /^\/media\/(images|audio)\/[\w.-]+$/.test(url) ? url : null;
+  return typeof url === 'string' && /^\/media\/(images|audio|avatars)\/[\w.-]+$/.test(url) ? url : null;
 }
 
 // Basic Auth 下浏览器会自动带账号密码，别的网站也能偷偷替你提交表单。
@@ -79,6 +91,16 @@ function pageUrl(y, m, day) {
   return `/moments?month=${y}-${pad(m)}${day ? `&day=${day}` : ''}`;
 }
 
+// 头像：设置过就用图片，没设置就是名字第一个字。旁边总会写名字，所以头像本身不再给读屏读一遍
+function avatarHtml(who, size = 'md') {
+  const p = getProfile(who);
+  const cls = `avatar avatar-${size} avatar-${p.who === 'user' ? 'user' : 'ta'}`;
+  const url = safeMediaUrl(p.avatarUrl);
+  if (url) return `<img class="${cls}" src="${url}" alt="" loading="lazy" />`;
+  const first = Array.from(p.name.trim())[0] || '?';
+  return `<span class="${cls}" aria-hidden="true">${escapeHtml(first)}</span>`;
+}
+
 // TA 最近一次醒来时写下的心情（wake_state.mood）。每次醒来都会更新，读库不调模型。
 function currentMood() {
   try {
@@ -93,7 +115,8 @@ function currentMood() {
 // 标题下那一行"TA此刻"。接了 Drivesoid 就显示此刻最明显的三项情绪（和 decide 醒来时看到的是同一份），
 // 读不到就退回 TA 上次醒来写下的心情。整行始终可以点，进心绪页 /drives。
 function renderMoodLine(mood, top) {
-  const label = `<span class="mood-label">${escapeHtml(AI_NAME)}此刻：</span>`;
+  const aiName = nameOf('assistant');
+  const label = `<span class="mood-label">${escapeHtml(aiName)}此刻：</span>`;
   let inner;
   if (top?.length) {
     inner =
@@ -104,7 +127,7 @@ function renderMoodLine(mood, top) {
   } else if (mood) {
     inner = label + escapeHtml(mood);
   } else {
-    inner = `看看${escapeHtml(AI_NAME)}此刻的心绪`;
+    inner = `看看${escapeHtml(aiName)}此刻的心绪`;
   }
   return `<p class="mood-line"><a class="mood-link" href="/drives">${inner}<span class="mood-more" aria-hidden="true">✦ 心绪 ›</span><span class="sr-only">，点开看心绪</span></a></p>`;
 }
@@ -237,10 +260,13 @@ function renderComment(c, m, back, parent) {
   const to = parent ? `<span class="to">回复 ${escapeHtml(nameOf(parent.author))}</span>` : '';
   const unseen = mine && !c.handled ? ' · 还没看到' : '';
   return `<div class="comment ${mine ? 'mine' : 'theirs'}${parent ? ' reply' : ''}" id="cm${c.id}">
-    <div class="comment-line"><span class="who">${escapeHtml(nameOf(c.author))}</span>${to}<span class="sep">：</span><span class="text">${escapeHtml(c.content)}</span></div>
-    <div class="comment-meta">
-      <span class="when">${escapeHtml(formatDateTime(c.ts))}${unseen}</span>
-      <details class="reply-box"><summary aria-label="回复${escapeHtml(nameOf(c.author))}的这条留言"><span aria-hidden="true">↩️ 回复</span></summary>${commentForm(m, back, c)}</details>
+    ${avatarHtml(mine ? 'user' : 'assistant', 'sm')}
+    <div class="comment-body">
+      <div class="comment-line"><span class="who">${escapeHtml(nameOf(c.author))}</span>${to}<span class="sep">：</span><span class="text">${escapeHtml(c.content)}</span></div>
+      <div class="comment-meta">
+        <span class="when">${escapeHtml(formatDateTime(c.ts))}${unseen}</span>
+        <details class="reply-box"><summary aria-label="回复${escapeHtml(nameOf(c.author))}的这条留言"><span aria-hidden="true">↩️ 回复</span></summary>${commentForm(m, back, c)}</details>
+      </div>
     </div>
   </div>`;
 }
@@ -273,8 +299,76 @@ function renderLikeBar(m, back) {
   </div>`;
 }
 
+// ---------- 语音条 ----------
+// 样子参考微信：淡粉色气泡，左边一个小尖角，声波图标，时长写在气泡外面，越长越宽。
+// 点一下播放，再点暂停；同时只放一条。没有 JavaScript 时显示浏览器自带的播放器。
+
+const VOICE_ICON = `<svg class="voice-icon" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false">
+  <circle class="w0" cx="7" cy="12" r="2" fill="currentColor"/>
+  <path class="w1" d="M11 8a5.5 5.5 0 0 1 0 8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+  <path class="w2" d="M15 4.5a10.5 10.5 0 0 1 0 15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+</svg>`;
+
+// 按文件大小估一个时长（秒）。文件已经被按天清理掉了就返回 null
+function audioSeconds(url) {
+  const name = url.split('/').pop();
+  try {
+    const { size } = fs.statSync(path.join(MEDIA_DIR, 'audio', name));
+    return Math.max(1, Math.round(size / AUDIO_BYTES_PER_SEC));
+  } catch {
+    return null;
+  }
+}
+
+const formatSeconds = (s) => (s < 60 ? `${s}″` : `${Math.floor(s / 60)}′${s % 60}″`);
+// 1 秒 96px，60 秒及以上 240px，和微信一样越长越宽
+const voiceWidth = (s) => Math.round(Math.min(96 + Math.min(s, 60) * 2.4, 240));
+
+function renderVoice(url) {
+  const sec = audioSeconds(url);
+  if (sec == null) return '<div class="voice"><span class="voice-gone">语音已过期</span></div>';
+  return `<div class="voice">
+      <button type="button" class="voice-bar" style="width:${voiceWidth(sec)}px" aria-pressed="false" aria-label="播放语音，约 ${sec} 秒">${VOICE_ICON}</button>
+      <span class="voice-dur" aria-hidden="true">${formatSeconds(sec)}</span>
+      <audio class="voice-audio" controls preload="metadata" src="${url}"></audio>
+    </div>`;
+}
+
+// 浏览器里跑的：点语音条播放 / 暂停，读到真实时长后校正宽度和秒数。算宽度的公式和 voiceWidth 一样
+const VOICE_SCRIPT = `(function () {
+  var current = null;
+  function fmt(s) { return s < 60 ? s + '″' : Math.floor(s / 60) + '′' + (s % 60) + '″'; }
+  document.querySelectorAll('.voice').forEach(function (box) {
+    var audio = box.querySelector('audio');
+    var btn = box.querySelector('.voice-bar');
+    var dur = box.querySelector('.voice-dur');
+    if (!audio || !btn) return;
+    function exact() {
+      var d = audio.duration;
+      if (!isFinite(d) || d <= 0) return;
+      var s = Math.max(1, Math.round(d));
+      btn.style.width = Math.round(Math.min(96 + Math.min(s, 60) * 2.4, 240)) + 'px';
+      if (dur) dur.textContent = fmt(s);
+      btn.setAttribute('aria-label', '播放语音，' + s + ' 秒');
+    }
+    function stopped() { btn.classList.remove('playing'); btn.setAttribute('aria-pressed', 'false'); }
+    audio.addEventListener('loadedmetadata', exact);
+    audio.addEventListener('durationchange', exact);
+    audio.addEventListener('play', function () { btn.classList.add('playing'); btn.setAttribute('aria-pressed', 'true'); });
+    audio.addEventListener('pause', stopped);
+    audio.addEventListener('ended', function () { stopped(); audio.currentTime = 0; if (current === audio) current = null; });
+    btn.addEventListener('click', function () {
+      if (!audio.paused) { audio.pause(); return; }
+      if (current && current !== audio) { current.pause(); current.currentTime = 0; }
+      current = audio;
+      var p = audio.play();
+      if (p && p.catch) p.catch(stopped);
+    });
+  });
+})();`;
+
 function renderMoment(m, back, showDate) {
-  // 行为提示卡：白底黄框。只留时间、做了什么，有详情的点开能看；不放点赞和留言
+  // 行为提示卡：白底黄框。只留时间、做了什么，有详情的点开能看；不放头像、点赞和留言
   if (m.kind === 'activity') {
     const body = `<span class="content">${escapeHtml(m.content)}</span>`;
     const main = m.detail
@@ -293,27 +387,32 @@ function renderMoment(m, back, showDate) {
   const img = safeMediaUrl(m.image_url);
   const audio = safeMediaUrl(m.audio_url);
   const time = formatDateTime(m.ts);
-  return `<article class="moment" id="m${m.id}">
-    <div class="ts">${escapeHtml(showDate ? time : time.slice(11))}</div>
-    <div class="content">${escapeHtml(m.content)}</div>
-    ${img ? `<img src="${img}" alt="动态配图" loading="lazy" />` : ''}
-    ${audio ? `<audio controls preload="none" src="${audio}"></audio>` : ''}
-    ${likeBar}
-    ${commentsHtml}
-    ${commentForm(m, back)}
+  return `<article class="moment post" id="m${m.id}">
+    ${avatarHtml('assistant')}
+    <div class="moment-main">
+      <div class="moment-head"><span class="moment-name">${escapeHtml(nameOf('assistant'))}</span><span class="ts">${escapeHtml(showDate ? time : time.slice(11))}</span></div>
+      <div class="content">${escapeHtml(m.content)}</div>
+      ${img ? `<img class="moment-img" src="${img}" alt="动态配图" loading="lazy" />` : ''}
+      ${audio ? renderVoice(audio) : ''}
+      ${likeBar}
+      ${commentsHtml}
+      ${commentForm(m, back)}
+    </div>
   </article>`;
 }
 
 const STYLE = `
   :root { --ink: #2b2233; --muted: #665a70; --accent: #7a3e5d; --gold: #b7792f; --card: #fffdfb; --line: #eadfe6;
-    --activity: #E6B652; --activity-ink: #8a5a14; }
+    --activity: #E6B652; --activity-ink: #8a5a14; --voice: #f8d7e3; --voice-press: #f1c1d3; }
   * { box-sizing: border-box; }
   body { margin: 0; min-height: 100vh; color: var(--ink); font-family: -apple-system, "PingFang SC", "Helvetica Neue", sans-serif;
     background: linear-gradient(180deg, #efe7f4 0%, #f9f0ee 55%, #fdf8f2 100%); }
   main { max-width: 600px; margin: 0 auto; padding: 28px 16px 48px; }
   .hero { text-align: center; margin: 14px 0 24px; }
+  .hero-sm { margin: 6px 0 8px; }
   .title { margin: 0; font-family: "Songti SC", "STSong", "Noto Serif SC", "Source Han Serif SC", serif; font-size: 42px;
     font-weight: 700; letter-spacing: 0.35em; padding-left: 0.35em; color: #5b2e52; }
+  .title.title-sm { font-size: 28px; letter-spacing: 0.2em; padding-left: 0.2em; }
   @supports ((-webkit-background-clip: text) or (background-clip: text)) {
     .title { background: linear-gradient(100deg, #463a7c 0%, #9b4a7a 52%, #c4832f 100%);
       -webkit-background-clip: text; background-clip: text; color: transparent; }
@@ -361,12 +460,51 @@ const STYLE = `
   .day.selected .dot { background: #fff; }
   .cal-foot { display: flex; gap: 18px; justify-content: center; margin-top: 8px; font-size: 14px; }
   .cal-foot a { color: var(--accent); padding: 6px 0; }
-  .list-title { font-size: 15px; color: var(--accent); margin: 22px 4px 10px; letter-spacing: 0.1em; }
+  .list-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 22px 4px 10px; }
+  .list-title { font-size: 15px; color: var(--accent); margin: 0; letter-spacing: 0.1em; }
+  .list-link, .back-link { display: inline-flex; align-items: center; min-height: 44px; font-size: 13px; color: var(--accent); }
+  .back-link { font-size: 14px; }
+  /* 头像：设置过就是图片，没设置是名字首字，TA 粉色、我黄色 */
+  .avatar { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; overflow: hidden;
+    object-fit: cover; border-radius: 10px; color: #fff; font-weight: 600; line-height: 1; }
+  .avatar-md { width: 44px; height: 44px; font-size: 18px; }
+  .avatar-sm { width: 26px; height: 26px; border-radius: 7px; font-size: 12px; margin-top: 1px; }
+  .avatar-lg { width: 72px; height: 72px; border-radius: 14px; font-size: 28px; }
+  .avatar-ta { background: linear-gradient(135deg, #d77aa2, #b35a83); }
+  .avatar-user { background: linear-gradient(135deg, #e0a646, #c0801f); }
+  img.avatar { background: #f3e9ef; }
   .moment { background: var(--card); border-radius: 12px; padding: 14px 16px; margin-bottom: 12px; box-shadow: 0 1px 3px rgba(60, 30, 60, 0.08); }
-  .moment .ts { color: var(--muted); font-size: 12px; margin-bottom: 6px; }
+  /* TA 发的动态：左边头像，右边名字、时间、正文，和朋友圈一样 */
+  .moment.post { display: grid; grid-template-columns: 44px minmax(0, 1fr); column-gap: 12px; align-items: start; }
+  .moment-main { min-width: 0; }
+  .moment-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 2px 8px; margin-bottom: 4px; }
+  .moment-name { font-size: 15px; font-weight: 600; color: var(--accent); }
+  .moment .ts { color: var(--muted); font-size: 12px; }
   .moment .content { display: block; font-size: 15px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
-  .moment img { max-width: 100%; border-radius: 8px; margin-top: 10px; display: block; }
-  .moment audio { width: 100%; margin-top: 10px; }
+  .moment .moment-img { max-width: 100%; border-radius: 8px; margin-top: 10px; display: block; }
+  /* 语音条：淡粉色气泡，左边小尖角，时长在气泡外面。没有 JavaScript 时只显示浏览器自带的播放器 */
+  .voice { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
+  .voice-bar, .voice-dur { display: none; }
+  .js .voice-bar { display: inline-flex; }
+  .js .voice-dur { display: inline; }
+  .js .voice-audio { display: none; }
+  .voice-audio { width: 100%; }
+  .voice-bar { position: relative; align-items: center; max-width: calc(100% - 52px); min-height: 40px; margin-left: 6px;
+    padding: 0 12px; border-radius: 6px; background: var(--voice); color: var(--accent); }
+  .voice-bar::before { content: ''; position: absolute; left: -6px; top: 50%; margin-top: -6px; width: 0; height: 0;
+    border-top: 6px solid transparent; border-bottom: 6px solid transparent; border-right: 6px solid var(--voice); }
+  .voice-bar:active { background: var(--voice-press); }
+  .voice-bar:active::before { border-right-color: var(--voice-press); }
+  .voice-dur { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .voice-gone { display: inline-block; font-size: 13px; color: var(--muted); padding: 8px 12px; border-radius: 6px; background: #f3eef2; }
+  .playing .w1 { animation: voice-w1 1.2s steps(1) infinite; }
+  .playing .w2 { animation: voice-w2 1.2s steps(1) infinite; }
+  @keyframes voice-w1 { 0% { opacity: 0; } 33% { opacity: 1; } }
+  @keyframes voice-w2 { 0% { opacity: 0; } 66% { opacity: 1; } }
+  @media (prefers-reduced-motion: reduce) {
+    .playing .w1, .playing .w2 { animation: none; }
+    .voice-bar.playing { background: var(--voice-press); }
+  }
   /* 行为提示卡：白底，边框还是原来那个暖黄。第一行是时间，第二行是做了什么 */
   .moment.activity { background: #fff; color: var(--ink); border: 1.5px solid var(--activity); padding: 12px 16px; }
   .moment.activity .content { font-size: 15px; line-height: 1.55; font-weight: 600; color: var(--ink); }
@@ -384,7 +522,8 @@ const STYLE = `
   .like-names { font-size: 13px; color: var(--muted); }
   .comments { margin-top: 8px; background: #f3eef2; border-radius: 8px; padding: 8px 10px; }
   .thread + .thread { border-top: 1px solid var(--line); margin-top: 4px; padding-top: 4px; }
-  .comment { font-size: 14px; line-height: 1.5; padding: 3px 0; }
+  .comment { display: flex; align-items: flex-start; gap: 8px; font-size: 14px; line-height: 1.5; padding: 4px 0; }
+  .comment-body { flex: 1; min-width: 0; }
   .comment-line { word-break: break-word; }
   .who { font-weight: 600; }
   .theirs .who { color: var(--accent); }
@@ -401,20 +540,31 @@ const STYLE = `
   .comment-form { display: flex; gap: 8px; margin-top: 10px; }
   .comment-form input { flex: 1; min-width: 0; }
   .empty { color: var(--muted); font-size: 14px; }
+  /* 头像和名字设置页 */
+  .profile-row { display: flex; align-items: flex-start; gap: 16px; }
+  .profile-fields { flex: 1; min-width: 0; display: grid; gap: 6px; }
+  .profile-fields label { font-size: 13px; color: var(--muted); }
+  .profile-fields input[type="file"] { border: none; padding: 4px 0; background: none; font-size: 14px; max-width: 100%; }
+  .hint { margin: 10px 0 0; font-size: 12px; line-height: 1.5; color: var(--muted); }
+  .profile-status { margin: 8px 0 0; min-height: 1.2em; font-size: 13px; color: var(--accent); }
+  .profile-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 10px; }
+  button.ghost { background: none; color: var(--accent); box-shadow: inset 0 0 0 1px var(--line); }
   a:focus-visible, button:focus-visible, input:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 `;
 
-function layout(title, body) {
+// head 里那一小段给 html 加上 js 标记：有 JavaScript 才显示语音条，不然留着浏览器自带的播放器
+function layout(title, body, script = '') {
   return `<!DOCTYPE html>
 <html lang="zh">
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>${escapeHtml(title)}</title>
+<script>document.documentElement.className += ' js';</script>
 <style>${STYLE}</style>
 </head>
-<body><main>${body}</main></body>
+<body><main>${body}</main>${script ? `<script>${script}</script>` : ''}</body>
 </html>`;
 }
 
@@ -432,9 +582,99 @@ function renderPage({ today, month, selected, anniversaries, marked, moments, ba
     ${renderAnniversaries(anniversaries, today, back)}
     ${renderCalendar({ y: month.y, m: month.m, today, selected, marked })}
     <section aria-labelledby="list-title">
-      <h2 id="list-title" class="list-title">${listTitle}</h2>
+      <div class="list-head">
+        <h2 id="list-title" class="list-title">${listTitle}</h2>
+        <a class="list-link" href="/moments/profile">头像和名字 ›</a>
+      </div>
       ${items || `<p class="empty">${empty}</p>`}
-    </section>`
+    </section>`,
+    VOICE_SCRIPT
+  );
+}
+
+// ---------- 头像和名字设置页 /moments/profile ----------
+
+// 选了图片就在浏览器里裁成 256×256 的 JPEG，塞进隐藏的 avatar_data 一起提交，不用另外装上传组件
+const AVATAR_SCRIPT = `(function () {
+  var SIZE = 256;
+  document.querySelectorAll('[data-avatar-form]').forEach(function (form) {
+    var file = form.querySelector('[data-avatar-file]');
+    var data = form.querySelector('[data-avatar-data]');
+    var preview = form.querySelector('[data-avatar-preview]');
+    var status = form.querySelector('[data-avatar-status]');
+    if (!file || !data) return;
+    file.addEventListener('change', function () {
+      var f = file.files && file.files[0];
+      data.value = '';
+      if (!f) return;
+      var url = URL.createObjectURL(f);
+      var img = new Image();
+      img.onload = function () {
+        var w = img.naturalWidth, h = img.naturalHeight, s = Math.min(w, h);
+        var c = document.createElement('canvas');
+        c.width = SIZE;
+        c.height = SIZE;
+        var ctx = c.getContext('2d');
+        ctx.fillStyle = '#fff';
+        ctx.fillRect(0, 0, SIZE, SIZE);
+        ctx.drawImage(img, (w - s) / 2, (h - s) / 2, s, s, 0, 0, SIZE, SIZE);
+        data.value = c.toDataURL('image/jpeg', 0.86);
+        URL.revokeObjectURL(url);
+        if (preview) {
+          preview.innerHTML = '';
+          var el = new Image();
+          el.className = 'avatar avatar-lg';
+          el.alt = '';
+          el.src = data.value;
+          preview.appendChild(el);
+        }
+        if (status) status.textContent = '新头像选好了，点保存才会生效';
+      };
+      img.onerror = function () {
+        URL.revokeObjectURL(url);
+        file.value = '';
+        if (status) status.textContent = '这张图读不了，换一张试试';
+      };
+      img.src = url;
+    });
+  });
+})();`;
+
+function renderProfileCard(who, saved) {
+  const p = getProfile(who);
+  const label = who === 'user' ? '我' : 'TA';
+  const id = `pf-${who}`;
+  const fallback = escapeHtml(defaultName(who));
+  return `<section class="card" aria-labelledby="${id}-title">
+    <h2 id="${id}-title" class="section-title">${label}的头像和名字</h2>
+    <form method="post" action="/moments/profile/${who}" data-avatar-form>
+      <div class="profile-row">
+        <span class="profile-preview" data-avatar-preview>${avatarHtml(who, 'lg')}</span>
+        <div class="profile-fields">
+          <label for="${id}-name">名字</label>
+          <input id="${id}-name" name="name" maxlength="${MAX_NAME_CHARS}" value="${escapeHtml(p.customName)}" placeholder="${fallback}" autocomplete="off" />
+          <label for="${id}-file">换头像</label>
+          <input id="${id}-file" type="file" accept="image/*" data-avatar-file />
+          <input type="hidden" name="avatar_data" data-avatar-data />
+        </div>
+      </div>
+      <p class="hint">名字留空就用默认的「${fallback}」，最多 ${MAX_NAME_CHARS} 个字。头像会自动裁成正方形。</p>
+      <p class="profile-status" role="status" data-avatar-status>${saved ? '已保存' : ''}</p>
+      <div class="profile-actions">
+        <button type="submit">保存</button>
+        ${p.avatarUrl ? '<button type="submit" name="reset_avatar" value="1" class="ghost">恢复默认头像</button>' : ''}
+      </div>
+    </form>
+  </section>`;
+}
+
+function renderProfilePage(saved) {
+  return layout(
+    '头像和名字 · 晨暮星',
+    `<header class="hero hero-sm"><h1 class="title title-sm">头像和名字</h1></header>
+    <p><a class="back-link" href="/moments">‹ 回动态</a></p>
+    ${PROFILE_WHO.map((w) => renderProfileCard(w, saved === w)).join('')}`,
+    AVATAR_SCRIPT
   );
 }
 
@@ -521,6 +761,35 @@ export function registerMomentRoutes(app, { requireBasicAuth, requireApiKey }) {
       console.error('moments page: 渲染失败', err);
       res.status(500).send(errorPage('动态页出错了，看一下 vesper 的日志。', '/moments'));
     }
+  });
+
+  app.get('/moments/profile', requireBasicAuth, (req, res) => {
+    const saved = PROFILE_WHO.includes(req.query.saved) ? req.query.saved : null;
+    res.send(renderProfilePage(saved));
+  });
+
+  app.post('/moments/profile/:who', requireBasicAuth, (req, res) => {
+    const back = '/moments/profile';
+    if (!sameOrigin(req)) return res.status(403).send(errorPage('请求来源不对', back));
+    const who = String(req.params.who);
+    if (!PROFILE_WHO.includes(who)) return res.status(404).send(errorPage('没有这个人', back));
+    const name = String(req.body?.name ?? '').replace(/\s+/g, ' ').trim();
+    if (Array.from(name).length > MAX_NAME_CHARS) {
+      return res.status(400).send(errorPage(`名字最多 ${MAX_NAME_CHARS} 个字`, back));
+    }
+    try {
+      if (req.body?.reset_avatar) {
+        resetProfileAvatar(who);
+      } else if (req.body?.avatar_data) {
+        const r = saveProfileAvatar(who, req.body.avatar_data);
+        if (r.error) return res.status(400).send(errorPage(r.error, back));
+      }
+      saveProfileName(who, name);
+    } catch (err) {
+      console.error('moments profile: 保存失败', err);
+      return res.status(500).send(errorPage('保存失败了，看一下 vesper 的日志。', back));
+    }
+    res.redirect(303, `/moments/profile?saved=${who}`);
   });
 
   app.post('/moments/anniversaries', requireBasicAuth, (req, res) => {

@@ -16,8 +16,9 @@ import { registerDrivesRoutes } from './drives-page.js';
 
 const app = express();
 app.use(express.json());
-// 动态页的留言、纪念日表单是普通 form 提交
-app.use(express.urlencoded({ extended: false }));
+// 动态页的留言、纪念日、头像表单是普通 form 提交。
+// 头像在浏览器里裁好后以 base64 一起提交，一般几十 KB，上限放到 1mb（默认 100kb 偶尔不够）
+app.use(express.urlencoded({ extended: false, limit: '1mb' }));
 
 const PORT = process.env.VESPER_PORT || 3001;
 const API_KEY = process.env.REPORT_STATUS_API_KEY;
@@ -28,6 +29,7 @@ const MEDIA_MAX_AGE_DAYS = Number(process.env.MEDIA_MAX_AGE_DAYS || 30);
 
 fs.mkdirSync(path.join(MEDIA_DIR, 'images'), { recursive: true });
 fs.mkdirSync(path.join(MEDIA_DIR, 'audio'), { recursive: true });
+fs.mkdirSync(path.join(MEDIA_DIR, 'avatars'), { recursive: true });
 
 // decision / result 存的是模型返回的原始文本，坏的就当 null，不让路由 500。
 function safeParse(s) {
@@ -39,6 +41,7 @@ function safeParse(s) {
   }
 }
 
+// 只清动态的图片和语音。头像（avatars）不在这里，不会过期被删
 function pruneOldMedia() {
   const cutoff = Date.now() - MEDIA_MAX_AGE_DAYS * 24 * 60 * 60 * 1000;
   for (const sub of ['images', 'audio']) {
@@ -158,7 +161,7 @@ app.get('/wake/conversation', requireApiKey, (req, res) => {
   res.json(getRecentConversation(limit));
 });
 
-// 动态页 /moments（标题、纪念日、日历、按天看动态、留言）以及对应接口，见 moments-page.js
+// 动态页 /moments（标题、纪念日、日历、按天看动态、留言、头像和名字）以及对应接口，见 moments-page.js
 registerMomentRoutes(app, { requireBasicAuth, requireApiKey });
 // 心绪页 /drives（Drivesoid 的情绪状态），见 drives-page.js
 registerDrivesRoutes(app, { requireBasicAuth });
