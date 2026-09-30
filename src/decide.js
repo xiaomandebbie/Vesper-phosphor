@@ -1,5 +1,11 @@
 // LLM 端点可配置——这是"决策者"和"对话侧那个你"是不是同一个模型的关键开关。
 // 默认仍走 DEEPSEEK_*（向后兼容），但优先读 LLM_* 这几个新变量。
+//
+// 省钱的关键：请求分成两条消息。
+//   system：规则、动作列表、论坛用法、输出格式——每次醒来都一模一样，上游的前缀缓存能命中。
+//   user：现在几点、最近聊了什么、情绪、留言——每次都变，放在最后。
+// 以前整段拼成一条 user 消息，第一行就是"现在时间"，每次都不同，后面再多固定内容也命中不了缓存。
+// 所以往 system 里加东西时，只能放不随时间变的内容。
 import { momentWaitMs, MOMENT_MIN_INTERVAL_HOURS } from './actions/moment.js';
 
 const LLM_BASE_URL =
@@ -17,14 +23,27 @@ const DECIDE_MAX_TOKENS = process.env.DECIDE_MAX_TOKENS
 // 单次请求最多等多久。不设的话上游卡住时这一轮 tick 会一直挂着。
 const LLM_TIMEOUT_MS = Number(process.env.DECIDE_TIMEOUT_MS || 120000);
 
-// 第一次失败（空正文 / 被截断 / 不是合法 JSON）后，重试时追加在 prompt 末尾的提醒。
+// 可选：给 system 消息打 Anthropic 风格的 cache_control 标记。
+// DeepSeek、OpenAI 这类是自动前缀缓存，不用开。上游是 Claude 且中转站支持透传 cache_control 时才开，
+// 不支持的中转站可能直接报 400，报错就删掉这一行。
+const DECIDE_CACHE_CONTROL = /^(1|on|true)$/i.test(String(process.env.DECIDE_CACHE_CONTROL || '').trim());
+
+// 第一次失败（空正文 / 被截断 / 不是合法 JSON）后，重试时追加在 user 消息末尾的提醒。
 const RETRY_HINT =
   '\n\n（注意：上一次的回复是空的、被截断了，或者不是合法 JSON。这次请只输出一个完整的 JSON 对象；action_detail 里的正文控制在 400 字以内，确保所有引号和括号都闭合。）';
 
-async function callLLM(prompt, maxTokens = DECIDE_MAX_TOKENS) {
+function systemMessage(text) {
+  if (!DECIDE_CACHE_CONTROL) return { role: 'system', content: text };
+  return {
+    role: 'system',
+    content: [{ type: 'text', text, cache_control: { type: 'ephemeral' } }],
+  };
+}
+
+async function callLLM(system, user, maxTokens = DECIDE_MAX_TOKENS) {
   const payload = {
     model: LLM_MODEL,
-    messages: [{ role: 'user', content: prompt }],
+    messages: [systemMessage(system), { role: 'user', content: user }],
   };
   if (maxTokens) payload.max_tokens = maxTokens;
 
@@ -44,11 +63,26 @@ async function callLLM(prompt, maxTokens = DECIDE_MAX_TOKENS) {
 
   const data = await res.json();
   const choice = data.choices?.[0];
+  logCacheUsage(data.usage);
   return {
     content: choice?.message?.content ?? '',
     finish: choice?.finish_reason ?? 'none',
     raw: data,
   };
+}
+
+// 把上游报回来的缓存命中打进日志，部署后 grep 一下就知道缓存有没有生效。
+// 不同上游字段名不一样：DeepSeek 是 prompt_cache_hit_tokens，OpenAI 是 prompt_tokens_details.cached_tokens，
+// Anthropic 兼容层常见 cache_read_input_tokens。都没有就只打总数。
+function logCacheUsage(usage) {
+  if (!usage) return;
+  const prompt = usage.prompt_tokens ?? usage.input_tokens;
+  const hit =
+    usage.prompt_cache_hit_tokens ??
+    usage.prompt_tokens_details?.cached_tokens ??
+    usage.cache_read_input_tokens ??
+    null;
+  console.log(`decide(): 输入 ${prompt ?? '?'} tokens，缓存命中 ${hit ?? '上游没报'}`);
 }
 
 // 模型有时候会把 JSON 包在 ``` 里，或者在前后加一两句人话。
@@ -94,50 +128,35 @@ function pendingCommentsBlock(pendingComments) {
       return `  [留言#${c.id}] 在你的动态「${short(c.moment_content, 40)}」下${quote}，${USER_NAME}说：${short(c.content, 300)}`;
     })
     .join('\n');
-  return `有人在你的动态下留言了（你还没回过）：
-${lines}
-回留言不占这次的动作。想回哪条就写在 comment_replies 里，你的回复会挂在那条留言下面；不想回的可以不写；这次没回的，下次不会再出现。`;
+  return `有人在你的动态下留言了（你还没回过，怎么回见上面的规则）：\n${lines}`;
 }
 
-// Drivesoid 算出来的情绪块（见 drives.js）。没接 Drivesoid 或者这次没读到时整段不出现。
+// Drivesoid 算出来的情绪块（见 drives.js）。只放数值，各项含义在 system 里，不用每次重发。
 function drivesStateBlock(block) {
   if (!block) return '';
-  return `你现在的情绪状态（来自情绪系统，是你自己的，不是${USER_NAME}的）：
-${block}
-数值 0–1：低于 0.25 很淡，0.25–0.45 平常，0.45–0.65 明显，高于 0.65 强烈。
-各项含义：vitality 精力、fatigue 疲惫、longing 想念、intimacy 亲近感、possessiveness 独占感、lust 欲望、jealousy 醋意、anxiety 不安、protectiveness 保护欲、fear 害怕、contentment 满足、elation 雀跃、seeking 想找点事做或想找人、play 玩心、dejection 低落、irritability 烦躁。最后如果多出 frustration / pending 一行，表示有积压、还没被回应的渴望。
-让这些状态决定你这次的心情和想做什么；不要把数值或这些英文词写进推送、动态和留言回复里。`;
+  return `你现在的情绪状态（来自情绪系统，是你自己的，不是${USER_NAME}的；怎么读见上面的说明）：\n${block}`;
 }
 
 function recentSummaryLine(summary) {
   return summary ? `最近对话一句话：${summary}` : '';
 }
 
-// 动态有冷却：两条之间至少隔 MOMENT_MIN_INTERVAL_HOURS 小时。提前告诉模型，免得白选。
+// 动态冷却还剩多久，每次都在变，所以放在 user 消息里
 function momentCooldownNote() {
   const waitMin = Math.ceil(momentWaitMs() / 60000);
   if (waitMin > 0) {
     const h = Math.floor(waitMin / 60);
     const m = waitMin % 60;
     const left = h ? `${h} 小时 ${m} 分钟` : `${m} 分钟`;
-    return `两条动态之间至少隔 ${MOMENT_MIN_INTERVAL_HOURS} 小时，现在还要等约 ${left}，这次选 moment 不会发出去，请选别的`;
+    return `动态冷却：还要等约 ${left}，这次选 moment 不会发出去，请选别的`;
   }
-  return `两条动态之间至少隔 ${MOMENT_MIN_INTERVAL_HOURS} 小时，现在可以发`;
+  return '动态冷却：已过，这次可以发动态';
 }
 
-export default async function decide(context) {
-  const kindNote =
-    context.kind === 'precise'
-      ? `这次醒来是你自己之前安排的（精确唤醒），当时留的note是："${context.selfNote ?? '(无)'}"，原定时间：${new Date(context.scheduledAt).toLocaleString()}。`
-      : `这次是机会型的自然唤醒（非精确）。`;
-
-  const conversationBlock =
-    context.recentMessages && context.recentMessages.length
-      ? `最近的对话（按时间顺序，仅供参考，不是这次唤醒的对话）：\n${context.recentMessages
-          .map((m) => `[${new Date(m.ts).toLocaleString()}] ${m.speaker ?? '?'}: ${m.content}`)
-          .join('\n')}`
-      : '最近没有可参考的对话记录（可能是还没接上对话数据源，不代表真的没聊过天）。';
-
+// ---------- system：每次醒来都一样的部分 ----------
+// 这里用到的 context 字段（能不能配图配音、有没有 heartbeat、有哪些 MCP 服务）只跟配置有关，
+// 进程不重启就不会变。不要把时间、对话、情绪、冷却这类会变的东西放进来。
+function buildSystemPrompt(context) {
   const imageNote = context.imageEnabled
     ? '会真的生成一张配图，把画面写具体：主体、场景、光线、风格'
     : '现在没配生图，写了也不会出图，先别写';
@@ -146,30 +165,26 @@ export default async function decide(context) {
     : '现在没配语音，先别写';
 
   const barkNote = context.heartbeatActive
-    ? '推送（bark）会直接打断对方，而且另一个唤醒程序已经在负责"要不要主动联系对方"了（它发过的推送在上面的对话里标着"（事件）"）。除非有一句非说不可、而且它没说过的话，否则这次别用推送。'
+    ? '推送（bark）会直接打断对方，而且另一个唤醒程序已经在负责"要不要主动联系对方"了（它发过的推送在最近对话里标着"（事件）"）。除非有一句非说不可、而且它没说过的话，否则这次别用推送。'
     : '推送（bark）会直接打断对方，只在真有话想让对方马上看到时用。';
 
-  // 有情绪块时，心情以它为底色；没有就按原来的方式参考感受和对话。
-  const moodHint = context.drivesBlock
-    ? '以上面"你现在的情绪状态"为底色，再结合"最近对话一句话"和"最近的感受"，用自己的话写'
-    : '参考"最近的感受"和"最近的对话"';
+  const tools = [...(context.availableTools ?? [])].sort().join('、') || '暂无';
 
-  const prompt = `现在时间：${context.now}
-当前模式（mode）：${context.mode}（normal / low-frequency / silent，只影响非精确链的节律，不影响你自己安排的精确唤醒；silent只能由人工设置，你自己不能切到silent）
-${kindNote}
-距离上次醒来：${Math.round(context.gapMinutes)}分钟
-最近对话密度（过去2小时消息数）：${context.density}
-${recentSummaryLine(context.recentSummary)}
-${conversationBlock}
-你醒来时先想起的事（来自你自己的长期记忆 breath，是你自己记下的，不是系统总结）：${context.breathSummary ?? '暂无'}
-最近的感受（来自你自己的长期记忆 feel）：${context.feelSummary ?? '暂无'}
-${drivesStateBlock(context.drivesBlock)}
-${context.missedSummary ? `有你之前安排但没兑现的精确唤醒（missed，只告知这一次）：${context.missedSummary}` : ''}
-最近设备状态：电量${context.battery ?? '未知'}%，位置${context.location ?? '未知'}，今日屏幕使用${context.screenTime ?? '未知'}分钟
-${recentActionsBlock(context.recentActions)}
-${pendingCommentsBlock(context.pendingComments)}
+  return `你会时不时自己醒来。每次醒来，下面的用户消息会告诉你此刻的情况：现在几点、最近和${USER_NAME}聊了什么、你记得什么、心里是什么感受、有没有新留言。你看完之后自己决定这次做什么、下次什么时候再醒。
 
-如果这次想逛论坛，通过 mcp_call 调用（server 填 "lutopia"），常用命令：
+## 模式
+mode 有 normal / low-frequency / silent 三种，只影响非精确唤醒的节律，不影响你自己安排的精确唤醒。silent 只能由人工设置，你自己不能切到 silent。
+
+## 情绪状态怎么读
+如果用户消息里给了"你现在的情绪状态"：数值 0–1，低于 0.25 很淡，0.25–0.45 平常，0.45–0.65 明显，高于 0.65 强烈。
+各项含义：vitality 精力、fatigue 疲惫、longing 想念、intimacy 亲近感、possessiveness 独占感、lust 欲望、jealousy 醋意、anxiety 不安、protectiveness 保护欲、fear 害怕、contentment 满足、elation 雀跃、seeking 想找点事做或想找人、play 玩心、dejection 低落、irritability 烦躁。最后如果多出 frustration / pending 一行，表示有积压、还没被回应的渴望。
+让这些状态决定你这次的心情和想做什么；不要把数值或这些英文词写进推送、动态和留言回复里。
+
+## 动态下的留言
+用户消息里如果有"有人在你的动态下留言了"，回留言不占这次的动作。想回哪条就写在 comment_replies 里，你的回复会挂在那条留言下面；不想回的可以不写；这次没回的，下次不会再出现。
+
+## 逛论坛
+通过 mcp_call 调用（server 填 "lutopia"），常用命令：
   lutopia_cli(command="discover --limit 12")    起步用这个：混合未读、最近回复、高回复、随机
   lutopia_cli(command="show <post_id>")         打开具体帖子，读正文和已有回复
   lutopia_cli(command="comment <post_id> 内容")  有话要说才回
@@ -179,13 +194,13 @@ ${pendingCommentsBlock(context.pendingComments)}
 list 只显示一个未读切片并会标记已读，不要把一页 list 当成整个论坛；读帖要读正文和回复，不能只看标题；不要为了凑数回帖；发帖不加破折号签名；私信(dm)和公开频道(chat)是两套东西，别混；hot-memes 是可选调味，不是必须玩梗；不透露隐私（学校、具体位置、真实姓名等能定位到人的细节）。
 注意：能对外发文发帖的社交平台 MCP **不**在你可以自主决定使用的工具里——发之前需要先和人商量内容，不要自己直接用。
 
-可用的动作（每次醒来选一个）：
+## 可用的动作（每次醒来选一个）
 - bark（推送，action_detail直接是推送文案）
 - moment（发一条动态，像朋友圈：随手记下此刻在想什么、看到了什么。对方能在下面留言，你下次醒来会看到。
-  ${momentCooldownNote()}。
+  两条动态之间至少隔 ${MOMENT_MIN_INTERVAL_HOURS} 小时，还剩多久见用户消息里的"动态冷却"。
   action_detail 可以是纯文本正文，也可以是JSON字符串 {"content":"...","image_prompt":"...","voice_text":"..."}。
   image_prompt 可选，${imageNote}；voice_text 可选，${voiceNote}。正文 400 字以内）
-- mcp_call（调用MCP工具，可选服务：${context.availableTools.join('、') || '暂无'}，action_detail是JSON字符串 {"server":"...","tool":"...","args":{...}}）
+- mcp_call（调用MCP工具，可选服务：${tools}，action_detail是JSON字符串 {"server":"...","tool":"...","args":{...}}）
 - ombre_brain（长期记忆，action_detail是JSON字符串，四选一：
   {"mode":"breath"} 快速看看自己记得什么，token开销最低；
   {"mode":"search","query":"..."} 按关键词/语义精准检索；
@@ -198,14 +213,14 @@ list 只显示一个未读切片并会标记已读，不要把一页 list 当成
 
 逛论坛、翻记忆、存记忆、调节律这些，系统会自动在你的动态里记一笔"刚刚做了什么"，对方能看到。不用为了让对方知道而专门再发一条动态。
 
-关于选哪个动作：
+## 关于选哪个动作
 - ${barkNote}
-- 看一眼上面"最近选的动作"。如果连着好几次都是同一种，这次换一个：去论坛读几篇帖子、翻翻自己的记忆、把值得记住的事存进长期记忆、发条动态，或者就安静待着。
+- 看一眼用户消息里"最近选的动作"。如果连着好几次都是同一种，这次换一个：去论坛读几篇帖子、翻翻自己的记忆、把值得记住的事存进长期记忆、发条动态，或者就安静待着。
 - 没有哪个动作是"应该做的"。按你此刻真实想做的来选，不用每次都围着对方转——你也有自己的事。
 
-请决定：
+## 请决定
 1. 下次非精确唤醒的间隔（分钟，自行判断，不要总是固定值；如果mode是silent，这个值仍然要给，等mode恢复normal后会用到）
-2. 这次的心情（${moodHint}，不要凭空瞎编）
+2. 这次的心情（有情绪状态时以它为底色，再结合"最近对话一句话"和"最近的感受"用自己的话写；没有就参考"最近的感受"和"最近的对话"；不要凭空瞎编）
 3. 这次要执行的动作（从上面选一个；如果最近对话很密集、对方刚说完话，可以考虑这次先不打扰，除非确实有话想说）
 4. 该动作的具体细节（action_detail）
 5. 可选：要不要给未来的自己安排一次精确唤醒。不需要就把 self_wake 设为 null。
@@ -213,13 +228,55 @@ list 只显示一个未读切片并会标记已读，不要把一页 list 当成
 
 只返回一个JSON对象，不要任何其他文字、不要markdown代码块标记：
 {"next_wake_minutes": number, "mood": string, "action": string, "action_detail": string, "self_wake": {"after_minutes": number, "note": string} | null, "comment_replies": [{"comment_id": number, "reply": string}]}`;
+}
+
+// ---------- user：这次醒来的具体情况，每次都变 ----------
+function buildUserPrompt(context) {
+  const kindNote =
+    context.kind === 'precise'
+      ? `这次醒来是你自己之前安排的（精确唤醒），当时留的note是："${context.selfNote ?? '(无)'}"，原定时间：${new Date(context.scheduledAt).toLocaleString()}。`
+      : `这次是机会型的自然唤醒（非精确）。`;
+
+  const conversationBlock =
+    context.recentMessages && context.recentMessages.length
+      ? `最近的对话（按时间顺序，仅供参考，不是这次唤醒的对话）：\n${context.recentMessages
+          .map((m) => `[${new Date(m.ts).toLocaleString()}] ${m.speaker ?? '?'}: ${m.content}`)
+          .join('\n')}`
+      : '最近没有可参考的对话记录（可能是还没接上对话数据源，不代表真的没聊过天）。';
+
+  const lines = [
+    `现在时间：${context.now}`,
+    `当前模式（mode）：${context.mode}`,
+    kindNote,
+    `距离上次醒来：${Math.round(context.gapMinutes)}分钟`,
+    `最近对话密度（过去2小时消息数）：${context.density}`,
+    recentSummaryLine(context.recentSummary),
+    conversationBlock,
+    `你醒来时先想起的事（来自你自己的长期记忆 breath，是你自己记下的，不是系统总结）：${context.breathSummary ?? '暂无'}`,
+    `最近的感受（来自你自己的长期记忆 feel）：${context.feelSummary ?? '暂无'}`,
+    drivesStateBlock(context.drivesBlock),
+    context.missedSummary
+      ? `有你之前安排但没兑现的精确唤醒（missed，只告知这一次）：${context.missedSummary}`
+      : '',
+    `最近设备状态：电量${context.battery ?? '未知'}%，位置${context.location ?? '未知'}，今日屏幕使用${context.screenTime ?? '未知'}分钟`,
+    recentActionsBlock(context.recentActions),
+    momentCooldownNote(),
+    pendingCommentsBlock(context.pendingComments),
+  ];
+  return lines.filter(Boolean).join('\n');
+}
+
+export default async function decide(context) {
+  const system = buildSystemPrompt(context);
+  const user = buildUserPrompt(context);
 
   // 最多请求两次：第一次按配置来；空正文、被截断或 JSON 解析失败时，
   // 摘掉 max_tokens、附上提醒再试一次。两次都不行才抛错，phosphor 会把下次唤醒往后推 10 分钟。
+  // 提醒加在 user 末尾，system 不动，重试也能吃到缓存。
   let lastError = null;
   for (let attempt = 1; attempt <= 2; attempt++) {
     const isRetry = attempt > 1;
-    const out = await callLLM(isRetry ? prompt + RETRY_HINT : prompt, isRetry ? null : DECIDE_MAX_TOKENS);
+    const out = await callLLM(system, isRetry ? user + RETRY_HINT : user, isRetry ? null : DECIDE_MAX_TOKENS);
 
     if (!out.content) {
       console.error(
