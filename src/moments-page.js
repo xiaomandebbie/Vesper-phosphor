@@ -33,6 +33,7 @@ import {
   firstWeekday,
 } from './wall-time.js';
 import { getTopDrives } from './drives.js';
+import { tidyActivityContent, tidyActivityDetail } from './actions/activity.js';
 
 const MEDIA_DIR = process.env.MEDIA_DIR || '/opt/vesper/media';
 const MAX_COMMENT_CHARS = 1000;
@@ -368,13 +369,16 @@ const VOICE_SCRIPT = `(function () {
 })();`;
 
 function renderMoment(m, back, showDate) {
-  // 行为提示卡：白底黄框。只留时间、做了什么，有详情的点开能看；不放头像、点赞和留言
+  // 行为提示卡：白底黄框。只留时间、做了什么，有详情的点开能看；不放头像、点赞和留言。
+  // 不显示命令原文：老卡片里存着的命令，在这里整理掉；回帖、发帖显示回了什么、发了什么
   if (m.kind === 'activity') {
-    const body = `<span class="content">${escapeHtml(m.content)}</span>`;
-    const main = m.detail
+    const content = tidyActivityContent(m.content);
+    const detail = tidyActivityDetail(m.detail);
+    const body = `<span class="content">${escapeHtml(content)}</span>`;
+    const main = detail
       ? `<details class="activity-detail">
           <summary>${body}<span class="expand-hint" aria-hidden="true">点开看详情 ▾</span><span class="sr-only">，展开行动详情</span></summary>
-          <div class="detail">${escapeHtml(m.detail)}</div>
+          <div class="detail">${escapeHtml(detail)}</div>
         </details>`
       : body;
     return `<article class="moment activity" id="m${m.id}" aria-label="行为提示">
