@@ -23,7 +23,7 @@ import {
   daysInMonth,
   firstWeekday,
 } from './wall-time.js';
-import { isDrivesEnabled } from './drives.js';
+import { getTopDrives } from './drives.js';
 
 const USER_NAME = process.env.USER_DISPLAY_NAME || '我';
 const AI_NAME = process.env.AI_DISPLAY_NAME || 'TA';
@@ -90,14 +90,23 @@ function currentMood() {
   }
 }
 
-// 标题下那一行"TA此刻"。接了 Drivesoid 时整行可以点，进心绪页 /drives；没接就只是文字。
-function renderMoodLine(mood) {
-  const linked = isDrivesEnabled();
-  if (!mood && !linked) return '';
+// 标题下那一行"TA此刻"。接了 Drivesoid 就显示此刻最明显的三项情绪（和 decide 醒来时看到的是同一份），
+// 读不到就退回 TA 上次醒来写下的心情。整行始终可以点，进心绪页 /drives。
+function renderMoodLine(mood, top) {
   const label = `<span class="mood-label">${escapeHtml(AI_NAME)}此刻：</span>`;
-  if (!linked) return `<p class="mood-line">${label}${escapeHtml(mood)}</p>`;
-  const text = mood ? `${label}${escapeHtml(mood)}` : `看看${escapeHtml(AI_NAME)}此刻的心绪`;
-  return `<p class="mood-line"><a class="mood-link" href="/drives">${text}<span class="mood-more" aria-hidden="true">✦ 心绪 ›</span><span class="sr-only">，点开看心绪</span></a></p>`;
+  let inner;
+  if (top?.length) {
+    inner =
+      label +
+      top
+        .map((t) => `${escapeHtml(t.label)} <b class="mood-num">${t.value}</b>`)
+        .join('<span class="mood-sep" aria-hidden="true"> · </span><span class="sr-only">，</span>');
+  } else if (mood) {
+    inner = label + escapeHtml(mood);
+  } else {
+    inner = `看看${escapeHtml(AI_NAME)}此刻的心绪`;
+  }
+  return `<p class="mood-line"><a class="mood-link" href="/drives">${inner}<span class="mood-more" aria-hidden="true">✦ 心绪 ›</span><span class="sr-only">，点开看心绪</span></a></p>`;
 }
 
 // 过去的日子显示已经多少天，将来的显示还有多少天
@@ -321,6 +330,8 @@ const STYLE = `
   .mood-link { display: inline-block; min-height: 44px; padding: 12px 10px; margin: -12px 0; color: inherit; text-decoration: none;
     border-radius: 12px; }
   .mood-link:active { background: rgba(122, 62, 93, 0.06); }
+  .mood-num { font-family: Georgia, "Times New Roman", serif; font-size: 15px; color: var(--accent); }
+  .mood-sep { color: var(--gold); }
   .mood-more { margin-left: 6px; color: var(--gold); font-size: 12px; white-space: nowrap; }
   .card { background: var(--card); border-radius: 16px; padding: 16px; margin-bottom: 14px; box-shadow: 0 1px 3px rgba(60, 30, 60, 0.08); }
   .section-title { font-size: 15px; margin: 0 0 10px; color: var(--accent); letter-spacing: 0.1em; }
@@ -419,7 +430,7 @@ function layout(title, body) {
 </html>`;
 }
 
-function renderPage({ today, month, selected, anniversaries, marked, moments, back, mood }) {
+function renderPage({ today, month, selected, anniversaries, marked, moments, back, mood, top }) {
   const listTitle = selected ? `${selected.m} 月 ${selected.d} 日的动态` : '最近的动态';
   const empty = selected ? '这一天还没有动态。' : '还没有动态。';
   const items = moments.map((m) => renderMoment(m, back, !selected)).join('');
@@ -428,7 +439,7 @@ function renderPage({ today, month, selected, anniversaries, marked, moments, ba
     `<header class="hero">
       <h1 class="title">晨暮星</h1>
       <p class="subtitle" lang="en">Vesper<span aria-hidden="true">✨</span><span class="sr-only"> </span>Phosphor</p>
-      ${renderMoodLine(mood)}
+      ${renderMoodLine(mood, top)}
     </header>
     ${renderAnniversaries(anniversaries, today, back)}
     ${renderCalendar({ y: month.y, m: month.m, today, selected, marked })}
@@ -480,30 +491,48 @@ export function registerMomentRoutes(app, { requireBasicAuth, requireApiKey }) {
   app.get('/wake/anniversaries', requireApiKey, (req, res) => res.json(listAnniversaries()));
 
   // ---- 网页 ----
-  app.get('/moments', requireBasicAuth, (req, res) => {
-    const now = wallParts();
-    const today = { y: now.y, m: now.m, d: now.d };
-    const selected = parseDate(req.query.day);
-    const month =
-      parseMonth(req.query.month) ?? (selected ? { y: selected.y, m: selected.m } : { y: today.y, m: today.m });
+  // async：要等 Drivesoid 给出此刻最明显的三项。只读现成快照，不触发分类，Drivesoid 没开时立刻返回 null。
+  app.get('/moments', requireBasicAuth, async (req, res) => {
+    try {
+      const now = wallParts();
+      const today = { y: now.y, m: now.m, d: now.d };
+      const selected = parseDate(req.query.day);
+      const month =
+        parseMonth(req.query.month) ?? (selected ? { y: selected.y, m: selected.m } : { y: today.y, m: today.m });
 
-    const monthStart = wallMidnight(month.y, month.m, 1);
-    const monthEnd = wallMidnight(month.y, month.m + 1, 1);
-    const marked = new Set(listMomentTimestampsBetween(monthStart, monthEnd).map((r) => wallParts(r.ts).d));
+      const monthStart = wallMidnight(month.y, month.m, 1);
+      const monthEnd = wallMidnight(month.y, month.m + 1, 1);
+      const marked = new Set(listMomentTimestampsBetween(monthStart, monthEnd).map((r) => wallParts(r.ts).d));
 
-    const moments = selected
-      ? listMomentsBetween(wallMidnight(selected.y, selected.m, selected.d), wallMidnight(selected.y, selected.m, selected.d + 1))
-      : listMoments(RECENT_LIMIT);
+      const moments = selected
+        ? listMomentsBetween(wallMidnight(selected.y, selected.m, selected.d), wallMidnight(selected.y, selected.m, selected.d + 1))
+        : listMoments(RECENT_LIMIT);
 
-    const back = selected
-      ? pageUrl(month.y, month.m, ymd(selected))
-      : req.query.month
-        ? pageUrl(month.y, month.m)
-        : '/moments';
+      const back = selected
+        ? pageUrl(month.y, month.m, ymd(selected))
+        : req.query.month
+          ? pageUrl(month.y, month.m)
+          : '/moments';
 
-    res.send(
-      renderPage({ today, month, selected, anniversaries: listAnniversaries(), marked, moments, back, mood: currentMood() })
-    );
+      const top = await getTopDrives();
+
+      res.send(
+        renderPage({
+          today,
+          month,
+          selected,
+          anniversaries: listAnniversaries(),
+          marked,
+          moments,
+          back,
+          mood: currentMood(),
+          top,
+        })
+      );
+    } catch (err) {
+      console.error('moments page: 渲染失败', err);
+      res.status(500).send(errorPage('动态页出错了，看一下 vesper 的日志。', '/moments'));
+    }
   });
 
   app.post('/moments/anniversaries', requireBasicAuth, (req, res) => {
