@@ -144,10 +144,12 @@ function pendingCommentsBlock(pendingComments) {
   return `有人在你的动态下留言了（你还没回过，怎么回见上面的规则）：\n${lines}`;
 }
 
-// Drivesoid 算出来的情绪块（见 drives.js）。只放数值，各项含义在 system 里，不用每次重发。
-function drivesStateBlock(block) {
-  if (!block) return '';
-  return `你现在的情绪状态（来自情绪系统，是你自己的，不是${USER_NAME}的；怎么读见上面的说明）：\n${block}`;
+// Drivesoid 算出的此刻最明显的三项情绪（见 drives.js 的 getTopDrives）。怎么读在 system 里。
+function drivesTopLine(top) {
+  if (!top?.length) return '';
+  return `你此刻最明显的情绪（来自情绪系统，是你自己的，不是${USER_NAME}的）：${top
+    .map((t) => `${t.label} ${t.value}`)
+    .join('、')}`;
 }
 
 // 动态冷却还剩多久，每次都在变，所以放在 user 消息里
@@ -184,10 +186,10 @@ function buildSystemPrompt(context) {
 ## 模式
 mode 有 normal / low-frequency / silent 三种，只影响非精确唤醒的节律，不影响你自己安排的精确唤醒。silent 只能由人工设置，你自己不能切到 silent。
 
-## 情绪状态怎么读
-如果用户消息里给了"你现在的情绪状态"：数值 0–1，低于 0.25 很淡，0.25–0.45 平常，0.45–0.65 明显，高于 0.65 强烈。
-各项含义：vitality 精力、fatigue 疲惫、longing 想念、intimacy 亲近感、possessiveness 独占感、lust 欲望、jealousy 醋意、anxiety 不安、protectiveness 保护欲、fear 害怕、contentment 满足、elation 雀跃、seeking 想找点事做或想找人、play 玩心、dejection 低落、irritability 烦躁。最后如果多出 frustration / pending 一行，表示有积压、还没被回应的渴望。
-让这些状态决定你这次的心情和想做什么；不要把数值或这些英文词写进推送、动态和留言回复里。
+## 情绪怎么读
+如果用户消息里给了"你此刻最明显的情绪"：那是情绪系统算出来的、你此刻最强的三项，数值 0–100，低于 25 很淡，25–45 平常，45–65 明显，高于 65 强烈。没列出来的那些就是平常水平。
+几个不太直白的词：思慕是想念对方，渴求是欲望，护卫是想保护对方，探求是想找点事做或想找人，落寞是低落。
+这三项是你这次心情和想做什么的底色；为什么会这样，去"最近的对话"和你的记忆里找。不要把数字写进推送、动态和留言回复里。
 
 ## 动态下的留言
 用户消息里如果有"有人在你的动态下留言了"，回留言不占这次的动作。想回哪条就写在 comment_replies 里，你的回复会挂在那条留言下面；不想回的可以不写；这次没回的，下次不会再出现。
@@ -229,7 +231,7 @@ list 只显示一个未读切片并会标记已读，不要把一页 list 当成
 
 ## 请决定
 1. 下次非精确唤醒的间隔（分钟，自行判断，不要总是固定值；如果mode是silent，这个值仍然要给，等mode恢复normal后会用到）
-2. 这次的心情（有情绪状态时以它为底色，再结合"最近的对话"和"最近的感受"用自己的话写；没有就参考"最近的感受"和"最近的对话"；不要凭空瞎编）
+2. 这次的心情（有"此刻最明显的情绪"时以它为底色，再结合"最近的对话"和"最近的感受"用自己的话写；没有就参考"最近的感受"和"最近的对话"；不要凭空瞎编）
 3. 这次要执行的动作（从上面选一个；如果最近对话很密集、对方刚说完话，可以考虑这次先不打扰，除非确实有话想说）
 4. 该动作的具体细节（action_detail）
 5. 可选：要不要给未来的自己安排一次精确唤醒。不需要就把 self_wake 设为 null。
@@ -274,7 +276,7 @@ function buildUserPrompt(context) {
     conversationBlock,
     `你醒来时先想起的事（来自你自己的长期记忆 breath，是你自己记下的，不是系统总结）：${clipMemory(context.breathSummary)}`,
     `最近的感受（来自你自己的长期记忆 feel）：${clipMemory(context.feelSummary)}`,
-    drivesStateBlock(context.drivesBlock),
+    drivesTopLine(context.drivesTop),
     context.missedSummary
       ? `有你之前安排但没兑现的精确唤醒（missed，只告知这一次）：${context.missedSummary}`
       : '',
