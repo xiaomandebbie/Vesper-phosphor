@@ -15,10 +15,14 @@ import {
   markCommentsHandled,
   addMomentComment,
   pruneConversationLogIfDue,
+  getForumNotes,
+  addForumNotes,
   closeDb,
 } from './state.js';
-import decide from './decide.js';
+import { decideWithMessages, forumNextStep, FORUM_MAX_STEPS } from './decide.js';
 import { executeAction } from './actions/index.js';
+import { describeActivity, describeActivityDetail } from './actions/activity.js';
+import { addActivityMoment } from './moments-store.js';
 import { isImageEnabled, isVoiceEnabled } from './actions/moment.js';
 import { listAllTools, connectAll, callTool, isConnected } from './mcp-manager.js';
 import { isSharedTimelineEnabled, describeAction, postSharedEvent } from './timeline.js';
@@ -58,6 +62,12 @@ const CONVERSATION_LOG_KEEP = (() => {
   const keep = Number.isInteger(n) && n >= 0 && String(process.env.CONVERSATION_LOG_KEEP).trim() ? n : 30;
   return Math.max(keep, DECIDE_CONTEXT_LIMIT);
 })();
+
+// 论坛："看"的命令做完可以接着走；"写"的命令做完这次就结束
+const FORUM_READ_OPS = new Set(['discover', 'wander', 'list', 'show', 'activity']);
+const FORUM_WRITE_OPS = new Set(['comment', 'post']);
+// 下次醒来带多少条"最近在论坛做过的"
+const FORUM_NOTES_SHOWN = 6;
 
 // 模型返回的 JSON 字段不一定齐全、类型也不一定对。
 // 缺 next_wake_minutes 会让 next_wake_at 变成 NaN（存进库里是 NULL），之后每分钟都判定"该醒了"，
@@ -155,6 +165,114 @@ async function getMemorySummary() {
   return { breathSummary, feelSummary };
 }
 
+// ---------- 逛论坛连着走几步 ----------
+
+const forumOp = (command) => (String(command ?? '').trim().split(/\s+/)[0] || '').toLowerCase();
+
+// 这次醒来的动作是不是一条 lutopia 命令；是就返回 { server, tool, command }
+function forumCallOf(decision) {
+  if (decision?.action !== 'mcp_call') return null;
+  let j;
+  try {
+    j = JSON.parse(decision.action_detail);
+  } catch {
+    return null;
+  }
+  if (!j || !/lutopia/i.test(String(j.server ?? '')) || !j.tool) return null;
+  const command = String(j.args?.command ?? '').trim();
+  return command ? { server: j.server, tool: j.tool, command } : null;
+}
+
+// MCP 工具返回 { content: [{ type: 'text', text }, ...] }，只取文字
+function toolText(result) {
+  if (!Array.isArray(result?.content)) return '';
+  return result.content
+    .filter((c) => c?.type === 'text' && typeof c.text === 'string')
+    .map((c) => c.text)
+    .join('\n')
+    .trim();
+}
+
+const isToolError = (result) => result == null || Boolean(result?.isError);
+
+// 续走的每一步：和第一步一样在动态里记一张行为卡片；回帖、发帖再写一笔共享时间线
+async function recordForumStep(call, command, result, mood) {
+  const fake = {
+    action: 'mcp_call',
+    action_detail: JSON.stringify({ server: call.server, tool: call.tool, args: { command } }),
+    mood,
+  };
+  try {
+    const text = describeActivity(fake, result);
+    if (text) addActivityMoment(text, describeActivityDetail(fake, result));
+  } catch (err) {
+    console.error('phosphor: 记录论坛行为卡片失败', err.message);
+  }
+  if (FORUM_WRITE_OPS.has(forumOp(command))) await postSharedEvent(describeAction(fake, result));
+}
+
+// 醒来选的是论坛"看"的命令时，把返回内容交还给 TA，让 TA 决定下一步。
+// 停下来的情况：TA 给了 null、做了回帖或发帖、走满 FORUM_MAX_STEPS、出错、或者重复了同一条命令。
+// 返回这次走过的每一步（包括醒来时那一步），用来记"最近在论坛做过的"。
+async function continueForum(decision, firstResult, messages) {
+  const call = forumCallOf(decision);
+  if (!call) return [];
+  const steps = [{ command: call.command, text: toolText(firstResult), error: isToolError(firstResult) }];
+  let convo = messages;
+
+  while (convo && steps.length - 1 < FORUM_MAX_STEPS) {
+    const last = steps[steps.length - 1];
+    if (last.error || !FORUM_READ_OPS.has(forumOp(last.command))) break;
+
+    let next;
+    try {
+      next = await forumNextStep(convo, {
+        command: last.command,
+        resultText: last.text,
+        isError: last.error,
+        remaining: FORUM_MAX_STEPS - (steps.length - 1),
+      });
+    } catch (err) {
+      console.error('phosphor: 问论坛下一步失败，这次就逛到这里', err.message);
+      break;
+    }
+    convo = next.messages;
+
+    const command = next.command;
+    if (!command) {
+      console.log('phosphor: 论坛看完了，这次不再继续');
+      break;
+    }
+    if (steps.some((s) => s.command === command)) {
+      console.log(`phosphor: 论坛命令重复了（${command}），停下`);
+      break;
+    }
+
+    let result = null;
+    try {
+      result = await callTool(call.server, call.tool, { command });
+    } catch (err) {
+      console.error(`phosphor: 论坛命令失败（${command}）`, err.message);
+    }
+    steps.push({ command, text: toolText(result), error: isToolError(result) });
+    console.log(`phosphor: 论坛第 ${steps.length} 步：${command}${isToolError(result) ? '（失败）' : ''}`);
+    await recordForumStep(call, command, result, decision.mood);
+  }
+  return steps;
+}
+
+// 走过的论坛步骤记下来，下次醒来带上。"看"的记一小段看到的内容，"写"的命令本身就是内容。失败的不记。
+function rememberForumSteps(steps) {
+  const notes = steps
+    .filter((s) => !s.error)
+    .map((s) => ({
+      ts: Date.now(),
+      command: s.command.slice(0, 200),
+      excerpt: FORUM_WRITE_OPS.has(forumOp(s.command)) ? '' : s.text.replace(/\s+/g, ' ').slice(0, 160),
+    }));
+  if (notes.length) addForumNotes(notes);
+}
+
 async function runDecisionCycle({ kind, scheduledAt = null, selfNote = null, cleanup = null }) {
   const wakeState = getWakeState();
   const latestDevice = getLatestDeviceReport();
@@ -195,6 +313,7 @@ async function runDecisionCycle({ kind, scheduledAt = null, selfNote = null, cle
     screenTime: latestDevice?.screen_time_min ?? null,
     availableTools: (await listAllTools()).map((t) => t.name),
     recentActions: getRecentActions(8),
+    forumNotes: getForumNotes(FORUM_NOTES_SHOWN),
     pendingComments,
     imageEnabled: isImageEnabled(),
     voiceEnabled: isVoiceEnabled(),
@@ -202,11 +321,14 @@ async function runDecisionCycle({ kind, scheduledAt = null, selfNote = null, cle
   };
 
   let decision = null;
+  let messages = null;
   let result = null;
   let errorMessage = null;
 
   try {
-    decision = normalizeDecision(await decide(context), wakeState.mood);
+    const out = await decideWithMessages(context);
+    decision = normalizeDecision(out.decision, wakeState.mood);
+    messages = out.messages;
     console.log(`[${kind}] decision:`, decision);
   } catch (err) {
     errorMessage = err.message;
@@ -227,6 +349,15 @@ async function runDecisionCycle({ kind, scheduledAt = null, selfNote = null, cle
     } catch (err) {
       errorMessage = err.message;
       console.error(`[${kind}] executeAction failed:`, err);
+    }
+  }
+
+  // 逛论坛：看完了可以接着点开、回帖、发帖。出什么错都不影响这次唤醒剩下的收尾
+  if (decision && !errorMessage) {
+    try {
+      rememberForumSteps(await continueForum(decision, result, messages));
+    } catch (err) {
+      console.error(`[${kind}] continueForum failed:`, err);
     }
   }
 
@@ -314,7 +445,7 @@ async function cleanupTick() {
   await runDecisionCycle({ kind: 'after_cleanup', cleanup: { deleted, hours: CLEAN_HOURS } });
 }
 
-// decide() 加上重试可能跑超过一分钟；上一轮没跑完就跳过这一轮，
+// decide() 加上重试、再加上逛论坛的续步，可能跑超过一分钟；上一轮没跑完就跳过这一轮，
 // 不然 next_wake_at 还没更新，同一次唤醒会被并发触发两遍。
 let ticking = false;
 async function tick() {
@@ -359,7 +490,7 @@ async function main() {
   process.on('SIGINT', () => shutdown('SIGINT'));
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   console.log(
-    `phosphor: 最长唤醒间隔 ${MAX_WAKE_MINUTES} 分钟；决策带最近对话 ${DECIDE_CONTEXT_LIMIT} 条；对话记录清理：${CLEAN_HOURS > 0 ? `每 ${CLEAN_HOURS} 小时，保留最新 ${CONVERSATION_LOG_KEEP} 条` : '关闭'}；共享时间线：${isSharedTimelineEnabled() ? '已开启' : '未开启'}；动态配图：${isImageEnabled() ? '已开启' : '未配置'}；动态语音：${isVoiceEnabled() ? '已开启' : '未配置'}；情绪（Drivesoid）：${isDrivesEnabled() ? '已接入' : '未接入'}`
+    `phosphor: 最长唤醒间隔 ${MAX_WAKE_MINUTES} 分钟；决策带最近对话 ${DECIDE_CONTEXT_LIMIT} 条；对话记录清理：${CLEAN_HOURS > 0 ? `每 ${CLEAN_HOURS} 小时，保留最新 ${CONVERSATION_LOG_KEEP} 条` : '关闭'}；论坛一次最多再走 ${FORUM_MAX_STEPS} 步；共享时间线：${isSharedTimelineEnabled() ? '已开启' : '未开启'}；动态配图：${isImageEnabled() ? '已开启' : '未配置'}；动态语音：${isVoiceEnabled() ? '已开启' : '未配置'}；情绪（Drivesoid）：${isDrivesEnabled() ? '已接入' : '未接入'}`
   );
   await connectAll();
   await tick();
