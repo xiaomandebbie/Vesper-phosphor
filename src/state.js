@@ -79,6 +79,14 @@ CREATE TABLE IF NOT EXISTS moment_comments (
 CREATE INDEX IF NOT EXISTS idx_moment_comments_moment ON moment_comments (moment_id);
 CREATE INDEX IF NOT EXISTS idx_moment_comments_pending ON moment_comments (author, handled);
 
+-- 最近在论坛做过的事（命令原文 + 看到的一小段），下次醒来带给 TA，想接着看、接着聊时有 post_id 可用。
+CREATE TABLE IF NOT EXISTS forum_notes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts INTEGER NOT NULL,
+  command TEXT NOT NULL,
+  excerpt TEXT
+);
+
 -- 记录哪些一次性迁移已经做过
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
 `);
@@ -251,6 +259,29 @@ export function getPendingComments(limit = 5) {
 export function markCommentsHandled(ids) {
   const update = stmt('UPDATE moment_comments SET handled = 1 WHERE id = ?');
   for (const id of ids) update.run(id);
+}
+
+// ---------- 论坛笔记 ----------
+// phosphor 逛完论坛后把走过的每一步记下来（见 phosphor.js 的 rememberForumSteps），
+// 下次醒来取最近几条给 TA 看。表里只留最新 FORUM_NOTES_KEEP 条，不会一直涨。
+const FORUM_NOTES_KEEP = 50;
+
+const addForumNotesTx = db.transaction((notes) => {
+  const insert = stmt('INSERT INTO forum_notes (ts, command, excerpt) VALUES (?, ?, ?)');
+  for (const n of notes) insert.run(n.ts ?? Date.now(), String(n.command ?? ''), n.excerpt ?? null);
+  stmt(
+    'DELETE FROM forum_notes WHERE id NOT IN (SELECT id FROM forum_notes ORDER BY ts DESC, id DESC LIMIT ?)'
+  ).run(FORUM_NOTES_KEEP);
+});
+
+export function addForumNotes(notes) {
+  if (!Array.isArray(notes) || !notes.length) return;
+  addForumNotesTx(notes);
+}
+
+// 最近 limit 条（从早到晚）
+export function getForumNotes(limit = 6) {
+  return stmt('SELECT ts, command, excerpt FROM forum_notes ORDER BY ts DESC, id DESC LIMIT ?').all(limit).reverse();
 }
 
 // 对话记录：由外部聊天前端主动上报，phosphor 拿它算密度、当"最近聊了什么"的真实上下文。
