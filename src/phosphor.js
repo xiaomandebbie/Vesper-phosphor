@@ -23,6 +23,7 @@ import { listAllTools, connectAll, callTool, isConnected } from './mcp-manager.j
 import { isSharedTimelineEnabled, describeAction, postSharedEvent } from './timeline.js';
 import { getSharedContext, countRecentChat } from './context.js';
 import { getDrivesBlock, isDrivesEnabled } from './drives.js';
+import { maybeCleanup, isCleanupEnabled, KEEP_HOURS, KEEP_MIN } from './cleanup.js';
 
 const TICK_MS = 60 * 1000;
 const MISSED_GRACE_MS = 3 * 60 * 1000;
@@ -128,9 +129,8 @@ async function callOmbre(toolName, args) {
 }
 
 // 醒来先想起自己是谁。
-// 原来只拉 feel（"我现在感觉怎么样"），后台这一侧就只剩情绪，看不到主线发生过什么——
-// 表现出来就是"失忆"：知道心里闷，但想不起为什么。breath 是 0 参数、0 次 LLM 调用，
-// 纯读库，最省 token 的那条路，正好用来补这个缺口。
+// 只拉 feel（"我现在感觉怎么样"）的话，后台这一侧就只剩情绪，看不到主线发生过什么——
+// 表现出来就是"失忆"：知道心里闷，但想不起为什么。breath 是 0 参数的纯读库调用，正好补这个缺口。
 async function getMemorySummary() {
   if (!isConnected('ombre-brain')) return { breathSummary: null, feelSummary: null };
   const [breathSummary, feelSummary] = await Promise.all([
@@ -283,6 +283,12 @@ async function tick() {
   if (ticking) return;
   ticking = true;
   try {
+    // 对话记录每 24 小时清一次，没到时间就什么都不做（只读一次 meta，不花钱）
+    try {
+      await maybeCleanup();
+    } catch (err) {
+      console.error('cleanup error:', err);
+    }
     try {
       await nonPreciseTick();
     } catch (err) {
@@ -315,8 +321,11 @@ function shutdown(signal) {
 async function main() {
   process.on('SIGINT', () => shutdown('SIGINT'));
   process.on('SIGTERM', () => shutdown('SIGTERM'));
+  const cleanupNote = isCleanupEnabled()
+    ? `保留 ${KEEP_HOURS} 小时（至少 ${KEEP_MIN} 条），每 24 小时清理一次`
+    : '不清理';
   console.log(
-    `phosphor: 最长唤醒间隔 ${MAX_WAKE_MINUTES} 分钟；决策带最近对话 ${DECIDE_CONTEXT_LIMIT} 条；共享时间线：${isSharedTimelineEnabled() ? '已开启' : '未开启'}；动态配图：${isImageEnabled() ? '已开启' : '未配置'}；动态语音：${isVoiceEnabled() ? '已开启' : '未配置'}；情绪（Drivesoid）：${isDrivesEnabled() ? '已接入' : '未接入'}`
+    `phosphor: 最长唤醒间隔 ${MAX_WAKE_MINUTES} 分钟；决策带最近对话 ${DECIDE_CONTEXT_LIMIT} 条；对话记录：${cleanupNote}；共享时间线：${isSharedTimelineEnabled() ? '已开启' : '未开启'}；动态配图：${isImageEnabled() ? '已开启' : '未配置'}；动态语音：${isVoiceEnabled() ? '已开启' : '未配置'}；情绪（Drivesoid）：${isDrivesEnabled() ? '已接入' : '未接入'}`
   );
   await connectAll();
   await tick();
