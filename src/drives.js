@@ -1,11 +1,12 @@
 // 接 Drivesoid（情绪驱动系统，单独部署的旁路服务，默认 http://127.0.0.1:24601）。
 //
-// 这里做两件事：
+// 这里做三件事：
 //   1. 上报：gateway 每记一条聊天，就报给 Drivesoid（msg_user / msg_assistant）。
 //      Drivesoid 用自己的分类模型给消息打情绪标签，再更新情绪状态。
 //   2. 读取：phosphor 每次醒来先读当前情绪块（/api/drives/context），放进 decide 的 prompt。
+//   3. 心绪页：vesper 的 /drives 页面读完整状态（/api/drives/status）画出来，见 drives-page.js。
 //
-// 以前还有第三件：醒来时调一次模型把最近对话提炼成一句话。为了省 token 去掉了，
+// 以前还有一件：醒来时调一次模型把最近对话提炼成一句话。为了省 token 去掉了，
 // decide 本来就能看到最近的对话原文和最近选过的动作，够它参考。
 //
 // DRIVES_URL 不填时上报和读取都不做，phosphor 和 gateway 的行为跟原来一样。
@@ -85,4 +86,34 @@ export async function getDrivesBlock() {
     console.error('drives: 读情绪失败（Drivesoid 在运行吗？）:', err.message);
     return null;
   }
+}
+
+// ---------- 心绪页用的完整状态 ----------
+
+async function getJson(path) {
+  const res = await fetch(`${DRIVES_URL}${path}`, { signal: AbortSignal.timeout(READ_TIMEOUT_MS) });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+// 返回 { status, config } 或 { error: 'disabled' | 'unreachable' | 'empty' }。
+// 只读快照，不触发 tick：页面刷新得再勤也不会多调分类模型。
+// config 只用来取各维度的基线（dimensions.neutral），读不到就用默认值，不影响页面。
+export async function getDrivesStatus() {
+  if (!DRIVES_URL) return { error: 'disabled' };
+  let status;
+  try {
+    status = await getJson('/api/drives/status');
+  } catch (err) {
+    console.error('drives: 读情绪状态失败（Drivesoid 在运行吗？）:', err.message);
+    return { error: 'unreachable' };
+  }
+  if (!status?.display) return { error: 'empty' };
+  let config = null;
+  try {
+    config = await getJson('/api/dashboard/config');
+  } catch {
+    // 基线用默认值
+  }
+  return { status, config };
 }

@@ -12,6 +12,7 @@ import {
   getRecentConversation,
 } from './state.js';
 import { registerMomentRoutes } from './moments-page.js';
+import { registerDrivesRoutes } from './drives-page.js';
 
 const app = express();
 app.use(express.json());
@@ -55,7 +56,7 @@ function pruneOldMedia() {
 pruneOldMedia();
 setInterval(pruneOldMedia, 24 * 60 * 60 * 1000);
 
-// 给网页浏览的路由（/moments、/health、/media）加 Basic Auth。
+// 给网页浏览的路由（/moments、/drives、/health、/media）加 Basic Auth。
 function requireBasicAuth(req, res, next) {
   if (!BASIC_USER || !BASIC_PASS) return next();
   const auth = req.headers.authorization;
@@ -159,6 +160,8 @@ app.get('/wake/conversation', requireApiKey, (req, res) => {
 
 // 动态页 /moments（标题、纪念日、日历、按天看动态、留言）以及对应接口，见 moments-page.js
 registerMomentRoutes(app, { requireBasicAuth, requireApiKey });
+// 心绪页 /drives（Drivesoid 的情绪状态），见 drives-page.js
+registerDrivesRoutes(app, { requireBasicAuth });
 
 app.get('/health', requireBasicAuth, (req, res) => res.json({ ok: true, service: 'vesper' }));
 
