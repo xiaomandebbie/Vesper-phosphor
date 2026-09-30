@@ -23,6 +23,7 @@ import {
   daysInMonth,
   firstWeekday,
 } from './wall-time.js';
+import { isDrivesEnabled } from './drives.js';
 
 const USER_NAME = process.env.USER_DISPLAY_NAME || '我';
 const AI_NAME = process.env.AI_DISPLAY_NAME || 'TA';
@@ -87,6 +88,16 @@ function currentMood() {
   } catch {
     return null;
   }
+}
+
+// 标题下那一行"TA此刻"。接了 Drivesoid 时整行可以点，进心绪页 /drives；没接就只是文字。
+function renderMoodLine(mood) {
+  const linked = isDrivesEnabled();
+  if (!mood && !linked) return '';
+  const label = `<span class="mood-label">${escapeHtml(AI_NAME)}此刻：</span>`;
+  if (!linked) return `<p class="mood-line">${label}${escapeHtml(mood)}</p>`;
+  const text = mood ? `${label}${escapeHtml(mood)}` : `看看${escapeHtml(AI_NAME)}此刻的心绪`;
+  return `<p class="mood-line"><a class="mood-link" href="/drives">${text}<span class="mood-more" aria-hidden="true">✦ 心绪 ›</span><span class="sr-only">，点开看心绪</span></a></p>`;
 }
 
 // 过去的日子显示已经多少天，将来的显示还有多少天
@@ -306,6 +317,11 @@ const STYLE = `
     font-size: 14px; letter-spacing: 0.2em; color: var(--muted); }
   .mood-line { margin: 12px auto 0; max-width: 90%; font-size: 13px; line-height: 1.5; color: var(--muted); word-break: break-word; }
   .mood-line .mood-label { color: var(--accent); margin-right: 4px; }
+  /* 可以点的"TA此刻"：看起来还是那行字，末尾多一个小入口，点击区域撑到 44px 高 */
+  .mood-link { display: inline-block; min-height: 44px; padding: 12px 10px; margin: -12px 0; color: inherit; text-decoration: none;
+    border-radius: 12px; }
+  .mood-link:active { background: rgba(122, 62, 93, 0.06); }
+  .mood-more { margin-left: 6px; color: var(--gold); font-size: 12px; white-space: nowrap; }
   .card { background: var(--card); border-radius: 16px; padding: 16px; margin-bottom: 14px; box-shadow: 0 1px 3px rgba(60, 30, 60, 0.08); }
   .section-title { font-size: 15px; margin: 0 0 10px; color: var(--accent); letter-spacing: 0.1em; }
   .anniv-list { list-style: none; margin: 0; padding: 0; }
@@ -407,15 +423,12 @@ function renderPage({ today, month, selected, anniversaries, marked, moments, ba
   const listTitle = selected ? `${selected.m} 月 ${selected.d} 日的动态` : '最近的动态';
   const empty = selected ? '这一天还没有动态。' : '还没有动态。';
   const items = moments.map((m) => renderMoment(m, back, !selected)).join('');
-  const moodLine = mood
-    ? `<p class="mood-line"><span class="mood-label">${escapeHtml(AI_NAME)}此刻：</span>${escapeHtml(mood)}</p>`
-    : '';
   return layout(
     '晨暮星',
     `<header class="hero">
       <h1 class="title">晨暮星</h1>
       <p class="subtitle" lang="en">Vesper<span aria-hidden="true">✨</span><span class="sr-only"> </span>Phosphor</p>
-      ${moodLine}
+      ${renderMoodLine(mood)}
     </header>
     ${renderAnniversaries(anniversaries, today, back)}
     ${renderCalendar({ y: month.y, m: month.m, today, selected, marked })}
