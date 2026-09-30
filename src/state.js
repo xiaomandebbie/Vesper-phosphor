@@ -54,6 +54,7 @@ CREATE TABLE IF NOT EXISTS conversation_log (
   speaker TEXT,
   content TEXT
 );
+CREATE INDEX IF NOT EXISTS idx_conversation_log_ts ON conversation_log (ts);
 
 -- 动态：TA 发的，像朋友圈。可以配图、配音。
 CREATE TABLE IF NOT EXISTS moments (
@@ -79,7 +80,7 @@ CREATE TABLE IF NOT EXISTS moment_comments (
 CREATE INDEX IF NOT EXISTS idx_moment_comments_moment ON moment_comments (moment_id);
 CREATE INDEX IF NOT EXISTS idx_moment_comments_pending ON moment_comments (author, handled);
 
--- 记录哪些一次性迁移已经做过
+-- 记录一次性迁移、上次清理时间这类小状态
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
 `);
 
@@ -103,7 +104,7 @@ for (const sql of migrations) {
 // 预编译语句缓存。
 // 原来每次调用都 db.prepare() 一个新 Statement，用完丢给垃圾回收；
 // 进程退出时 Node 在拆环境，这些还没回收的 Statement 才析构，
-// 就撞上日志里那个 RemoveEnvironmentCleanupHook / (env) != nullptr 断言。
+// 就撞上 RemoveEnvironmentCleanupHook / (env) != nullptr 断言。
 // 缓存起来之后 Statement 数量固定、一直被引用，关库时统一收尾。
 const stmtCache = new Map();
 function stmt(sql) {
@@ -137,6 +138,18 @@ try {
   if (n) console.log(`state: 已把 ${n} 篇旧日记搬进动态`);
 } catch (err) {
   console.error('state: 旧日记搬进动态失败（不影响运行，下次启动会再试）:', err.message);
+}
+
+// ---------- meta：小状态 ----------
+
+export function getMeta(key) {
+  return stmt('SELECT value FROM meta WHERE key = ?').get(key)?.value ?? null;
+}
+export function setMeta(key, value) {
+  stmt('INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(
+    key,
+    String(value)
+  );
 }
 
 export function getWakeState() {
@@ -253,7 +266,9 @@ export function markCommentsHandled(ids) {
   for (const id of ids) update.run(id);
 }
 
-// 对话记录：由外部聊天前端主动上报，phosphor 拿它算密度、当"最近聊了什么"的真实上下文。
+// ---------- 对话记录 ----------
+
+// 由聊天前端经网关上报，phosphor 拿它算密度、当"最近聊了什么"的真实上下文。
 export function addConversationMessage(speaker, content) {
   stmt('INSERT INTO conversation_log (ts, speaker, content) VALUES (?, ?, ?)').run(
     Date.now(),
@@ -267,6 +282,18 @@ export function getRecentConversation(limit = 20) {
 }
 export function countRecentConversation(windowMs) {
   return stmt('SELECT COUNT(*) AS c FROM conversation_log WHERE ts >= ?').get(Date.now() - windowMs).c;
+}
+
+// 清理对话记录：删掉 cutoffTs 之前的，但不管多旧，最新的 keepMin 条总是留着，
+// 免得清完之后"最近的对话"一条都没有（聊得少的时候，最近几条可能都在一天以前）。
+// 返回删了多少条。
+export function pruneConversationLog(cutoffTs, keepMin = 0) {
+  const keep = Math.max(0, Math.floor(keepMin));
+  return stmt(
+    `DELETE FROM conversation_log
+     WHERE ts < ?
+       AND id NOT IN (SELECT id FROM conversation_log ORDER BY ts DESC, id DESC LIMIT ?)`
+  ).run(cutoffTs, keep).changes;
 }
 
 // 关库。重复调用安全：已关就跳过。
