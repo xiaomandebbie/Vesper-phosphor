@@ -1,7 +1,7 @@
-// 动态页 /moments：标题、纪念日、小日历、按天看动态、留言、回复、点赞。
+// 动态页 /moments：标题、此刻心情、纪念日、小日历、按天看动态、留言、回复、点赞。
 // vesper.js 里挂载：registerMomentRoutes(app, { requireBasicAuth, requireApiKey })
 // 页面是纯服务端渲染，不依赖 JavaScript，手机浏览器直接能用。展开详情、回复框都用 <details>。
-import { getMoment, listMoments, listMomentComments, addMomentComment } from './state.js';
+import { getMoment, listMoments, listMomentComments, addMomentComment, getWakeState } from './state.js';
 import {
   listMomentsBetween,
   listMomentTimestampsBetween,
@@ -28,6 +28,7 @@ const USER_NAME = process.env.USER_DISPLAY_NAME || '我';
 const AI_NAME = process.env.AI_DISPLAY_NAME || 'TA';
 const MAX_COMMENT_CHARS = 1000;
 const MAX_ANNIV_NAME = 30;
+const MAX_MOOD_CHARS = 60;
 const RECENT_LIMIT = 20;
 const WEEKDAYS = ['一', '二', '三', '四', '五', '六', '日'];
 
@@ -75,6 +76,17 @@ function shiftMonth(y, m, delta) {
 
 function pageUrl(y, m, day) {
   return `/moments?month=${y}-${pad(m)}${day ? `&day=${day}` : ''}`;
+}
+
+// TA 最近一次醒来时写下的心情（wake_state.mood）。每次醒来都会更新，读库不调模型。
+function currentMood() {
+  try {
+    const s = String(getWakeState()?.mood ?? '').replace(/\s+/g, ' ').trim();
+    if (!s) return null;
+    return s.length > MAX_MOOD_CHARS ? `${s.slice(0, MAX_MOOD_CHARS)}…` : s;
+  } catch {
+    return null;
+  }
 }
 
 // 过去的日子显示已经多少天，将来的显示还有多少天
@@ -292,6 +304,8 @@ const STYLE = `
   }
   .subtitle { margin: 6px 0 0; font-family: "Cormorant Garamond", "Didot", "Bodoni 72", Georgia, serif; font-style: italic;
     font-size: 14px; letter-spacing: 0.2em; color: var(--muted); }
+  .mood-line { margin: 12px auto 0; max-width: 90%; font-size: 13px; line-height: 1.5; color: var(--muted); word-break: break-word; }
+  .mood-line .mood-label { color: var(--accent); margin-right: 4px; }
   .card { background: var(--card); border-radius: 16px; padding: 16px; margin-bottom: 14px; box-shadow: 0 1px 3px rgba(60, 30, 60, 0.08); }
   .section-title { font-size: 15px; margin: 0 0 10px; color: var(--accent); letter-spacing: 0.1em; }
   .anniv-list { list-style: none; margin: 0; padding: 0; }
@@ -389,15 +403,19 @@ function layout(title, body) {
 </html>`;
 }
 
-function renderPage({ today, month, selected, anniversaries, marked, moments, back }) {
+function renderPage({ today, month, selected, anniversaries, marked, moments, back, mood }) {
   const listTitle = selected ? `${selected.m} 月 ${selected.d} 日的动态` : '最近的动态';
   const empty = selected ? '这一天还没有动态。' : '还没有动态。';
   const items = moments.map((m) => renderMoment(m, back, !selected)).join('');
+  const moodLine = mood
+    ? `<p class="mood-line"><span class="mood-label">${escapeHtml(AI_NAME)}此刻：</span>${escapeHtml(mood)}</p>`
+    : '';
   return layout(
     '晨暮星',
     `<header class="hero">
       <h1 class="title">晨暮星</h1>
       <p class="subtitle" lang="en">Vesper<span aria-hidden="true">✨</span><span class="sr-only"> </span>Phosphor</p>
+      ${moodLine}
     </header>
     ${renderAnniversaries(anniversaries, today, back)}
     ${renderCalendar({ y: month.y, m: month.m, today, selected, marked })}
@@ -470,7 +488,9 @@ export function registerMomentRoutes(app, { requireBasicAuth, requireApiKey }) {
         ? pageUrl(month.y, month.m)
         : '/moments';
 
-    res.send(renderPage({ today, month, selected, anniversaries: listAnniversaries(), marked, moments, back }));
+    res.send(
+      renderPage({ today, month, selected, anniversaries: listAnniversaries(), marked, moments, back, mood: currentMood() })
+    );
   });
 
   app.post('/moments/anniversaries', requireBasicAuth, (req, res) => {
