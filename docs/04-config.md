@@ -109,6 +109,34 @@ curl -s -X POST localhost:3001/wake/self-wake -H "x-api-key: $KEY" -H "content-t
 - **不要改 tick**。phosphor 每 60 秒检查一次"该不该醒"，这一步不调模型、不花钱；改慢了会让精确唤醒错过 3 分钟的宽限期，变成 `missed`
 - **间隔越短越花钱**。每次醒来都会调一次模型
 
+## 对话记录清理
+
+网关把每条聊天追加进 `conversation_log`，只增不删。phosphor 隔一段时间清一次旧的。
+
+| 变量 | 说明 |
+|---|---|
+| `CONVERSATION_LOG_CLEAN_HOURS` | 多久清一次，同时也是清掉多久以前的（小时）。**不填 = 24**，填 `0` 不清理 |
+| `CONVERSATION_LOG_KEEP` | 清理时最新多少条无论多旧都留着。**不填 = 30**；比 `DECIDE_CONTEXT_LIMIT` 小时按 `DECIDE_CONTEXT_LIMIT` 算 |
+
+怎么工作：
+
+- 上次清理的时间记在数据库 `meta` 表里（`conversation_log_cleaned_at`），**重启不会重新计时，也不会重复清**。第一次启动只记下时间，从那一刻起算，过了 24 小时才第一次清
+- 清的是 24 小时以前的记录，但最新 30 条始终保留，所以清完之后"最近的对话"、heartbeat-wake 的共享上下文、Drivesoid 分类的前文都不会是空的
+- **真删掉了东西，TA 会马上醒一次**（`wake_log` 里 `kind = after_cleanup`）。这一轮照常翻 breath / feel，提示里会告诉 TA 旧聊天刚清掉，想留住的可以自己 hold 进长期记忆。一天多一次模型调用。一条都没删、或者 `silent` 模式下不醒
+- 这一次不改自然唤醒的排期，和精确唤醒一样是额外的一次
+
+> ⚠️ **删掉的原文找不回来**，也不会自动存进 Ombre Brain。只有 TA 自己 hold 过的才留在长期记忆里。想留底的话，清理前自己备份一下 `data/state.db`。
+
+确认开了没有：
+
+```bash
+pm2 logs phosphor --lines 20 --nostream | grep 对话记录清理
+# 对话记录清理：每 24 小时，保留最新 30 条
+
+pm2 logs phosphor --lines 2000 --nostream | grep 清理对话记录
+# phosphor: 清理对话记录，删掉 N 条 24 小时以前的（最新 30 条保留）
+```
+
 ## 称呼
 
 | 变量 | 说明 |

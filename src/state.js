@@ -269,6 +269,38 @@ export function countRecentConversation(windowMs) {
   return stmt('SELECT COUNT(*) AS c FROM conversation_log WHERE ts >= ?').get(Date.now() - windowMs).c;
 }
 
+// ---------- 对话记录清理 ----------
+// conversation_log 只追加不删，时间长了会一直涨。phosphor 隔一段时间清一次旧的（见 phosphor.js 的 cleanupTick）。
+// 上次清理的时间记在 meta 表里，进程重启不会重复清，也不会因为重启把计时清零。
+const CONVERSATION_CLEANED_KEY = 'conversation_log_cleaned_at';
+
+// 用 IMMEDIATE 事务先拿写锁再判断到没到时间，和旧日记迁移同一个做法。
+// 第一次运行（meta 里还没有记录）只记下现在的时间，从这一刻开始算，不立刻清。
+// 删的是 maxAgeMs 以前的记录，但最新 keep 条无论多旧都留着，免得清完"最近的对话"是空的。
+const pruneConversationLogTx = db.transaction(({ intervalMs, maxAgeMs, keep, now }) => {
+  const markNow = () =>
+    stmt('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)').run(CONVERSATION_CLEANED_KEY, String(now));
+  const row = stmt('SELECT value FROM meta WHERE key = ?').get(CONVERSATION_CLEANED_KEY);
+  const last = Number(row?.value);
+  if (!row || !Number.isFinite(last)) {
+    markNow();
+    return null;
+  }
+  if (now - last < intervalMs) return null;
+  const deleted = stmt(
+    `DELETE FROM conversation_log
+     WHERE ts < ?
+       AND id NOT IN (SELECT id FROM conversation_log ORDER BY ts DESC, id DESC LIMIT ?)`
+  ).run(now - maxAgeMs, keep).changes;
+  markNow();
+  return deleted;
+});
+
+// 到时间了就清理，返回删了几条（可能是 0）；还没到时间返回 null。
+export function pruneConversationLogIfDue({ intervalMs, maxAgeMs, keep }) {
+  return pruneConversationLogTx.immediate({ intervalMs, maxAgeMs, keep, now: Date.now() });
+}
+
 // 关库。重复调用安全：已关就跳过。
 export function closeDb() {
   if (db.open) {
