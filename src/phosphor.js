@@ -23,7 +23,7 @@ import { isImageEnabled, isVoiceEnabled } from './actions/moment.js';
 import { listAllTools, connectAll, callTool, isConnected } from './mcp-manager.js';
 import { isSharedTimelineEnabled, describeAction, postSharedEvent } from './timeline.js';
 import { getSharedContext, countRecentChat } from './context.js';
-import { getDrivesBlock, isDrivesEnabled } from './drives.js';
+import { getTopDrives, isDrivesEnabled } from './drives.js';
 
 const TICK_MS = 60 * 1000;
 const MISSED_GRACE_MS = 3 * 60 * 1000;
@@ -161,8 +161,11 @@ async function runDecisionCycle({ kind, scheduledAt = null, selfNote = null, cle
   // 最近对话：所有聊天窗口的记录 + 唤醒事件，换窗口不会丢（见 context.js）
   const density = countRecentChat(2 * 60 * 60 * 1000);
   const recentMessages = getSharedContext(DECIDE_CONTEXT_LIMIT);
-  // 长期记忆和 Drivesoid 情绪互不依赖，一起取。任何一个取不到都是 null，不影响这一轮唤醒。
-  const [{ breathSummary, feelSummary }, drivesBlock] = await Promise.all([getMemorySummary(), getDrivesBlock()]);
+  // 长期记忆和 Drivesoid 最明显的三项情绪互不依赖，一起取。任何一个取不到都是 null，不影响这一轮唤醒。
+  const [{ breathSummary, feelSummary }, drivesTop] = await Promise.all([
+    getMemorySummary(),
+    getTopDrives({ refresh: true }),
+  ]);
   const gapMinutes = wakeState.updated_at ? (Date.now() - wakeState.updated_at) / 60000 : 0;
   const pendingComments = getPendingComments(MAX_COMMENTS_PER_WAKE);
 
@@ -183,7 +186,7 @@ async function runDecisionCycle({ kind, scheduledAt = null, selfNote = null, cle
     gapMinutes,
     density,
     recentMessages,
-    drivesBlock,
+    drivesTop,
     breathSummary,
     feelSummary,
     missedSummary,
