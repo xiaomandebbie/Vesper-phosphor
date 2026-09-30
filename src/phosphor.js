@@ -14,6 +14,7 @@ import {
   getPendingComments,
   markCommentsHandled,
   addMomentComment,
+  pruneConversationLogIfDue,
   closeDb,
 } from './state.js';
 import decide from './decide.js';
@@ -42,6 +43,20 @@ const DECIDE_CONTEXT_LIMIT = (() => {
 const MAX_WAKE_MINUTES = (() => {
   const n = Number(process.env.PHOSPHOR_MAX_WAKE_MINUTES);
   return Number.isFinite(n) && n >= MIN_WAKE_MINUTES ? Math.round(n) : 24 * 60;
+})();
+// conversation_log 多久清一次、清掉多久以前的（小时）。.env 的 CONVERSATION_LOG_CLEAN_HOURS 可改，
+// 不填是 24，填 0 不清理。注意 Number('') 是 0，所以空值要单独当作"没填"。
+const CLEAN_HOURS = (() => {
+  const raw = String(process.env.CONVERSATION_LOG_CLEAN_HOURS ?? '').trim();
+  const n = Number(raw);
+  return raw && Number.isFinite(n) && n >= 0 ? n : 24;
+})();
+// 清理时无论多旧都保留最新多少条。不填是 30（heartbeat-wake 默认也带 30 条），
+// 最少不低于 DECIDE_CONTEXT_LIMIT，保证清完之后做决定还有"最近的对话"可看。
+const CONVERSATION_LOG_KEEP = (() => {
+  const n = Number(process.env.CONVERSATION_LOG_KEEP);
+  const keep = Number.isInteger(n) && n >= 0 && String(process.env.CONVERSATION_LOG_KEEP).trim() ? n : 30;
+  return Math.max(keep, DECIDE_CONTEXT_LIMIT);
 })();
 
 // 模型返回的 JSON 字段不一定齐全、类型也不一定对。
@@ -140,7 +155,7 @@ async function getMemorySummary() {
   return { breathSummary, feelSummary };
 }
 
-async function runDecisionCycle({ kind, scheduledAt = null, selfNote = null }) {
+async function runDecisionCycle({ kind, scheduledAt = null, selfNote = null, cleanup = null }) {
   const wakeState = getWakeState();
   const latestDevice = getLatestDeviceReport();
   // 最近对话：所有聊天窗口的记录 + 唤醒事件，换窗口不会丢（见 context.js）
@@ -164,6 +179,7 @@ async function runDecisionCycle({ kind, scheduledAt = null, selfNote = null }) {
     kind,
     scheduledAt,
     selfNote,
+    cleanup,
     gapMinutes,
     density,
     recentMessages,
@@ -276,6 +292,25 @@ async function preciseTick() {
   }
 }
 
+// 定时清理 conversation_log。到没到时间由 state.js 按 meta 表里的上次清理时间判断，
+// 这里每分钟问一次，不调模型、不花钱。
+// 真删掉了东西就马上醒一次（kind = after_cleanup）：照常拉 breath / feel，并告诉 TA 旧聊天刚清掉，
+// 想留住的自己 hold 进长期记忆。这一次和精确唤醒一样，不改自然唤醒的排期。
+// 一条都没删、或者 silent 模式下，不醒。
+async function cleanupTick() {
+  if (CLEAN_HOURS <= 0) return;
+  const ms = CLEAN_HOURS * 60 * 60 * 1000;
+  const deleted = pruneConversationLogIfDue({ intervalMs: ms, maxAgeMs: ms, keep: CONVERSATION_LOG_KEEP });
+  if (deleted === null) return;
+  console.log(`phosphor: 清理对话记录，删掉 ${deleted} 条 ${CLEAN_HOURS} 小时以前的（最新 ${CONVERSATION_LOG_KEEP} 条保留）`);
+  if (deleted === 0) return;
+  if (getWakeState().mode === 'silent') {
+    console.log('phosphor: silent 模式，清理对话记录后不唤醒');
+    return;
+  }
+  await runDecisionCycle({ kind: 'after_cleanup', cleanup: { deleted, hours: CLEAN_HOURS } });
+}
+
 // decide() 加上重试可能跑超过一分钟；上一轮没跑完就跳过这一轮，
 // 不然 next_wake_at 还没更新，同一次唤醒会被并发触发两遍。
 let ticking = false;
@@ -292,6 +327,11 @@ async function tick() {
       await preciseTick();
     } catch (err) {
       console.error('preciseTick error:', err);
+    }
+    try {
+      await cleanupTick();
+    } catch (err) {
+      console.error('cleanupTick error:', err);
     }
   } finally {
     ticking = false;
@@ -316,7 +356,7 @@ async function main() {
   process.on('SIGINT', () => shutdown('SIGINT'));
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   console.log(
-    `phosphor: 最长唤醒间隔 ${MAX_WAKE_MINUTES} 分钟；决策带最近对话 ${DECIDE_CONTEXT_LIMIT} 条；共享时间线：${isSharedTimelineEnabled() ? '已开启' : '未开启'}；动态配图：${isImageEnabled() ? '已开启' : '未配置'}；动态语音：${isVoiceEnabled() ? '已开启' : '未配置'}；情绪（Drivesoid）：${isDrivesEnabled() ? '已接入' : '未接入'}`
+    `phosphor: 最长唤醒间隔 ${MAX_WAKE_MINUTES} 分钟；决策带最近对话 ${DECIDE_CONTEXT_LIMIT} 条；对话记录清理：${CLEAN_HOURS > 0 ? `每 ${CLEAN_HOURS} 小时，保留最新 ${CONVERSATION_LOG_KEEP} 条` : '关闭'}；共享时间线：${isSharedTimelineEnabled() ? '已开启' : '未开启'}；动态配图：${isImageEnabled() ? '已开启' : '未配置'}；动态语音：${isVoiceEnabled() ? '已开启' : '未配置'}；情绪（Drivesoid）：${isDrivesEnabled() ? '已接入' : '未接入'}`
   );
   await connectAll();
   await tick();
