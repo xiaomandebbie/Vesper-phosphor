@@ -1,7 +1,9 @@
 // 动态页 /moments：标题、此刻心情、纪念日、小日历、按天看动态、留言、回复、点赞、头像和名字。
 // vesper.js 里挂载：registerMomentRoutes(app, { requireBasicAuth, requireApiKey })
-// 页面是服务端渲染，没有 JavaScript 也能看、能留言。JavaScript 只做两件锦上添花的事：
-//   语音条点击播放（没有 JS 时退回浏览器自带的播放器），设置页上传头像前在浏览器里裁成正方形。
+// 页面是服务端渲染，没有 JavaScript 也能看、能留言。JavaScript 只做锦上添花的事：
+//   语音条点击播放（没有 JS 时退回浏览器自带的播放器）；
+//   同一时间的几张动作卡片叠成一摞，左右箭头轮换（没有 JS 时一张张排开）；
+//   设置页上传头像前在浏览器里裁成正方形。
 import fs from 'fs';
 import path from 'path';
 import { getMoment, listMoments, listMomentComments, addMomentComment, getWakeState } from './state.js';
@@ -43,6 +45,9 @@ const MAX_NAME_CHARS = 20;
 const RECENT_LIMIT = 20;
 // 语音是 ElevenLabs 默认的 128kbps mp3，先按文件大小估时长；浏览器读到真实时长后再校正
 const AUDIO_BYTES_PER_SEC = 128000 / 8;
+// 动作卡片和同一摞里最新那张相差不超过这么久、中间没夹着别的动态，就叠在一起。
+// 一次醒来逛论坛连走几步，前后一般就一两分钟
+const STACK_WINDOW_MS = 5 * 60 * 1000;
 const WEEKDAYS = ['一', '二', '三', '四', '五', '六', '日'];
 
 // 动态、留言、纪念日名字都是模型 / 用户写的文字，拼进 HTML 前必须转义
@@ -368,23 +373,122 @@ const VOICE_SCRIPT = `(function () {
   });
 })();`;
 
-function renderMoment(m, back, showDate) {
-  // 行为提示卡：白底黄框。只留时间、做了什么，有详情的点开能看；不放头像、点赞和留言。
-  // 不显示命令原文：老卡片里存着的命令，在这里整理掉；回帖、发帖显示回了什么、发了什么
-  if (m.kind === 'activity') {
-    const content = tidyActivityContent(m.content);
-    const detail = tidyActivityDetail(m.detail);
-    const body = `<span class="content">${escapeHtml(content)}</span>`;
-    const main = detail
-      ? `<details class="activity-detail">
-          <summary>${body}<span class="expand-hint" aria-hidden="true">点开看详情 ▾</span><span class="sr-only">，展开行动详情</span></summary>
-          <div class="detail">${escapeHtml(detail)}</div>
-        </details>`
-      : body;
-    return `<article class="moment activity" id="m${m.id}" aria-label="行为提示">
-      ${main}
-    </article>`;
+// ---------- 动作卡片 ----------
+
+// 卡片里的"在哪做的"用黄色加粗：Lutopia 论坛、OB 记忆库，以及别的 MCP 服务名。
+// 传进来的是已经转义过的 HTML
+function highlightPlaces(html) {
+  return html
+    .replace(/(Lutopia 论坛|OB 记忆库)/g, '<b class="act-place">$1</b>')
+    .replace(/用了 (\S+?) 的 /g, '用了 <b class="act-place">$1</b> 的 ');
+}
+
+// 一张动作卡片：白底黄框，只留时间、做了什么，有详情的点开能看；不放头像、点赞和留言。
+// 不显示命令原文：老卡片里存着的命令，在这里整理掉；回帖、发帖显示回了什么、发了什么
+function renderActivityCard(m, inStack = false) {
+  const content = tidyActivityContent(m.content);
+  const detail = tidyActivityDetail(m.detail);
+  const body = `<span class="content">${highlightPlaces(escapeHtml(content))}</span>`;
+  const main = detail
+    ? `<details class="activity-detail">
+        <summary>${body}<span class="expand-hint" aria-hidden="true">点开看详情 <i class="hint-arrow">▾</i></span><span class="sr-only">，展开行动详情</span></summary>
+        <div class="detail">${escapeHtml(detail)}</div>
+      </details>`
+    : body;
+  return `<article class="moment activity${inStack ? ' stack-item' : ''}" id="m${m.id}" aria-label="行为提示">
+    ${main}
+  </article>`;
+}
+
+// 列表是新的在前。连着的动作卡片，和这一摞里最新那张相差不超过 STACK_WINDOW_MS 的，归成一摞；
+// 中间夹着 TA 发的动态就断开
+function groupForDisplay(moments) {
+  const out = [];
+  for (const m of moments) {
+    const last = out[out.length - 1];
+    if (m.kind === 'activity' && last?.type === 'stack' && Math.abs(last.items[0].ts - m.ts) <= STACK_WINDOW_MS) {
+      last.items.push(m);
+      continue;
+    }
+    out.push(m.kind === 'activity' ? { type: 'stack', items: [m] } : { type: 'post', m });
   }
+  return out;
+}
+
+// 一摞卡片。只有一张就照常显示。
+// 摞里从早到晚排，‹ 往前、› 往后，一开始停在最新那张。没有 JavaScript 时一张张排开
+function renderStack(items) {
+  if (items.length === 1) return renderActivityCard(items[0]);
+  const ordered = [...items].reverse();
+  const n = ordered.length;
+  const dots = ordered.map((_, k) => `<i class="stack-dot${k === n - 1 ? ' on' : ''}"></i>`).join('');
+  return `<section class="act-stack" data-stack aria-label="同一时间的 ${n} 个行动">
+    <div class="stack-row">
+      <button type="button" class="stack-arrow" data-stack-prev aria-label="上一个行动"><span aria-hidden="true">‹</span></button>
+      <div class="stack-viewport">${ordered.map((m) => renderActivityCard(m, true)).join('')}</div>
+      <button type="button" class="stack-arrow" data-stack-next aria-label="下一个行动"><span aria-hidden="true">›</span></button>
+    </div>
+    <div class="stack-dots" aria-hidden="true">${dots}</div>
+    <p class="sr-only" aria-live="polite" data-stack-live></p>
+  </section>`;
+}
+
+// 浏览器里跑的：一摞卡片只露出一张，左右箭头 / 左右滑动 / 键盘左右键轮换，到头了从另一头接上
+const STACK_SCRIPT = `(function () {
+  document.querySelectorAll('[data-stack]').forEach(function (stack) {
+    var items = [].slice.call(stack.querySelectorAll('.stack-item'));
+    if (items.length < 2) return;
+    stack.classList.add('ready');
+    var dots = [].slice.call(stack.querySelectorAll('.stack-dot'));
+    var live = stack.querySelector('[data-stack-live]');
+    var vp = stack.querySelector('.stack-viewport');
+    var i = items.length - 1;
+    function show(n, dir) {
+      n = (n + items.length) % items.length;
+      items.forEach(function (el, k) {
+        el.hidden = k !== n;
+        el.classList.remove('in-next', 'in-prev');
+      });
+      var el = items[n];
+      if (dir) {
+        void el.offsetWidth;
+        el.classList.add(dir > 0 ? 'in-next' : 'in-prev');
+        if (live) live.textContent = '第 ' + (n + 1) + ' 个，共 ' + items.length + ' 个';
+      }
+      dots.forEach(function (d, k) { d.classList.toggle('on', k === n); });
+      i = n;
+    }
+    stack.querySelector('[data-stack-prev]').addEventListener('click', function () { show(i - 1, -1); });
+    stack.querySelector('[data-stack-next]').addEventListener('click', function () { show(i + 1, 1); });
+    stack.addEventListener('keydown', function (e) {
+      if (e.key === 'ArrowLeft') { e.preventDefault(); show(i - 1, -1); }
+      else if (e.key === 'ArrowRight') { e.preventDefault(); show(i + 1, 1); }
+    });
+    var x0 = null, y0 = null, swiped = false;
+    vp.addEventListener('touchstart', function (e) {
+      var t = e.touches[0];
+      x0 = t.clientX;
+      y0 = t.clientY;
+    }, { passive: true });
+    vp.addEventListener('touchend', function (e) {
+      if (x0 === null) return;
+      var t = e.changedTouches[0];
+      var dx = t.clientX - x0, dy = t.clientY - y0;
+      x0 = y0 = null;
+      if (Math.abs(dx) > 40 && Math.abs(dx) > Math.abs(dy) * 1.5) {
+        swiped = true;
+        show(i + (dx < 0 ? 1 : -1), dx < 0 ? 1 : -1);
+      }
+    });
+    vp.addEventListener('click', function (e) {
+      if (swiped) { e.preventDefault(); e.stopPropagation(); swiped = false; }
+    }, true);
+    show(i, 0);
+  });
+})();`;
+
+function renderMoment(m, back, showDate) {
+  if (m.kind === 'activity') return renderActivityCard(m);
 
   const commentsHtml = renderComments(m, back);
   const likeBar = renderLikeBar(m, back);
@@ -407,7 +511,7 @@ function renderMoment(m, back, showDate) {
 
 const STYLE = `
   :root { --ink: #2b2233; --muted: #665a70; --accent: #7a3e5d; --gold: #b7792f; --card: #fffdfb; --line: #eadfe6;
-    --activity: #E6B652; --activity-ink: #8a5a14; --voice: #f8d7e3; --voice-press: #f1c1d3; }
+    --activity: #E6B652; --activity-ink: #8a5a14; --place: #9a6412; --voice: #f8d7e3; --voice-press: #f1c1d3; }
   * { box-sizing: border-box; }
   body { margin: 0; min-height: 100vh; color: var(--ink); font-family: -apple-system, "PingFang SC", "Helvetica Neue", sans-serif;
     background: linear-gradient(180deg, #efe7f4 0%, #f9f0ee 55%, #fdf8f2 100%); }
@@ -505,21 +609,57 @@ const STYLE = `
   .playing .w2 { animation: voice-w2 1.2s steps(1) infinite; }
   @keyframes voice-w1 { 0% { opacity: 0; } 33% { opacity: 1; } }
   @keyframes voice-w2 { 0% { opacity: 0; } 66% { opacity: 1; } }
-  @media (prefers-reduced-motion: reduce) {
-    .playing .w1, .playing .w2 { animation: none; }
-    .voice-bar.playing { background: var(--voice-press); }
-  }
-  /* 行为提示卡：白底，边框还是原来那个暖黄。第一行是时间，第二行是做了什么 */
+  /* 动作卡片：白底，边框还是原来那个暖黄。第一行是时间，第二行是做了什么 */
   .moment.activity { background: #fff; color: var(--ink); border: 1.5px solid var(--activity); padding: 12px 16px; }
   .moment.activity .content { font-size: 15px; line-height: 1.55; font-weight: 600; color: var(--ink); }
   .moment.activity .content::first-line { font-size: 12px; font-weight: 500; letter-spacing: 0.05em; color: var(--muted); }
+  /* "在哪做的"：黄色加粗，下面垫一道浅黄荧光笔。纯黄字在白底上看不清，字用深一点的金黄 */
+  .act-place { color: var(--place); font-weight: 800; padding: 0 1px; border-radius: 2px;
+    background: linear-gradient(transparent 60%, rgba(230, 182, 82, 0.38) 60%); }
   .activity-detail > summary { cursor: pointer; list-style: none; }
   .activity-detail > summary::-webkit-details-marker { display: none; }
   .expand-hint { display: block; margin-top: 4px; font-size: 12px; font-weight: 500; color: var(--activity-ink); }
+  .hint-arrow { display: inline-block; font-style: normal; transition: transform 0.2s ease; }
+  .activity-detail > summary:hover .hint-arrow { transform: translateY(2px); }
   .activity-detail[open] .expand-hint { display: none; }
   .activity-detail .detail { margin-top: 10px; padding: 10px 12px; border-radius: 8px; background: #fdf6e6;
     color: var(--ink); font-size: 13px; line-height: 1.55; white-space: pre-wrap; word-break: break-word;
     max-height: 360px; overflow-y: auto; }
+  .activity-detail[open] .detail { animation: detail-in 0.26s ease-out; transform-origin: top center; }
+  @keyframes detail-in { from { opacity: 0; transform: translateY(-6px) scaleY(0.96); } to { opacity: 1; transform: none; } }
+  /* 一摞动作卡片。没有 JavaScript 时一张张排开；有 JavaScript 时只露最上面一张，后面露出两层卡边 */
+  .act-stack { margin-bottom: 12px; }
+  .stack-row { display: flex; align-items: center; gap: 2px; }
+  .stack-viewport { position: relative; flex: 1; min-width: 0; display: grid; gap: 10px; }
+  .stack-viewport .moment.activity { margin-bottom: 0; }
+  .stack-item[hidden] { display: none; }
+  .stack-arrow, .stack-dots { display: none; }
+  .act-stack.ready .stack-arrow { display: inline-flex; }
+  .act-stack.ready .stack-dots { display: flex; }
+  .act-stack.ready .stack-viewport { padding-bottom: 10px; }
+  .act-stack.ready .stack-viewport::before, .act-stack.ready .stack-viewport::after { content: ''; position: absolute; height: 24px;
+    border: 1.5px solid var(--activity); border-top: none; border-radius: 0 0 12px 12px; background: #fff; }
+  .act-stack.ready .stack-viewport::before { left: 8px; right: 8px; bottom: 4px; z-index: 1; }
+  .act-stack.ready .stack-viewport::after { left: 16px; right: 16px; bottom: -2px; z-index: 0; opacity: 0.6; }
+  .act-stack.ready .stack-item { position: relative; z-index: 2; }
+  .stack-arrow { flex-shrink: 0; align-items: center; justify-content: center; width: 36px; min-height: 44px; padding: 0;
+    background: none; color: var(--activity-ink); font-size: 26px; line-height: 1; border-radius: 10px;
+    transition: transform 0.15s ease, background-color 0.15s ease; }
+  .stack-arrow:hover { background: rgba(230, 182, 82, 0.14); }
+  .stack-arrow:active { transform: scale(0.86); }
+  .stack-dots { justify-content: center; gap: 6px; margin-top: 8px; }
+  .stack-dot { width: 6px; height: 6px; border-radius: 3px; background: #efdcae; transition: width 0.25s ease, background-color 0.25s ease; }
+  .stack-dot.on { width: 16px; background: var(--activity); }
+  .stack-item.in-next { animation: card-in-next 0.32s cubic-bezier(0.2, 0.8, 0.2, 1); }
+  .stack-item.in-prev { animation: card-in-prev 0.32s cubic-bezier(0.2, 0.8, 0.2, 1); }
+  @keyframes card-in-next { from { opacity: 0; transform: translateX(32px) rotate(1.5deg) scale(0.97); } to { opacity: 1; transform: none; } }
+  @keyframes card-in-prev { from { opacity: 0; transform: translateX(-32px) rotate(-1.5deg) scale(0.97); } to { opacity: 1; transform: none; } }
+  @media (prefers-reduced-motion: reduce) {
+    .playing .w1, .playing .w2 { animation: none; }
+    .voice-bar.playing { background: var(--voice-press); }
+    .stack-item.in-next, .stack-item.in-prev, .activity-detail[open] .detail { animation: none; }
+    .stack-dot, .stack-arrow, .hint-arrow { transition: none; }
+  }
   .like-bar { display: flex; align-items: center; gap: 4px; margin-top: 8px; }
   .like-btn { background: none; color: var(--accent); font-size: 22px; line-height: 1; min-width: 44px; min-height: 44px;
     padding: 0; margin-left: -10px; }
@@ -575,7 +715,9 @@ function layout(title, body, script = '') {
 function renderPage({ today, month, selected, anniversaries, marked, moments, back, mood, top }) {
   const listTitle = selected ? `${selected.m} 月 ${selected.d} 日的动态` : '最近的动态';
   const empty = selected ? '这一天还没有动态。' : '还没有动态。';
-  const items = moments.map((m) => renderMoment(m, back, !selected)).join('');
+  const items = groupForDisplay(moments)
+    .map((g) => (g.type === 'stack' ? renderStack(g.items) : renderMoment(g.m, back, !selected)))
+    .join('');
   return layout(
     '晨暮星',
     `<header class="hero">
@@ -592,7 +734,7 @@ function renderPage({ today, month, selected, anniversaries, marked, moments, ba
       </div>
       ${items || `<p class="empty">${empty}</p>`}
     </section>`,
-    VOICE_SCRIPT
+    VOICE_SCRIPT + STACK_SCRIPT
   );
 }
 
