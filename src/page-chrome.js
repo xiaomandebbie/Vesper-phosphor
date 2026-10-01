@@ -3,28 +3,47 @@
 //
 // 星星转场：点站内链接时先盖上一层粉色雾面，星星一颗颗闪出来，再跳过去；
 // 新页面打开时先盖着，星星再闪几下后淡出。系统开了「减弱动态效果」就只淡入淡出。
+// 菜单里的外部页面（日记、记忆库）离开时也走转场；那边不是本项目的页面，所以没有进场动画。
 // 没有 JavaScript 时链接照常跳，没有转场。表单提交（留言、点赞）不走转场。
 
-// 菜单入口。soon 的是还没做的页面，先占个位置、不能点；做好了把 soon 换成 href 就行
-export const NAV_ITEMS = [
-  { href: '/moments', label: '回到主页' },
-  { label: '日记', soon: true },
-  { href: '/drives', label: '心绪' },
-  { label: '音乐', soon: true },
-  { label: '论坛', soon: true },
-  { label: '记忆库', soon: true },
-  { href: '/moments/profile', label: '自定义' },
-];
+const env = (k) => String(process.env[k] ?? '').trim();
+
+// 外部地址只放行 http(s)，填错了就当没填
+function externalUrl(k) {
+  const v = env(k);
+  return /^https?:\/\/[^\s"'<>]+$/i.test(v) ? v : '';
+}
+
+function escapeAttr(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+// 菜单入口。外部页面的地址在 .env 里配（NAV_DIARY_URL、NAV_MEMORY_URL），没配就显示成灰色、点不了。
+// 音乐、论坛还没有页面，先占个位置；做好了给它一个 href 就行
+function navItems() {
+  return [
+    { href: '/moments', label: '回到主页' },
+    { href: externalUrl('NAV_DIARY_URL'), label: '日记', external: true, note: '没配置' },
+    { href: '/drives', label: '心绪' },
+    { label: '音乐', note: '还没做' },
+    { label: '论坛', note: '还没做' },
+    { href: externalUrl('NAV_MEMORY_URL'), label: '记忆库', external: true, note: '没配置' },
+    { href: '/moments/profile', label: '自定义' },
+  ];
+}
 
 // 右上角三条杠。<details> 本身就能展开收起，没有 JavaScript 也能用
 export function renderMenu(current) {
-  const items = NAV_ITEMS.map((item) => {
-    if (item.soon || !item.href) {
-      return `<li><span class="menu-soon" aria-disabled="true">${item.label}<small>还没做</small></span></li>`;
-    }
-    const here = item.href === current;
-    return `<li><a href="${item.href}"${here ? ' aria-current="page"' : ''}>${item.label}</a></li>`;
-  }).join('');
+  const items = navItems()
+    .map((item) => {
+      if (!item.href) {
+        return `<li><span class="menu-soon" aria-disabled="true">${item.label}<small>${item.note || '还没做'}</small></span></li>`;
+      }
+      const here = !item.external && item.href === current;
+      const attrs = item.external ? ' data-stars rel="noopener"' : here ? ' aria-current="page"' : '';
+      return `<li><a href="${escapeAttr(item.href)}"${attrs}>${item.label}</a></li>`;
+    })
+    .join('');
   return `<details class="menu" data-menu>
     <summary class="menu-btn" aria-label="菜单"><span class="bars" aria-hidden="true"><i></i><i></i><i></i></span></summary>
     <nav class="menu-panel" aria-label="页面"><ul>${items}</ul></nav>
@@ -92,7 +111,7 @@ export const CHROME_CSS = `
   }
 `;
 
-// 放在 </body> 前：菜单点外面收起，站内链接走星星转场
+// 放在 </body> 前：菜单点外面收起，站内链接和菜单里的外部页面走星星转场
 export const CHROME_SCRIPT = `(function () {
   var KEY = 'vp-stars';
   var SVG = '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2.5l2.6 6.1 6.6.6-5 4.4 1.5 6.5L12 16.7 6.3 20.1l1.5-6.5-5-4.4 6.6-.6z"/></svg>';
@@ -145,7 +164,7 @@ export const CHROME_SCRIPT = `(function () {
     }, reduce ? 60 : 650);
   }
 
-  // 离场：站内链接先盖上雾面、星星闪出来，再跳
+  // 离场：先盖上雾面、星星闪出来，再跳。站外链接只有带 data-stars 的（菜单里的日记、记忆库）才走
   var leaving = false;
   document.addEventListener('click', function (e) {
     if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
@@ -155,12 +174,13 @@ export const CHROME_SCRIPT = `(function () {
     if (raw.charAt(0) === '#') return;
     var url;
     try { url = new URL(a.href, location.href); } catch (err) { return; }
-    if (url.origin !== location.origin) return;
-    if (url.pathname === location.pathname && url.search === location.search && url.hash) return;
+    var same = url.origin === location.origin;
+    if (!same && !a.hasAttribute('data-stars')) return;
+    if (same && url.pathname === location.pathname && url.search === location.search && url.hash) return;
     e.preventDefault();
     if (leaving) return;
     leaving = true;
-    try { sessionStorage.setItem(KEY, '1'); } catch (err) {}
+    if (same) { try { sessionStorage.setItem(KEY, '1'); } catch (err) {} }
     var leave = veil(reduce ? 0 : 12, 0.06);
     void leave.offsetWidth;
     leave.classList.add('on');
