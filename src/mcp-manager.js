@@ -29,7 +29,7 @@ export async function connectMcpStdio(name, command, args) {
   return clients[name];
 }
 
-// Streamable HTTP 连接：远程 MCP server（Ombre Brain、论坛都是这种）。
+// Streamable HTTP 连接：远程 MCP server（Ombre Brain、论坛、点歌台都是这种）。
 // headers 可选，比如 Ombre Brain 用静态 Token 鉴权时传 Authorization。
 export async function connectMcpHttp(name, url, headers) {
   // 先登记重连方式：启动时连不上，之后第一次调用时也能再试
@@ -134,6 +134,18 @@ export async function connectAll() {
       console.log('connected MCP: lutopia');
     } catch (err) {
       console.error('could not connect MCP "lutopia":', err.message);
+    }
+  }
+
+  // 网易云点歌台（https://github.com/Anko3o/Music-Mcp-Netease 的 mcp/music_mcp.py），Streamable HTTP。
+  // 和晨暮星跑在同一台机器上，只听本机，不用鉴权。MUSIC_MCP_URL 形如 http://127.0.0.1:18012/mcp
+  // 名字固定叫 music：decide.js 的 prompt 和动态页的行为卡片都按这个名字认。
+  if (process.env.MUSIC_MCP_URL) {
+    try {
+      await connectMcpHttp('music', process.env.MUSIC_MCP_URL);
+      console.log('connected MCP: music');
+    } catch (err) {
+      console.error('could not connect MCP "music":', err.message);
     }
   }
 }
