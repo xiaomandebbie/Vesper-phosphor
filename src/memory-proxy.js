@@ -24,6 +24,13 @@ const REQUEST_SKIP = new Set([
 // 回给浏览器时不带的头：内容可能被改过，长度和压缩方式都不对了
 const RESPONSE_SKIP = new Set(['content-encoding', 'content-length', 'transfer-encoding', 'connection', 'keep-alive']);
 
+// Ombre Brain 不许任何页面把它嵌进去（X-Frame-Options: DENY、CSP frame-ancestors 'none'），防点击劫持。
+// 晨暮星外壳 /app 要把记忆库放进内容区，所以改成「只许本站嵌」：别的网站照样嵌不了，防护还在
+function relaxFrameAncestors(csp) {
+  const v = String(csp);
+  return /frame-ancestors/i.test(v) ? v.replace(/frame-ancestors[^;]*/i, "frame-ancestors 'self'") : v;
+}
+
 // 塞进页面最前面：页面里用 JavaScript 拼出来的 /api/... 请求，补上 /memory 前缀
 const PATCH_SCRIPT =
   "(function(){var P='" + PREFIX + "',R=/^\\/(?:" + ROOTS + ")(?:[\\/?#]|$)/;" +
@@ -179,6 +186,8 @@ export function registerMemoryProxy(app, { requireBasicAuth }) {
       res.status(upstream.status);
       upstream.headers.forEach((value, key) => {
         if (RESPONSE_SKIP.has(key) || key === 'set-cookie') return;
+        if (key === 'x-frame-options') return res.setHeader(key, 'SAMEORIGIN');
+        if (key === 'content-security-policy') return res.setHeader(key, relaxFrameAncestors(value));
         res.setHeader(key, key === 'location' ? rewriteLocation(value, base) : value);
       });
       const cookies = typeof upstream.headers.getSetCookie === 'function' ? upstream.headers.getSetCookie() : [];
