@@ -1,9 +1,10 @@
 // 心绪页 /drives：把 Drivesoid 算出来的情绪状态按五组画出来，配色和 /moments 一致（粉、暖黄），带一点星星。
 // Drivesoid 只监听 127.0.0.1，手机直接打不开，所以由 vesper 在服务端读好再渲染，Drivesoid 本身不用对外开放。
-// 和动态页一样是纯服务端渲染，不依赖 JavaScript；沿用 VESPER_BASIC_USER / PASS 登录。
-// vesper.js 里挂载：registerDrivesRoutes(app, { requireBasicAuth })
+// 和动态页一样是服务端渲染，没有 JavaScript 也能看；右上角菜单、星星转场见 page-chrome.js。
+// 沿用 VESPER_BASIC_USER / PASS 登录。vesper.js 里挂载：registerDrivesRoutes(app, { requireBasicAuth })
 import { getDrivesStatus } from './drives.js';
 import { formatDateTime } from './wall-time.js';
+import { renderMenu, HEAD_SCRIPT, CHROME_CSS, CHROME_SCRIPT } from './page-chrome.js';
 
 const AI_NAME = process.env.AI_DISPLAY_NAME || 'TA';
 
@@ -176,7 +177,6 @@ function renderHero(status) {
     <h1 class="title">晨暮星</h1>
     <p class="subtitle"><span lang="en">Drives</span> <span aria-hidden="true">✦</span> 心绪</p>
     ${line}
-    <nav class="nav" aria-label="页面"><a href="/moments">‹ 回动态</a><a href="/drives">刷新</a></nav>
   </header>`;
 }
 
@@ -215,8 +215,6 @@ const STYLE = `
     font-size: 14px; letter-spacing: 0.2em; color: var(--muted); }
   .mood-line { margin: 12px auto 0; max-width: 90%; font-size: 13px; line-height: 1.5; color: var(--muted); }
   .mood-line .mood-label { color: var(--accent); margin-right: 4px; }
-  .nav { display: flex; justify-content: center; gap: 24px; margin-top: 6px; font-size: 14px; }
-  .nav a { display: inline-flex; align-items: center; min-height: 44px; padding: 0 6px; color: var(--accent); }
   .card { background: var(--card); border-radius: 16px; padding: 16px; margin-bottom: 14px; box-shadow: 0 1px 3px rgba(60, 30, 60, 0.08); }
   .section-title { font-size: 15px; margin: 0 0 10px; color: var(--accent); letter-spacing: 0.1em; }
   .notice { font-size: 14px; line-height: 1.6; color: var(--ink); border-left: 4px solid var(--gold); }
@@ -268,6 +266,7 @@ const STYLE = `
   }
 `;
 
+// 菜单和星星转场每个页面都有（见 page-chrome.js）
 function layout(title, body) {
   return `<!DOCTYPE html>
 <html lang="zh">
@@ -275,9 +274,10 @@ function layout(title, body) {
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>${escapeHtml(title)}</title>
-<style>${STYLE}</style>
+<script>${HEAD_SCRIPT}</script>
+<style>${STYLE}${CHROME_CSS}</style>
 </head>
-<body><main>${body}</main></body>
+<body><main>${renderMenu('/drives')}${body}</main><script>${CHROME_SCRIPT}</script></body>
 </html>`;
 }
 

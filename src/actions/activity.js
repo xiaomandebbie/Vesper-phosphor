@@ -2,15 +2,15 @@
 // 由 actions/index.js 在动作执行成功后调用；这里负责把这次做的事写成一句话，以及点开后看到的详情。
 // 称呼用 .env 的 AI_DISPLAY_NAME。
 //
-// 卡片上不放命令原文（discover --limit 12 这种），只写做了什么；回帖、发帖写出回了什么、发了什么。
-// 以前存下来的老卡片里还带着命令，动态页显示前用 tidyActivityContent / tidyActivityDetail 整理一遍。
+// 卡片上那一句只写做了什么：不放命令原文（discover --limit 12 这种），也不放回帖内容，太长；
+// 回了什么、发了什么都在点开后的详情里。发帖只在卡片上带一个短标题。
+// 以前存下来的老卡片里还带着命令或回帖内容，动态页显示前用 tidyActivityContent / tidyActivityDetail 整理一遍。
 const AI_NAME = process.env.AI_DISPLAY_NAME || 'TA';
 
 // 详情最多记这么多字。论坛列表、记忆检索结果可能很长，全存会把动态页撑得很大
 const MAX_DETAIL_CHARS = 3000;
-// 卡片上直接露出来的回帖 / 帖子正文最多多少字，完整的在详情里
-const CARD_COMMENT_CHARS = 300;
-const CARD_POST_CHARS = 120;
+// 卡片上发帖标题最多多少字
+const CARD_TITLE_CHARS = 30;
 
 // lutopia_cli 的命令 → 给人看的说法
 const LUTOPIA_OPS = {
@@ -24,8 +24,8 @@ const LUTOPIA_OPS = {
 };
 
 function short(value, n = 80) {
-  const s = String(value ?? '').replace(/\s+/g, ' ').trim();
-  return s.length > n ? `${s.slice(0, n)}…` : s;
+  const chars = Array.from(String(value ?? '').replace(/\s+/g, ' ').trim());
+  return chars.length > n ? `${chars.slice(0, n).join('')}…` : chars.join('');
 }
 
 function tryJson(value) {
@@ -53,7 +53,10 @@ function resultText(result) {
 }
 
 function clip(s) {
-  return s.length > MAX_DETAIL_CHARS ? `${s.slice(0, MAX_DETAIL_CHARS)}\n…（后面还有，太长没记下来）` : s;
+  const chars = Array.from(s);
+  return chars.length > MAX_DETAIL_CHARS
+    ? `${chars.slice(0, MAX_DETAIL_CHARS).join('')}\n…（后面还有，太长没记下来）`
+    : s;
 }
 
 // ---------- 论坛命令 → 给人看的话 ----------
@@ -78,16 +81,11 @@ function forumWriting(command) {
   return null;
 }
 
-// 卡片上那一句：看帖只写做了什么；回帖带上回的内容，发帖带上标题和开头
+// 卡片上那一句：只写做了什么。发帖带一个短标题，回帖内容不放
 function forumSummary(command) {
   const label = LUTOPIA_OPS[forumOp(command)] || '逛了逛';
   const w = forumWriting(command);
-  if (w?.op === 'comment' && w.text) return `${label}：「${short(w.text, CARD_COMMENT_CHARS)}」`;
-  if (w?.op === 'post' && (w.title || w.text)) {
-    const title = w.title ? `「${short(w.title, 60)}」` : '';
-    const body = w.text ? `：${short(w.text, CARD_POST_CHARS)}` : '';
-    return `${label}${title}${body}`;
-  }
+  if (w?.op === 'post' && w.title) return `${label}「${short(w.title, CARD_TITLE_CHARS)}」`;
   return label;
 }
 
@@ -180,17 +178,25 @@ export function describeActivityDetail(decision, result) {
 }
 
 // ---------- 老卡片 ----------
-// 以前的卡片存的是"TA刚刚逛了 Lutopia 论坛，随便逛了逛（discover --limit 12）"，详情里有"命令：…""调用：…"。
 // 数据库不改，动态页显示前整理成新样子。新卡片过一遍也不会变。
+//   更早的卡片："TA刚刚逛了 Lutopia 论坛，随便逛了逛（discover --limit 12）"，详情里有"命令：…""调用：…"
+//   前一版的卡片："…回了一条帖子：「回帖内容」"、"…发了一篇新帖「标题」：正文开头"
 
 const OLD_FORUM_LINE = /^(.*?Lutopia 论坛，)[^（\n]*（(.*)）\s*$/;
+const COMMENT_LINE = /^(.*?Lutopia 论坛，回了一条帖子)：.*$/;
+const POST_LINE = /^(.*?Lutopia 论坛，发了一篇新帖(?:「[^」]*」)?)：.*$/;
 
 export function tidyActivityContent(content) {
   return String(content ?? '')
     .split('\n')
     .map((line) => {
-      const m = OLD_FORUM_LINE.exec(line);
-      return m ? `${m[1]}${forumSummary(m[2])}` : line;
+      const old = OLD_FORUM_LINE.exec(line);
+      if (old) return `${old[1]}${forumSummary(old[2])}`;
+      const c = COMMENT_LINE.exec(line);
+      if (c) return c[1];
+      const p = POST_LINE.exec(line);
+      if (p) return p[1];
+      return line;
     })
     .join('\n');
 }
