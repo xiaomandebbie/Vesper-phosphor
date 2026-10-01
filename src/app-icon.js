@@ -1,6 +1,7 @@
 // 主屏幕图标：在 iPhone Safari 里「分享 → 添加到主屏幕」时用的图标和名字。
 // - 图标在「自定义」页上传，存在 MEDIA_DIR/app-icon/icon.jpg（不在 images/audio 里，不会过期被删）。
-// - 没上传时用这里画的默认图标：粉色雾面 + 一颗金色大星星和几颗小星星，和星星转场一个样子。
+// - 没上传时用这里画的默认图标「晨昏」：上面是深蓝夜空，往下变紫，最底下透出一点晨光，
+//   中间一颗金色大星星和三颗小星星。底色深，星星在主屏幕上看得清。
 //   启动后第一次有人要图标时现画一张 512×512 的 PNG，之后一直用这张，不用额外装图片库。
 // - /apple-touch-icon.png 和 /manifest.webmanifest 不用登录：iPhone 添加到主屏幕时去取图标，不一定带着登录信息。
 //   图标和名字不算隐私；但上传的图知道地址的人都能看到，别拿私密照片当图标。
@@ -66,31 +67,28 @@ function insidePolygon(pts, x, y) {
   return hit;
 }
 
-// 画一张 size×size 的图标，返回逐行的 RGB 像素
+// 画一张 size×size 的「晨昏」图标，返回逐行的 RGB 像素
 function drawIconPixels(size) {
   const out = new Uint8Array(size * size * 3);
   const clamp = (t) => (t < 0 ? 0 : t > 1 ? 1 : t);
   const mix = (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
-  // 背景：和转场一样的粉色雾面，160 度斜着过渡，比转场稍微浓一点，小图标上才不显白
+  // 背景从上到下：夜空深蓝 → 暮紫 → 晨光的浅珊瑚色
   const BG = [
-    [0, [253, 232, 240]],
-    [0.55, [244, 196, 216]],
-    [1, [250, 220, 231]],
+    [0, [38, 42, 90]],
+    [0.55, [110, 74, 140]],
+    [1, [240, 166, 156]],
   ];
-  const dirX = Math.sin((160 * Math.PI) / 180);
-  const dirY = -Math.cos((160 * Math.PI) / 180);
-  const span = 0.5 * (Math.abs(dirX) + Math.abs(dirY));
   const STARS = [
-    { x: 0.5, y: 0.535, R: 0.3, top: [255, 231, 146], bottom: [242, 172, 52] },
-    { x: 0.2, y: 0.215, R: 0.075, top: [255, 248, 222], bottom: [255, 212, 104] },
-    { x: 0.82, y: 0.2, R: 0.045, top: [255, 248, 222], bottom: [255, 212, 104] },
-    { x: 0.81, y: 0.8, R: 0.06, top: [255, 248, 222], bottom: [255, 212, 104] },
+    { x: 0.5, y: 0.535, R: 0.3, top: [255, 240, 176], bottom: [245, 177, 60] },
+    { x: 0.2, y: 0.215, R: 0.075, top: [255, 255, 255], bottom: [255, 224, 138] },
+    { x: 0.82, y: 0.2, R: 0.045, top: [255, 255, 255], bottom: [255, 224, 138] },
+    { x: 0.81, y: 0.8, R: 0.06, top: [255, 255, 255], bottom: [255, 224, 138] },
   ].map((s) => ({ ...s, pts: starPoints(s.x, s.y, s.R, s.R * 0.4) }));
-  // 雾里的亮处，以及每颗星星周围一圈暖黄的光
+  // 底部一片暖色晨光、左上一点微光，以及每颗星星周围一圈暖黄的光
   const GLOWS = [
-    { x: 0.28, y: 0.27, r: 0.42, a: 0.6, c: [255, 255, 255] },
-    { x: 0.75, y: 0.72, r: 0.36, a: 0.45, c: [255, 182, 207] },
-    ...STARS.map((s) => ({ x: s.x, y: s.y, r: s.R * 1.7, a: 0.5, c: [255, 214, 100] })),
+    { x: 0.5, y: 1.0, r: 0.55, a: 0.35, c: [255, 214, 170] },
+    { x: 0.25, y: 0.2, r: 0.35, a: 0.1, c: [255, 255, 255] },
+    ...STARS.map((s) => ({ x: s.x, y: s.y, r: s.R * 1.7, a: 0.55, c: [255, 215, 120] })),
   ];
   const SS = 4; // 星星边缘每个像素取 4×4 个点，边才不会有锯齿
 
@@ -98,7 +96,7 @@ function drawIconPixels(size) {
     for (let px = 0; px < size; px++) {
       const u = (px + 0.5) / size;
       const v = (py + 0.5) / size;
-      const t = clamp((((u - 0.5) * dirX + (v - 0.5) * dirY) / span) * 0.5 + 0.5);
+      const t = clamp(v);
       let col = t < BG[1][0] ? mix(BG[0][1], BG[1][1], t / BG[1][0]) : mix(BG[1][1], BG[2][1], (t - BG[1][0]) / (1 - BG[1][0]));
       for (const g of GLOWS) {
         const d = Math.hypot(u - g.x, v - g.y) / g.r;
@@ -183,7 +181,7 @@ const CARD_CSS = `
   .vp-icon-hint { margin-top: 12px; font-size: 12px; }
   .vp-icon-ok { margin: 8px 0 0; font-size: 13px; color: #9a6412; }
   .vp-icon-row { display: flex; align-items: center; gap: 16px; margin-top: 12px; }
-  .vp-icon-img { flex: none; width: 96px; height: 96px; border-radius: 22px; object-fit: cover; background: #fde6ee;
+  .vp-icon-img { flex: none; width: 96px; height: 96px; border-radius: 22px; object-fit: cover; background: #3b2f63;
     box-shadow: 0 2px 8px rgba(60, 30, 60, 0.18); }
   .vp-icon-actions { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
   .vp-icon-actions form { display: flex; flex-wrap: wrap; gap: 8px; margin: 0; }
@@ -245,7 +243,7 @@ function renderIconCard({ custom, notice }) {
     ${ok ? `<p class="vp-icon-ok" role="status">${ok}</p>` : ''}
     <div class="vp-icon-row">
       <img id="vp-icon-preview" class="vp-icon-img" src="/apple-touch-icon.png?t=${Date.now()}" width="96" height="96"
-        alt="${custom ? '现在的主屏幕图标（自己上传的）' : '现在的主屏幕图标（默认：粉色雾面上一颗金色星星）'}" />
+        alt="${custom ? '现在的主屏幕图标（自己上传的）' : '现在的主屏幕图标（默认「晨昏」：夜空到晨光的渐变上一颗金色星星）'}" />
       <div class="vp-icon-actions">
         <form method="post" action="/moments/app-icon">
           <label class="vp-icon-btn">选一张图<input id="vp-icon-file" class="vp-sr-only" type="file" accept="image/*" /></label>
