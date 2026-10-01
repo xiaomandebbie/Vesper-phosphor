@@ -9,6 +9,8 @@ import { getProfile } from './moments-store.js';
 import { renderMenu, HEAD_SCRIPT, CHROME_CSS, CHROME_SCRIPT, diaryDir } from './page-chrome.js';
 
 const FILE_RE = /^(\d{4})-(\d{2})-(\d{2})\.md$/;
+// 每篇的开头：heartbeat 写的「## 2026-10-01 07:34」。正文里 TA 自己写的「## 小标题」不算新的一篇
+const ENTRY_HEAD_RE = /^##[ \t]+(\d{4}-\d{2}-\d{2}[ T]\d{1,2}:\d{2}[^\n]*)$/m;
 // 一天的日记最多读这么多，再多就截断（正常一天几 KB）
 const MAX_FILE_BYTES = 512 * 1024;
 const WEEKDAYS = ['一', '二', '三', '四', '五', '六', '日'];
@@ -47,7 +49,7 @@ function listDays(dir) {
   }
 }
 
-// 一天的日记拆成一篇篇：「## 时间」是每篇的开头，前面没有标题的部分也算一篇
+// 一天的日记拆成一篇篇：「## 日期 时间」是每篇的开头，前面没有标题的部分也算一篇
 function readEntries(dir, key) {
   let buf;
   try {
@@ -59,7 +61,7 @@ function readEntries(dir, key) {
   }
   const truncated = buf.length > MAX_FILE_BYTES;
   const text = buf.subarray(0, MAX_FILE_BYTES).toString('utf-8');
-  const parts = text.split(/^##[ \t]+(.+)$/m);
+  const parts = text.split(new RegExp(ENTRY_HEAD_RE.source, 'gm'));
   const entries = [];
   if (parts[0].trim()) entries.push({ when: '', body: parts[0].trim() });
   for (let i = 1; i < parts.length; i += 2) {
@@ -75,9 +77,11 @@ function entryTime(when) {
   return m ? m[1] : when;
 }
 
-// 正文转义后保留换行，只认 **加粗**
+// 正文转义后保留换行。「# 小标题」一行和 **加粗** 显示成加粗，别的 Markdown 原样显示
 function formatBody(text) {
-  return escapeHtml(text).replace(/\*\*([^*\n]+)\*\*/g, '<b>$1</b>');
+  return escapeHtml(text)
+    .replace(/^#{1,6}[ \t]+(.+)$/gm, '<b>$1</b>')
+    .replace(/\*\*([^*\n]+)\*\*/g, '<b>$1</b>');
 }
 
 function renderCalendar({ y, m, today, selected, marked, open }) {
