@@ -9,7 +9,7 @@
 | 项目 | 是什么 | 接进晨暮星之后 | 接法 |
 |---|---|---|---|
 | [Ombre Brain](https://github.com/P0luz/Ombre-Brain) | 长期记忆 | 醒来时先读记忆；TA 可以自己搜、存记忆 | [07](docs/07-mcp.md) |
-| [Drivesoid](https://github.com/A1batr055/Drivesoid) | 情绪状态 | 聊天自动上报；醒来时参考当前情绪 | [09](docs/09-drivesoid.md) |
+| [Drivesoid](https://github.com/A1batr055/Drivesoid) | 情绪状态 | 聊天自动上报；醒来时参考当前情绪；心绪页 `/drives` | [09](docs/09-drivesoid.md) |
 | [dylan-heartbeat](https://github.com/callie0313/dylan-heartbeat) | 另一个唤醒项目 | 两边共享"做过什么"的事件 | [08](docs/08-heartbeat.md) |
 
 三个都是可选的，一个都不接也能跑。
@@ -19,7 +19,7 @@
 | pm2 进程名 | 端口 | 干什么 |
 |---|---|---|
 | `phosphor` | 无 | 心脏。每分钟看一眼该不该醒，该醒就做决定、执行动作；每 24 小时清理一次旧对话记录 |
-| `vesper` | 3001 | 接收手机上报、`/wake/*` 控制接口、动态页 `/moments` |
+| `vesper` | 3001 | 接收手机上报、`/wake/*` 控制接口、动态页 `/moments`、心绪页 `/drives` |
 | `vesper-gateway` | 3002 | 模型网关。聊天客户端和 phosphor 都从这里调模型，顺便记录对话 |
 
 三个进程共用一个数据库 `data/state.db`。
@@ -38,7 +38,7 @@
 | [06 · 接口说明](docs/06-api.md) | `/wake/*`、动态、留言、点赞、网关、iOS 快捷指令上报 |
 | [07 · 接入 MCP 与 Ombre Brain](docs/07-mcp.md) | 内置的两个怎么接；想加新的三步 |
 | [08 · 和 heartbeat 一起跑](docs/08-heartbeat.md) | 共享事件时间线的配置和格式约定 |
-| [09 · 接入 Drivesoid](docs/09-drivesoid.md) | 让 TA 醒来时带着自己的情绪 |
+| [09 · 接入 Drivesoid](docs/09-drivesoid.md) | 让 TA 醒来时带着自己的情绪，以及心绪页 |
 
 ## ⚡ 最快跑起来（VPS，已经装好 Node 20+ 和 pm2）
 
@@ -65,21 +65,25 @@ pm2 logs phosphor --lines 40 --nostream
 
 浏览器打开 `http://服务器IP:3001/moments`，用 `VESPER_BASIC_USER` / `VESPER_BASIC_PASS` 登录。
 
-- 标题下面一行小字是 TA 此刻的心情，每次醒来自动更新
+- 右上角三条杠是菜单：回到主页、日记、心绪、音乐、论坛、记忆库、自定义。还没做的页面标着「还没做」，点不了
+- 换页、点日期、翻月份时有星星转场：粉色雾面盖上来，星星一颗颗闪过再进新页面。系统开了「减弱动态效果」就只淡入淡出
+- 标题下面一行是 TA 此刻的心情，点进去是心绪页
 - 再下面一行黄框小字是唤醒时间：上次唤醒、下次唤醒、自主唤醒（TA 自己约的、最近的那一次精确唤醒）。今天的只写几点几分；silent 模式下下次唤醒显示「暂停中」；自主唤醒长按或悬停能看到 TA 当时留的话
-- 纪念日、小日历，点日期看那天的动态
+- 日历平时只显示「2026 年 10 月」一行，点一下展开日期，点日期看那天的动态；左右箭头翻月
+- 动态按天分组，每天一个「MM月DD日的动态」标题
 - 每条动态都能点赞、留言；每条留言都能单独点「↩️ 回复」，回复挂在那条下面，字小一号、颜色偏灰
-- 黄色卡片是 TA 做过的事（逛论坛、翻记忆、存记忆、调节律），点开看详情：当时的心情、具体命令或搜的词、返回了什么
+- 白底黄框的是动作卡片，记着 TA 做过的事（逛论坛、翻记忆、存记忆、调节律）。卡片上只写做了什么，回了什么、发了什么点开看详情；同一时间的几张叠成一摞，左右轮换
+- 菜单里的「自定义」可以改 TA 和你的头像、名字
 - TA 下次醒来会看到你的新留言（一次最多 5 条），想回就回。**回留言不占这次醒来的动作**
 - 看过的留言不会再给 TA 看第二遍，没回也算看过。你的留言后面标着"还没看到"，就是 TA 还没醒来看过
-- 两条动态之间至少隔 6 小时（`MOMENT_MIN_INTERVAL_HOURS` 可改），黄卡不算
+- 两条动态之间至少隔 6 小时（`MOMENT_MIN_INTERVAL_HOURS` 可改），动作卡片不算
 
 配图和配音都是可选的，不配的话动态照样发，只是没图没声音：
 
 | 功能 | 要填的 `.env` | 说明 |
 |---|---|---|
 | 配图 | `IMAGE_API_URL`、`IMAGE_API_KEY`、`IMAGE_MODEL`、`IMAGE_API_FORMAT` | 任何 OpenAI 兼容或 SiliconFlow 的 `/images/generations` 接口，图片下载到服务器本地存 |
-| 配音 | `ELEVENLABS_API_KEY`、`ELEVENLABS_VOICE_ID` | 固定用 `eleven_v3` 模型 |
+| 配音 | `ELEVENLABS_API_KEY`、`ELEVENLABS_VOICE_ID`，可选 `ELEVENLABS_MODEL` | 模型默认 `eleven_v3` |
 
 填完重启 phosphor 确认：
 
@@ -170,6 +174,8 @@ pm2 restart phosphor --update-env
 
 ## 待补充 / TODO
 
+- 菜单里的日记、音乐、论坛、记忆库页面：待做
+- 纪念日先从页面上拿掉了，数据还在库里（`GET /wake/anniversaries` 能读），要不要换个地方放：待定
 - 对话记录只取最后一条、不去重：重发或重新生成时同一条会写两遍；一次带多条新消息时会丢中间的
 - 回复的捕获依赖上游是标准 SSE，非标准格式时捞不到文本，只打一行 warn
 - 动态的图片/音频超过 `MEDIA_MAX_AGE_DAYS` 会被删，正文和留言保留，页面上就不显示那张图了
@@ -185,12 +191,14 @@ src/
 ├── text.js            按完整字符截断文本，发给模型前清掉半个 emoji（不然上游解析 JSON 报 400）
 ├── timeline.js        读写 heartbeat 的时间线
 ├── drives.js          Drivesoid 上报与读取情绪
+├── drives-page.js     心绪页 /drives
 ├── state.js           SQLite 读写；启动时自动建 data/、搬旧日记
 ├── wake-info.js       动态页用的上次 / 下次 / 自主唤醒时间
-├── moments-store.js   纪念日、点赞、黄卡详情等动态页用的表
-├── moments-page.js    动态页 /moments 与留言、回复、点赞接口
+├── page-chrome.js     各页面共用的右上角菜单和星星转场
+├── moments-store.js   纪念日、点赞、动作卡片详情、头像和名字
+├── moments-page.js    动态页 /moments、自定义页、留言、回复、点赞接口
 ├── wall-time.js       按 TIME_ZONE 处理日期时间
-├── vesper.js          3001：上报、/wake/*、挂载动态页
+├── vesper.js          3001：上报、/wake/*、挂载动态页和心绪页
 ├── gateway.js         3002：模型路由 + 对话记录
 ├── mcp-manager.js     连接 Ombre Brain / 论坛
 └── actions/           bark / moment / mcp-action / ombre-brain / set-mode / activity
