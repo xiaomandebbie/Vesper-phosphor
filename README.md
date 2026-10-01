@@ -8,9 +8,9 @@
 
 | 项目 | 是什么 | 接进晨暮星之后 | 接法 |
 |---|---|---|---|
-| [Ombre Brain](https://github.com/P0luz/Ombre-Brain) | 长期记忆 | 醒来时先读记忆；TA 可以自己搜、存记忆 | [07](docs/07-mcp.md) |
+| [Ombre Brain](https://github.com/P0luz/Ombre-Brain) | 长期记忆 | 醒来时先读记忆；TA 可以自己搜、存记忆；管理页转发成记忆库 `/memory/` | [07](docs/07-mcp.md) |
 | [Drivesoid](https://github.com/A1batr055/Drivesoid) | 情绪状态 | 聊天自动上报；醒来时参考当前情绪；心绪页 `/drives` | [09](docs/09-drivesoid.md) |
-| [dylan-heartbeat](https://github.com/callie0313/dylan-heartbeat) | 另一个唤醒项目 | 两边共享"做过什么"的事件 | [08](docs/08-heartbeat.md) |
+| [dylan-heartbeat](https://github.com/callie0313/dylan-heartbeat) | 另一个唤醒项目 | 两边共享"做过什么"的事件；它写的日记在日记页 `/diary` 看 | [08](docs/08-heartbeat.md) |
 
 三个都是可选的，一个都不接也能跑。
 
@@ -19,7 +19,7 @@
 | pm2 进程名 | 端口 | 干什么 |
 |---|---|---|
 | `phosphor` | 无 | 心脏。每分钟看一眼该不该醒，该醒就做决定、执行动作；每 24 小时清理一次旧对话记录 |
-| `vesper` | 3001 | 接收手机上报、`/wake/*` 控制接口、动态页 `/moments`、心绪页 `/drives` |
+| `vesper` | 3001 | 接收手机上报、`/wake/*` 控制接口、动态页 `/moments`、心绪页 `/drives`、日记页 `/diary`、记忆库 `/memory/` |
 | `vesper-gateway` | 3002 | 模型网关。聊天客户端和 phosphor 都从这里调模型，顺便记录对话 |
 
 三个进程共用一个数据库 `data/state.db`。
@@ -65,7 +65,7 @@ pm2 logs phosphor --lines 40 --nostream
 
 浏览器打开 `http://服务器IP:3001/moments`，用 `VESPER_BASIC_USER` / `VESPER_BASIC_PASS` 登录。
 
-- 右上角三条杠是菜单：回到主页、日记、心绪、音乐、论坛、记忆库、自定义。还没做的页面标着「还没做」，点不了
+- 右上角三条杠是菜单：回到主页、日记、心绪、音乐、论坛、记忆库、自定义。日记、记忆库配好了才能点（见下面两节）；音乐、论坛还没做
 - 换页、点日期、翻月份时有星星转场：粉色雾面盖上来，星星一颗颗闪过再进新页面。系统开了「减弱动态效果」就只淡入淡出
 - 标题下面一行是 TA 此刻的心情，点进去是心绪页
 - 再下面一行黄框小字是唤醒时间：上次唤醒、下次唤醒、自主唤醒（TA 自己约的、最近的那一次精确唤醒）。今天的只写几点几分；silent 模式下下次唤醒显示「暂停中」；自主唤醒长按或悬停能看到 TA 当时留的话
@@ -95,6 +95,42 @@ pm2 logs phosphor --lines 20 --nostream | grep 动态
 显示 `动态配图：已开启；动态语音：已开启` 就对了。详细填法见 [04](docs/04-config.md#动态配图与配音)。
 
 > ⚠️ 动态页可以留言，**一定要设 `VESPER_BASIC_USER/PASS`**。不设的话谁都能进来冒充你留言。
+
+## 📔 日记页 `/diary`
+
+heartbeat 醒来写的日记，换成晨暮星的样子看。只读，不改 heartbeat 的任何文件。
+
+- 日历和动态页一样，有日记的日子下面有个小金点；底下「前一篇 / 后一篇」跳到有日记的那天
+- 一天里每次醒来写的一段算一篇，标着几点写的
+- 要和 heartbeat 在同一台机器上。在 `.env` 里填日记目录的**绝对路径**：
+
+```bash
+cd ~/vesper-phosphor && sed -i '/^HEARTBEAT_DIARY_DIR=/d' .env
+cd ~/vesper-phosphor && echo "HEARTBEAT_DIARY_DIR=/root/dylan-heartbeat/diary" >> .env
+cd ~/vesper-phosphor && pm2 restart vesper --update-env
+```
+
+heartbeat 默认把日记存在它项目目录下的 `diary/`；它的 `.env` 里 `DIARY_DIR` 填了绝对路径就是那个，设了 `DATA_DIR` 就在 `DATA_DIR/diary/`。
+
+不填就没有这个页面，菜单里的「日记」退回 `NAV_DIARY_URL`（外部地址）或灰色「没配置」。
+
+## 🧠 记忆库 `/memory/`
+
+Ombre Brain 的管理页整个转发过来：浏览、搜索、改记忆、删记忆、设置都和原页面一样能用，只是换成晨暮星的配色，右上角多了菜单，进出有星星转场。Ombre Brain 的代码一行没改，它怎么升级都不受影响。
+
+- 填了 `OMBRE_BRAIN_URL` 就自动开启，转发到它的根地址（去掉 `/mcp`）。管理页在别的地址时填 `OMBRE_DASHBOARD_URL`，不想要填 `off`
+- 两道登录：先过 vesper 的 Basic Auth，再登 Ombre Brain 自己的密码
+- 只换了颜色变量，布局没动。Ombre Brain 以后改了颜色变量名的话，可能有几处变回原来的颜色
+
+重启 vesper 后看一眼日志：
+
+```bash
+pm2 logs vesper --lines 20 --nostream | grep 记忆库
+```
+
+显示 `日记页：已开启；记忆库：转发 http://…` 就对了。
+
+> ⚠️ `/memory/` 和 Ombre Brain 原来的端口打开的是同一个管理页，一定要给 Ombre Brain 设密码。
 
 ## 💰 省 token
 
@@ -171,10 +207,11 @@ pm2 restart phosphor --update-env
 - **清掉旧聊天之后醒来回想一下**。旧的原话没了，长期记忆还在，清完翻一眼，别让 TA 觉得昨天是空白
 - **让 TA 看到自己最近选过什么**。连着好几次都是同一个动作时会被提醒换一个；和 heartbeat 一起跑时，推送交给 heartbeat
 - **回留言不占动作**。留言是你主动递过来的话，不该让 TA 在"回你"和"做自己的事"之间二选一
+- **日记、记忆库不改别人的代码**。日记直接读 heartbeat 的文件，记忆库转发 Ombre Brain 的页面，它们各自升级都不用跟着改
 
 ## 待补充 / TODO
 
-- 菜单里的日记、音乐、论坛、记忆库页面：待做
+- 菜单里的音乐、论坛页面：待做
 - 纪念日先从页面上拿掉了，数据还在库里（`GET /wake/anniversaries` 能读），要不要换个地方放：待定
 - 对话记录只取最后一条、不去重：重发或重新生成时同一条会写两遍；一次带多条新消息时会丢中间的
 - 回复的捕获依赖上游是标准 SSE，非标准格式时捞不到文本，只打一行 warn
@@ -192,13 +229,15 @@ src/
 ├── timeline.js        读写 heartbeat 的时间线
 ├── drives.js          Drivesoid 上报与读取情绪
 ├── drives-page.js     心绪页 /drives
+├── diary-page.js      日记页 /diary（读 heartbeat 的日记文件，只读）
+├── memory-proxy.js    记忆库 /memory/（转发 Ombre Brain 管理页，换配色、加菜单）
 ├── state.js           SQLite 读写；启动时自动建 data/、搬旧日记
 ├── wake-info.js       动态页用的上次 / 下次 / 自主唤醒时间
 ├── page-chrome.js     各页面共用的右上角菜单和星星转场
 ├── moments-store.js   纪念日、点赞、动作卡片详情、头像和名字
 ├── moments-page.js    动态页 /moments、自定义页、留言、回复、点赞接口
 ├── wall-time.js       按 TIME_ZONE 处理日期时间
-├── vesper.js          3001：上报、/wake/*、挂载动态页和心绪页
+├── vesper.js          3001：上报、/wake/*、挂载动态页、心绪页、日记页、记忆库
 ├── gateway.js         3002：模型路由 + 对话记录
 ├── mcp-manager.js     连接 Ombre Brain / 论坛
 └── actions/           bark / moment / mcp-action / ombre-brain / set-mode / activity
