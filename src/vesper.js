@@ -15,6 +15,7 @@ import { registerMomentRoutes } from './moments-page.js';
 import { registerDrivesRoutes } from './drives-page.js';
 import { registerDiaryRoutes } from './diary-page.js';
 import { registerMemoryProxy } from './memory-proxy.js';
+import { registerAppIconRoutes } from './app-icon.js';
 
 const app = express();
 // 记忆库 /memory/ 是把 Ombre Brain 的管理页转发过来（见 memory-proxy.js），要原样拿到请求体，
@@ -24,6 +25,8 @@ app.use(express.json());
 // 动态页的留言、头像表单是普通 form 提交。
 // 头像在浏览器里裁好后以 base64 一起提交，一般几十 KB，上限放到 1mb（默认 100kb 偶尔不够）
 app.use(express.urlencoded({ extended: false, limit: '1mb' }));
+// 主屏幕图标（见 app-icon.js）：要挂在各个页面路由之前，它会往页面 <head> 里加图标信息、往「自定义」页加图标卡片
+registerAppIconRoutes(app, { requireBasicAuth });
 
 const PORT = process.env.VESPER_PORT || 3001;
 const API_KEY = process.env.REPORT_STATUS_API_KEY;
@@ -46,7 +49,7 @@ function safeParse(s) {
   }
 }
 
-// 只清动态的图片和语音。头像（avatars）不在这里，不会过期被删
+// 只清动态的图片和语音。头像（avatars）和主屏幕图标（app-icon）不在这里，不会过期被删
 function pruneOldMedia() {
   const cutoff = Date.now() - MEDIA_MAX_AGE_DAYS * 24 * 60 * 60 * 1000;
   for (const sub of ['images', 'audio']) {
