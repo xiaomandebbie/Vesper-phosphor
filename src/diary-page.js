@@ -1,6 +1,7 @@
 // 日记页 /diary：heartbeat 自动写的日记，换成晨暮星的样子。只读，不改 heartbeat 的任何东西。
 // heartbeat 把日记存成一天一个 .md 文件（YYYY-MM-DD.md），每篇是「## YYYY-MM-DD HH:mm」开头的一段。
 // 目录在 .env 的 HEARTBEAT_DIARY_DIR 里配（绝对路径）；没配就不挂这个页面，/diary 还是跳回动态页。
+// 顶上那张卡片是 heartbeat 的运行状态（Gateway 运行了多久、Auto Wakeup 上次心跳），从 heartbeat 管理页读过来。
 // vesper.js 里挂载：registerDiaryRoutes(app, { requireBasicAuth })，要挂在动态页路由之前。
 import fs from 'fs';
 import path from 'path';
@@ -13,7 +14,11 @@ const FILE_RE = /^(\d{4})-(\d{2})-(\d{2})\.md$/;
 const ENTRY_HEAD_RE = /^##[ \t]+(\d{4}-\d{2}-\d{2}[ T]\d{1,2}:\d{2}[^\n]*)$/m;
 // 一天的日记最多读这么多，再多就截断（正常一天几 KB）
 const MAX_FILE_BYTES = 512 * 1024;
+// 读 heartbeat 状态最多等这么久，超时就当连不上，不拖慢日记页
+const STATUS_TIMEOUT_MS = 3000;
 const WEEKDAYS = ['一', '二', '三', '四', '五', '六', '日'];
+
+const env = (k) => String(process.env[k] ?? '').trim();
 
 function escapeHtml(value) {
   return String(value ?? '')
@@ -84,6 +89,67 @@ function formatBody(text) {
     .replace(/\*\*([^*\n]+)\*\*/g, '<b>$1</b>');
 }
 
+// ---------- heartbeat 运行状态 ----------
+// heartbeat 只在管理页上显示这两行（心跳时间存在它的内存里，没有单独的接口），所以带它的管理页账号去读那一页，
+// 只取「Gateway」「Auto Wakeup」两行文字，别的内容不看也不存。
+// 没填账号密码时只能问它的 /healthz，知道 Gateway 在不在。
+
+function heartbeatAdminUrl() {
+  const explicit = env('HEARTBEAT_ADMIN_URL');
+  if (explicit) return explicit;
+  try {
+    return new URL('/admin', env('HEARTBEAT_EVENT_URL') || 'http://localhost:3000').href;
+  } catch {
+    return 'http://localhost:3000/admin';
+  }
+}
+
+// 管理页里是 <p>Gateway <strong>运行中 (123秒)</strong></p> 这样的一行
+function pickStatus(html, label) {
+  const m = new RegExp('<p>\\s*' + label + '\\s*<strong>([\\s\\S]*?)</strong>', 'i').exec(html);
+  return m ? m[1].replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim() : '';
+}
+
+async function readHeartbeatStatus() {
+  const adminUrl = heartbeatAdminUrl();
+  const user = env('HEARTBEAT_ADMIN_USER');
+  const pass = env('HEARTBEAT_ADMIN_PASSWORD');
+  try {
+    if (!user || !pass) {
+      const r = await fetch(new URL('/healthz', adminUrl), { signal: AbortSignal.timeout(STATUS_TIMEOUT_MS) });
+      return {
+        gateway: r.ok ? '运行中' : `出错了（${r.status}）`,
+        down: !r.ok,
+        hint: '在 .env 填上 HEARTBEAT_ADMIN_USER / HEARTBEAT_ADMIN_PASSWORD，这里就能看到运行时长和上次心跳',
+      };
+    }
+    const r = await fetch(adminUrl, {
+      headers: { authorization: `Basic ${Buffer.from(`${user}:${pass}`).toString('base64')}` },
+      signal: AbortSignal.timeout(STATUS_TIMEOUT_MS),
+    });
+    if (r.status === 401) {
+      return { gateway: '运行中', hint: 'heartbeat 管理页的账号密码对不上，看一下 HEARTBEAT_ADMIN_USER / HEARTBEAT_ADMIN_PASSWORD' };
+    }
+    if (!r.ok) return { gateway: `出错了（${r.status}）`, down: true };
+    const html = await r.text();
+    return { gateway: pickStatus(html, 'Gateway') || '运行中', wakeup: pickStatus(html, 'Auto Wakeup') || '看不到' };
+  } catch {
+    return { gateway: '连不上', down: true };
+  }
+}
+
+function renderHeartbeatStatus(s) {
+  const line = (label, value, off) =>
+    `<p><span class="hb-label" lang="en">${label}</span> <span${off ? ' class="hb-off"' : ''}>${escapeHtml(value)}</span></p>`;
+  return `<section class="card hb-status" aria-label="heartbeat 运行状态">
+    ${line('Gateway', s.gateway, s.down)}
+    ${s.wakeup ? line('Auto Wakeup', s.wakeup, /离线|未启动|看不到/.test(s.wakeup)) : ''}
+    ${s.hint ? `<p class="hb-hint">${escapeHtml(s.hint)}</p>` : ''}
+  </section>`;
+}
+
+// ---------- 页面 ----------
+
 function renderCalendar({ y, m, today, selected, marked, open }) {
   const prev = shiftMonth(y, m, -1);
   const next = shiftMonth(y, m, 1);
@@ -120,6 +186,15 @@ function renderCalendar({ y, m, today, selected, marked, open }) {
   </section>`;
 }
 
+// 一篇日记：平时只露出时间，点开看全文
+function renderEntry(e) {
+  const when = e.when ? entryTime(e.when) : '没写时间的一段';
+  return `<details class="entry">
+    <summary class="entry-head"><span class="entry-when"><span aria-hidden="true">✦ </span>${escapeHtml(when)}</span><span class="entry-caret" aria-hidden="true">▾</span><span class="sr-only">，点开看全文</span></summary>
+    <div class="entry-body">${formatBody(e.body)}</div>
+  </details>`;
+}
+
 // 前一篇 / 后一篇：跳到有日记的那一天，不是简单的前一天后一天
 function renderDayNav(days, key) {
   const older = days.find((d) => d < key);
@@ -147,6 +222,13 @@ const STYLE = `
   .card { background: var(--card); border-radius: 16px; padding: 16px; margin-bottom: 14px; box-shadow: 0 1px 3px rgba(60, 30, 60, 0.08); }
   .notice { font-size: 14px; line-height: 1.6; border-left: 4px solid var(--gold); }
   .notice code { font-size: 12px; background: #f6eef3; padding: 1px 4px; border-radius: 4px; word-break: break-all; }
+  /* heartbeat 运行状态：和 heartbeat 管理页那张卡片一样的两行 */
+  .hb-status { padding: 18px 22px; border: 1px solid var(--line); background: rgba(255, 253, 251, 0.88);
+    font-family: "Songti SC", "STSong", "Noto Serif SC", Georgia, serif; font-size: 15px; line-height: 1.9; color: var(--accent); }
+  .hb-status p { margin: 0; }
+  .hb-label { text-transform: uppercase; letter-spacing: 0.06em; }
+  .hb-off { color: var(--muted); }
+  .hb-hint { font-family: -apple-system, "PingFang SC", sans-serif; font-size: 12px; line-height: 1.6; color: var(--muted); margin-top: 6px !important; }
   /* 日历：平时只有月份这一行，点开才露出日期 */
   .cal-card { position: relative; padding: 0; }
   .cal-fold > summary { list-style: none; display: flex; align-items: center; justify-content: center; gap: 6px;
@@ -155,8 +237,8 @@ const STYLE = `
   .cal-title { margin: 0; font-size: 15px; color: var(--accent); letter-spacing: 0.1em; }
   .cal-caret { color: var(--gold); font-size: 12px; transition: transform 0.2s ease; }
   .cal-fold[open] .cal-caret { transform: rotate(180deg); }
-  .cal-fold[open] .cal-body { animation: cal-in 0.24s ease-out; }
-  @keyframes cal-in { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
+  .cal-fold[open] .cal-body { animation: fold-in 0.24s ease-out; }
+  @keyframes fold-in { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
   .cal-body { padding: 0 16px 14px; }
   .cal-nav { position: absolute; top: 6px; z-index: 1; display: inline-flex; align-items: center; justify-content: center;
     width: 44px; height: 44px; font-size: 26px; color: var(--accent); text-decoration: none; border-radius: 50%; }
@@ -172,12 +254,17 @@ const STYLE = `
   .dot { position: absolute; bottom: 5px; left: 50%; width: 5px; height: 5px; margin-left: -2.5px; border-radius: 50%; background: var(--gold); }
   .day.selected .dot { background: #fff; }
   .list-title { font-size: 15px; color: var(--accent); margin: 22px 4px 10px; letter-spacing: 0.1em; }
-  /* 一篇日记：时间在上，正文用宋体，像写在本子上 */
-  .entry { background: var(--card); border-radius: 14px; padding: 14px 18px 16px; margin-bottom: 12px;
+  /* 一篇日记：平时只有时间这一行，点开是全文，正文用宋体，像写在本子上 */
+  .entry { background: var(--card); border-radius: 14px; margin-bottom: 10px;
     box-shadow: 0 1px 3px rgba(60, 30, 60, 0.08); border-left: 3px solid #e3b7cb; }
-  .entry-when { font-size: 12px; color: var(--gold); letter-spacing: 0.08em; margin-bottom: 6px; }
-  .entry-when::before { content: '✦ '; }
-  .entry-body { font-family: "Songti SC", "STSong", "Noto Serif SC", Georgia, serif; font-size: 16px; line-height: 1.85;
+  .entry-head { list-style: none; display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    min-height: 48px; padding: 0 18px; cursor: pointer; border-radius: 14px; }
+  .entry-head::-webkit-details-marker { display: none; }
+  .entry-when { font-size: 14px; color: var(--gold); letter-spacing: 0.08em; }
+  .entry-caret { color: var(--gold); font-size: 12px; transition: transform 0.2s ease; }
+  .entry[open] .entry-caret { transform: rotate(180deg); }
+  .entry[open] .entry-body { animation: fold-in 0.24s ease-out; }
+  .entry-body { padding: 0 18px 16px; font-family: "Songti SC", "STSong", "Noto Serif SC", Georgia, serif; font-size: 16px; line-height: 1.85;
     white-space: pre-wrap; word-break: break-word; }
   .entry-body b { color: var(--accent); }
   .day-nav { display: flex; justify-content: space-between; margin: 6px 4px 0; }
@@ -187,7 +274,10 @@ const STYLE = `
   .hint { color: var(--muted); font-size: 12px; margin: 4px 4px 0; }
   a:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
-  @media (prefers-reduced-motion: reduce) { .cal-fold[open] .cal-body { animation: none; } .cal-caret { transition: none; } }
+  @media (prefers-reduced-motion: reduce) {
+    .cal-fold[open] .cal-body, .entry[open] .entry-body { animation: none; }
+    .cal-caret, .entry-caret { transition: none; }
+  }
 `;
 
 function layout(title, body) {
@@ -217,8 +307,10 @@ export function registerDiaryRoutes(app, { requireBasicAuth }) {
   if (!configured) return false;
   const dir = path.resolve(configured);
 
-  app.get('/diary', requireBasicAuth, (req, res) => {
+  app.get('/diary', requireBasicAuth, async (req, res) => {
     res.set('Cache-Control', 'no-store');
+    // 状态和读日记同时进行；状态最多等 STATUS_TIMEOUT_MS
+    const statusPromise = readHeartbeatStatus();
     try {
       const now = wallParts();
       const today = { y: now.y, m: now.m, d: now.d };
@@ -229,17 +321,11 @@ export function registerDiaryRoutes(app, { requireBasicAuth }) {
       const { entries, truncated } = readEntries(dir, key);
 
       const list = entries.length
-        ? entries
-            .map(
-              (e) => `<article class="entry">
-          ${e.when ? `<div class="entry-when">${escapeHtml(entryTime(e.when))}</div>` : ''}
-          <div class="entry-body">${formatBody(e.body)}</div>
-        </article>`
-            )
-            .join('')
+        ? entries.map(renderEntry).join('')
         : `<p class="empty">${days.length ? '这一天没有日记。' : '还没有日记。heartbeat 醒来写了日记之后会出现在这里。'}</p>`;
 
       const body = `${hero()}
+        ${renderHeartbeatStatus(await statusPromise)}
         ${renderCalendar({ y: month.y, m: month.m, today, selected, marked: new Set(days), open: req.query.open === '1' })}
         <section aria-labelledby="day-title">
           <h2 id="day-title" class="list-title">${pad(selected.m)}月${pad(selected.d)}日的日记</h2>
@@ -250,6 +336,7 @@ export function registerDiaryRoutes(app, { requireBasicAuth }) {
       res.send(layout('日记 · 晨暮星', body));
     } catch (err) {
       console.error('diary page: 渲染失败', err);
+      await statusPromise.catch(() => {});
       res
         .status(500)
         .send(
