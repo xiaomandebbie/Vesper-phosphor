@@ -222,6 +222,13 @@ export const CHROME_SCRIPT = `(function () {
     void leave.offsetWidth;
     leave.classList.add('on');
     setTimeout(function () { location.href = url.href; }, reduce ? 150 : 900);
+    // 过了好一会儿还在这一页（比如点的是下载链接，页面没换），就把雾面撤掉，不然会一直盖着
+    setTimeout(function () {
+      leaving = false;
+      try { sessionStorage.removeItem(KEY); } catch (err) {}
+      leave.classList.remove('on');
+      setTimeout(function () { leave.remove(); }, 400);
+    }, 6000);
   });
 
   // 从后退缓存回来时把盖着的东西清掉

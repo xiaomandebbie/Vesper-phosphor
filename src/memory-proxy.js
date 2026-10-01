@@ -141,14 +141,15 @@ export function registerMemoryProxy(app, { requireBasicAuth }) {
       if (k === 'authorization' && /^basic\s/i.test(String(v))) continue;
       headers[k] = Array.isArray(v) ? v.join(', ') : v;
     }
-    // 它可能会核对 Origin，换成它自己的地址
+    // Ombre Brain 收到 POST 会核对 Origin 是不是它自己（防跨站伪造请求）。http 下浏览器不发 Sec-Fetch-Site，
+    // 只能靠 Origin 对上，所以换成它自己的地址。
+    // X-Forwarded-Host / Proto 故意不带：它信任本机代理时会用这两个头算「自己的地址」，算出来是 vesper 的地址，
+    // 和换过的 Origin 对不上，改记忆、删记忆这些 POST 就全被拒（403）
     if (headers.origin) headers.origin = upstreamOrigin;
     if (headers.referer) headers.referer = `${upstreamOrigin}/`;
+    // 真实来源 IP 照常带过去，它的登录限流按这个算
     const prior = req.headers['x-forwarded-for'];
     headers['x-forwarded-for'] = prior ? `${prior}, ${req.socket.remoteAddress}` : String(req.socket.remoteAddress || '');
-    headers['x-forwarded-proto'] = req.protocol;
-    headers['x-forwarded-host'] = req.headers.host || '';
-    headers['x-forwarded-prefix'] = PREFIX;
 
     const ac = new AbortController();
     res.on('close', () => {
