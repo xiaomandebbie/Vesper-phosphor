@@ -16,6 +16,7 @@ import { registerDrivesRoutes } from './drives-page.js';
 import { registerDiaryRoutes } from './diary-page.js';
 import { registerMemoryProxy } from './memory-proxy.js';
 import { registerMusicProxy } from './music-proxy.js';
+import { registerShellRoutes } from './shell.js';
 import { registerAppIconRoutes } from './app-icon.js';
 
 const app = express();
@@ -29,6 +30,8 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: false, limit: '1mb' }));
 // 主屏幕图标（见 app-icon.js）：要挂在各个页面路由之前，它会往页面 <head> 里加图标信息、往「自定义」页加图标卡片
 registerAppIconRoutes(app, { requireBasicAuth });
+// 外壳页 /app（见 shell.js）：配了音乐才开。要挂在动态、日记、心绪页之前，直接打开它们时先带回外壳
+if (musicProxy) registerShellRoutes(app, { requireBasicAuth });
 
 const PORT = process.env.VESPER_PORT || 3001;
 const API_KEY = process.env.REPORT_STATUS_API_KEY;
@@ -69,7 +72,7 @@ function pruneOldMedia() {
 pruneOldMedia();
 setInterval(pruneOldMedia, 24 * 60 * 60 * 1000);
 
-// 给网页浏览的路由（/moments、/drives、/diary、/memory、/music、/health、/media）加 Basic Auth。
+// 给网页浏览的路由（/moments、/drives、/diary、/memory、/music、/app、/health、/media）加 Basic Auth。
 // 函数声明会提升，上面挂记忆库、音乐时就能用；它读的那几个常量要到请求进来时才用到，那时已经有值了
 function requireBasicAuth(req, res, next) {
   if (!BASIC_USER || !BASIC_PASS) return next();
@@ -182,11 +185,11 @@ registerDrivesRoutes(app, { requireBasicAuth });
 
 app.get('/health', requireBasicAuth, (req, res) => res.json({ ok: true, service: 'vesper' }));
 
-// 根路径直接去动态页
-app.get('/', (req, res) => res.redirect(302, '/moments'));
+// 根路径：配了音乐就进外壳（换页不断歌），没配就直接去动态页
+app.get('/', (req, res) => res.redirect(302, musicProxy ? '/app' : '/moments'));
 
 app.listen(PORT, () =>
   console.log(
-    `vesper listening on ${PORT}；日记页：${diaryPage ? '已开启' : '未配置'}；记忆库：${memoryProxy ? `转发 ${memoryProxy}` : '未配置'}；音乐：${musicProxy ? `转发 ${musicProxy}` : '未配置'}`
+    `vesper listening on ${PORT}；日记页：${diaryPage ? '已开启' : '未配置'}；记忆库：${memoryProxy ? `转发 ${memoryProxy}` : '未配置'}；音乐：${musicProxy ? `转发 ${musicProxy}，外壳 /app` : '未配置'}`
   )
 );
