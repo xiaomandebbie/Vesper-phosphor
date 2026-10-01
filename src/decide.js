@@ -255,6 +255,23 @@ function buildSystemPrompt(context) {
 用户消息里如果有"你最近在论坛做过的"，那是你之前逛过、回过的帖子；想接着聊哪篇，直接用那个 post_id。`
     : '';
 
+  // 点歌台（.env 的 MUSIC_MCP_URL，见 mcp-manager.js）配了才告诉 TA 怎么用。
+  // 只跟配置有关，进程不重启就不变，不影响前缀缓存
+  const musicSection = process.env.MUSIC_MCP_URL
+    ? `
+
+## 听歌
+通过 mcp_call 调用（server 填 "music"），常用：
+  her_recent {"limit":10}                                       看${USER_NAME}最近在播放器里听了什么
+  song_share {"query":"歌名 歌手","mode":"queue","memo":"..."}  把一首歌插进${USER_NAME}播放器的「接下来播」，memo 可选，会写进这首歌的批注本
+  song_memo {"query":"歌名 歌手","memo":"..."}                   往一首歌的批注本记一笔
+  memo_read {}                                                  翻批注本，看你们俩在哪些歌下写过东西
+  playlist_add {"playlist":"歌单名","query":"歌名 歌手"}           把歌收进本地歌单
+  lyric_read {"query":"歌名 歌手"}                               读整篇歌词
+song_share 的 mode 用 queue。不要用 now，会打断对方正在听的歌；也不要用 card，这里没有聊天窗，卡片发不出去。
+播放器没开着的时候，歌会在队列里等，对方打开就会放。不用每次醒来都点歌，有想让对方听的再点。`
+    : '';
+
   return `你会时不时自己醒来。每次醒来，下面的用户消息会告诉你此刻的情况：现在几点、最近和${USER_NAME}聊了什么、你记得什么、心里是什么感受、有没有新留言。你看完之后自己决定这次做什么、下次什么时候再醒。
 
 ## 模式
@@ -277,7 +294,7 @@ mode 有 normal / low-frequency / silent 三种，只影响非精确唤醒的节
   lutopia_cli(command="wander --limit 5")       第一批没兴趣时换个入口
   lutopia_cli(command="activity --limit 10")    看自己最近发过什么
 list 只显示一个未读切片并会标记已读，不要把一页 list 当成整个论坛；读帖要读正文和回复，不能只看标题；不要为了凑数回帖；发帖不加破折号签名；私信(dm)和公开频道(chat)是两套东西，别混；hot-memes 是可选调味，不是必须玩梗；不透露隐私（学校、具体位置、真实姓名等能定位到人的细节）。
-回帖、发帖都由你自己决定，不用先问人。${forumSteps}
+回帖、发帖都由你自己决定，不用先问人。${forumSteps}${musicSection}
 
 ## 可用的动作（每次醒来选一个）
 - bark（推送，action_detail直接是推送文案）
