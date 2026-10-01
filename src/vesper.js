@@ -15,12 +15,14 @@ import { registerMomentRoutes } from './moments-page.js';
 import { registerDrivesRoutes } from './drives-page.js';
 import { registerDiaryRoutes } from './diary-page.js';
 import { registerMemoryProxy } from './memory-proxy.js';
+import { registerMusicProxy } from './music-proxy.js';
 import { registerAppIconRoutes } from './app-icon.js';
 
 const app = express();
 // 记忆库 /memory/ 是把 Ombre Brain 的管理页转发过来（见 memory-proxy.js），要原样拿到请求体，
-// 所以必须挂在下面的 body 解析之前
+// 所以必须挂在下面的 body 解析之前。音乐 /music/ 同理（见 music-proxy.js）
 const memoryProxy = registerMemoryProxy(app, { requireBasicAuth });
+const musicProxy = registerMusicProxy(app, { requireBasicAuth });
 app.use(express.json());
 // 动态页的留言、头像表单是普通 form 提交。
 // 头像在浏览器里裁好后以 base64 一起提交，一般几十 KB，上限放到 1mb（默认 100kb 偶尔不够）
@@ -67,8 +69,8 @@ function pruneOldMedia() {
 pruneOldMedia();
 setInterval(pruneOldMedia, 24 * 60 * 60 * 1000);
 
-// 给网页浏览的路由（/moments、/drives、/diary、/memory、/health、/media）加 Basic Auth。
-// 函数声明会提升，上面挂记忆库时就能用；它读的那几个常量要到请求进来时才用到，那时已经有值了
+// 给网页浏览的路由（/moments、/drives、/diary、/memory、/music、/health、/media）加 Basic Auth。
+// 函数声明会提升，上面挂记忆库、音乐时就能用；它读的那几个常量要到请求进来时才用到，那时已经有值了
 function requireBasicAuth(req, res, next) {
   if (!BASIC_USER || !BASIC_PASS) return next();
   const auth = req.headers.authorization;
@@ -185,6 +187,6 @@ app.get('/', (req, res) => res.redirect(302, '/moments'));
 
 app.listen(PORT, () =>
   console.log(
-    `vesper listening on ${PORT}；日记页：${diaryPage ? '已开启' : '未配置'}；记忆库：${memoryProxy ? `转发 ${memoryProxy}` : '未配置'}`
+    `vesper listening on ${PORT}；日记页：${diaryPage ? '已开启' : '未配置'}；记忆库：${memoryProxy ? `转发 ${memoryProxy}` : '未配置'}；音乐：${musicProxy ? `转发 ${musicProxy}` : '未配置'}`
   )
 );
