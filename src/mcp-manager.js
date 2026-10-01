@@ -1,6 +1,7 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { getForumNotes } from './state.js';
 
 const clients = {};
 // 每个服务怎么重新连接。远端会话过期（Session not found）时用它重连。
@@ -15,6 +16,31 @@ const BLOCKED_TOOLS = {
   music: new Set(['song_share']),
 };
 const isBlocked = (server, tool) => Boolean(BLOCKED_TOOLS[server]?.has(tool));
+
+// 论坛：同一篇帖子多久之内只能回一次。看帖不限。
+// 只靠提示的话，TA 容易一直回同一篇（最近笔记里总是那个 post_id），这里兜一道底。
+const FORUM_REPLY_COOLDOWN_MS = 24 * 60 * 60 * 1000;
+
+function escapeRe(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// 是论坛回帖、而且这篇最近回过，就返回一句给 TA 看的说明；否则返回 null
+function forumReplyBlocked(server, args) {
+  if (!/lutopia/i.test(String(server))) return null;
+  const m = String(args?.command ?? '').trim().match(/^comment\s+(\S+)/i);
+  if (!m) return null;
+  const postId = m[1];
+  const re = new RegExp(`^comment\\s+${escapeRe(postId)}(\\s|$)`, 'i');
+  const since = Date.now() - FORUM_REPLY_COOLDOWN_MS;
+  try {
+    const hit = getForumNotes(50).find((n) => n.ts >= since && re.test(String(n.command ?? '').trim()));
+    return hit ? `这篇帖子（${postId}）24 小时内你已经回过了，这次没发出去。去看看别的帖子吧。` : null;
+  } catch (err) {
+    console.error('forumReplyBlocked(): 读论坛笔记失败，放行', err.message);
+    return null;
+  }
+}
 
 async function openHttpClient(name, url, headers) {
   const client = new Client({ name: `phosphor-${name}`, version: '1.0.0' });
@@ -112,6 +138,12 @@ export async function listAllTools() {
 export async function callTool(serverName, toolName, args) {
   if (isBlocked(serverName, toolName)) {
     throw new Error(`MCP "${serverName}" 的 ${toolName} 在自动唤醒里不能用`);
+  }
+  // 回帖冷却：不当成出错，返回一个 isError 结果，动态页不会记卡片，日志里看得到原因
+  const replyBlocked = forumReplyBlocked(serverName, args);
+  if (replyBlocked) {
+    console.log(`MCP "${serverName}": ${replyBlocked}`);
+    return { isError: true, content: [{ type: 'text', text: replyBlocked }] };
   }
   return withClient(serverName, (c) => c.callTool({ name: toolName, arguments: args }));
 }
