@@ -8,6 +8,14 @@ const connectors = {};
 // 正在重连的服务，避免同时发起两次重连
 const reconnecting = {};
 
+// TA 自己醒来时不能用的工具，按服务名列。
+// 点歌台的 song_share 会把歌递进播放器：mode=now 立刻开播，mode=queue 在播放器闲着时也会直接开播。
+// 醒来突然出声会打扰对方，所以整个挡掉：不出现在工具列表里，硬调也会被拒。
+const BLOCKED_TOOLS = {
+  music: new Set(['song_share']),
+};
+const isBlocked = (server, tool) => Boolean(BLOCKED_TOOLS[server]?.has(tool));
+
 async function openHttpClient(name, url, headers) {
   const client = new Client({ name: `phosphor-${name}`, version: '1.0.0' });
   const transport = new StreamableHTTPClientTransport(
@@ -93,7 +101,7 @@ export async function listAllTools() {
   for (const name of Object.keys(connectors)) {
     try {
       const { tools } = await withClient(name, (c) => c.listTools());
-      all.push(...tools.map((t) => ({ ...t, _server: name })));
+      all.push(...tools.filter((t) => !isBlocked(name, t.name)).map((t) => ({ ...t, _server: name })));
     } catch (err) {
       console.error(`failed to list tools for ${name}:`, err.message);
     }
@@ -102,12 +110,15 @@ export async function listAllTools() {
 }
 
 export async function callTool(serverName, toolName, args) {
+  if (isBlocked(serverName, toolName)) {
+    throw new Error(`MCP "${serverName}" 的 ${toolName} 在自动唤醒里不能用`);
+  }
   return withClient(serverName, (c) => c.callTool({ name: toolName, arguments: args }));
 }
 
 // phosphor 启动时调用一次，把用到的 MCP 都连上。
 // 没配或连不上的只打一行警告，不会让整个进程崩掉。
-// 连上的 MCP，TA 醒来时都可以自己决定用。
+// 连上的 MCP，TA 醒来时都可以自己决定用（BLOCKED_TOOLS 里的除外）。
 export async function connectAll() {
   // Ombre Brain（https://github.com/P0luz/Ombre-Brain）：长期记忆，Streamable HTTP。
   // OMBRE_BRAIN_URL 形如 http://localhost:18001/mcp，要求鉴权时再填 OMBRE_MCP_TOKEN。
@@ -139,7 +150,7 @@ export async function connectAll() {
 
   // 网易云点歌台（https://github.com/Anko3o/Music-Mcp-Netease 的 mcp/music_mcp.py），Streamable HTTP。
   // 和晨暮星跑在同一台机器上，只听本机，不用鉴权。MUSIC_MCP_URL 形如 http://127.0.0.1:18012/mcp
-  // 名字固定叫 music：decide.js 的 prompt 和动态页的行为卡片都按这个名字认。
+  // 名字固定叫 music：decide.js 的 prompt、动态页的行为卡片、上面的 BLOCKED_TOOLS 都按这个名字认。
   if (process.env.MUSIC_MCP_URL) {
     try {
       await connectMcpHttp('music', process.env.MUSIC_MCP_URL);
