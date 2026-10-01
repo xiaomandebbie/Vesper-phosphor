@@ -12,9 +12,11 @@
 
 const env = (k) => String(process.env[k] ?? '').trim();
 
-// 外部地址只放行 http(s)，填错了就当没填
-function externalUrl(k) {
+// 外部地址只放行 http(s)，填错了就当没填。
+// allowPath：也接受 /music 这种同一个域名下的路径（比如 nginx 把 /music 转给另一个程序）
+function externalUrl(k, { allowPath = false } = {}) {
   const v = env(k);
+  if (allowPath && /^\/(?!\/)[^\s"'<>]*$/.test(v)) return v;
   return /^https?:\/\/[^\s"'<>]+$/i.test(v) ? v : '';
 }
 
@@ -46,7 +48,7 @@ export function ombreDashboardBase() {
 // 菜单入口。日记、记忆库优先用站内页面；没配站内页面时可以用 NAV_DIARY_URL / NAV_MEMORY_URL 跳外部地址，
 // 都没配就显示成灰色「没配置」。
 // 论坛是给人看的网页（比如 Lutopia 社区首页），填 NAV_FORUM_URL 才能点；和 TA 自己连论坛用的 LUTOPIA_MCP_URL 无关。
-// 音乐还没有页面，先占个位置；做好了给它一个 href 就行
+// 音乐是另一个程序的页面，填 NAV_MUSIC_URL：同域名下的路径（/music）或完整地址都行
 function navItems() {
   const diary = diaryDir()
     ? { href: '/diary', label: '日记' }
@@ -58,7 +60,7 @@ function navItems() {
     { href: '/moments', label: '回到主页' },
     diary,
     { href: '/drives', label: '心绪' },
-    { label: '音乐', note: '还没做' },
+    { href: externalUrl('NAV_MUSIC_URL', { allowPath: true }), label: '音乐', external: true, note: '没配置' },
     { href: externalUrl('NAV_FORUM_URL'), label: '论坛', external: true, note: '没配置' },
     memory,
     { href: '/moments/profile', label: '自定义' },
@@ -278,12 +280,14 @@ export const CHROME_SCRIPT = `(function () {
     try { url = new URL(a.href, location.href); } catch (err) { return; }
     if (url.protocol !== 'http:' && url.protocol !== 'https:') return;
     var same = url.origin === location.origin;
-    if (!same && !a.hasAttribute('data-stars')) return;
+    var outside = a.hasAttribute('data-stars');
+    if (!same && !outside) return;
     if (same && url.pathname === location.pathname && url.search === location.search && url.hash) return;
     e.preventDefault();
     if (leaving) return;
     leaving = true;
-    if (same) { try { sessionStorage.setItem(KEY, '1'); } catch (err) {} }
+    // 进场动画只给本项目的页面留记号。同域名下的别的程序（比如 /music）不认这个记号，留着会在之后乱触发
+    if (same && !outside) { try { sessionStorage.setItem(KEY, '1'); } catch (err) {} }
     var leave = veil(reduce ? 0 : 12, 0.06);
     void leave.offsetWidth;
     leave.classList.add('on');

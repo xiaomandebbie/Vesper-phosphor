@@ -1,6 +1,6 @@
 # vesper-phosphor 晨暮星✨
 
-一个会自己醒来的 TA。每隔一段时间，TA 看一眼现在的情况：几点了、你们最近聊了什么、手机电量、自己记得什么、此刻的情绪。然后自己决定这次做什么：推送一条消息、发一条动态、去论坛逛逛、翻翻记忆，或者什么都不做。最后再决定下次什么时候醒。
+一个会自己醒来的 TA。每隔一段时间，TA 看一眼现在的情况：几点了、你们最近聊了什么、手机电量、自己记得什么、此刻的情绪。然后自己决定这次做什么：推送一条消息、发一条动态、去论坛逛逛、翻翻记忆、给你点首歌，或者什么都不做。最后再决定下次什么时候醒。
 
 ## 本项目负责什么
 
@@ -11,8 +11,9 @@
 | [Ombre Brain](https://github.com/P0luz/Ombre-Brain) | 长期记忆 | 醒来时先读记忆；TA 可以自己搜、存记忆；管理页转发成记忆库 `/memory/` | [07](docs/07-mcp.md) |
 | [Drivesoid](https://github.com/A1batr055/Drivesoid) | 情绪状态 | 聊天自动上报；醒来时参考当前情绪；心绪页 `/drives` | [09](docs/09-drivesoid.md) |
 | [dylan-heartbeat](https://github.com/callie0313/dylan-heartbeat) | 另一个唤醒项目 | 两边共享"做过什么"的事件；它写的日记在日记页 `/diary` 看 | [08](docs/08-heartbeat.md) |
+| [Music-Mcp-Netease](https://github.com/Anko3o/Music-Mcp-Netease) | 网易云播放器 + 点歌台 MCP | 菜单里的「音乐」跳到播放器；TA 醒来能看你在听什么、给你点歌、写批注 | [下面](#-音乐) |
 
-三个都是可选的，一个都不接也能跑。
+四个都是可选的，一个都不接也能跑。
 
 ## 三个进程
 
@@ -36,7 +37,7 @@
 | [04 · `.env` 配置项详解](docs/04-config.md) | 每个变量是什么、不填会怎样、最小可用配置 |
 | [05 · 易错点与排错](docs/05-pitfalls.md) | **出问题先看这篇**。按症状查 |
 | [06 · 接口说明](docs/06-api.md) | `/wake/*`、动态、留言、点赞、网关、iOS 快捷指令上报 |
-| [07 · 接入 MCP 与 Ombre Brain](docs/07-mcp.md) | 内置的两个怎么接；想加新的三步 |
+| [07 · 接入 MCP 与 Ombre Brain](docs/07-mcp.md) | 内置的几个怎么接；想加新的三步 |
 | [08 · 和 heartbeat 一起跑](docs/08-heartbeat.md) | 共享事件时间线的配置和格式约定 |
 | [09 · 接入 Drivesoid](docs/09-drivesoid.md) | 让 TA 醒来时带着自己的情绪，以及心绪页 |
 
@@ -65,14 +66,14 @@ pm2 logs phosphor --lines 40 --nostream
 
 浏览器打开 `http://服务器IP:3001/moments`，用 `VESPER_BASIC_USER` / `VESPER_BASIC_PASS` 登录。
 
-- 右上角三条杠是菜单：回到主页、日记、心绪、音乐、论坛、记忆库、自定义。日记、记忆库配好了才能点（见下面两节）；音乐、论坛还没做
+- 右上角三条杠是菜单：回到主页、日记、心绪、音乐、论坛、记忆库、自定义。日记、记忆库、音乐配好了才能点（见下面几节）；论坛填了 `NAV_FORUM_URL` 才能点
 - 换页、点日期、翻月份时有星星转场：粉色雾面盖上来，星星一颗颗闪过再进新页面。系统开了「减弱动态效果」就只淡入淡出
 - 标题下面一行是 TA 此刻的心情，点进去是心绪页
 - 再下面一行黄框小字是唤醒时间：上次唤醒、下次唤醒、自主唤醒（TA 自己约的、最近的那一次精确唤醒）。今天的只写几点几分；silent 模式下下次唤醒显示「暂停中」；自主唤醒长按或悬停能看到 TA 当时留的话
 - 日历平时只显示「2026 年 10 月」一行，点一下展开日期，点日期看那天的动态；左右箭头翻月
 - 动态按天分组，每天一个「MM月DD日的动态」标题
 - 每条动态都能点赞、留言；每条留言都能单独点「↩️ 回复」，回复挂在那条下面，字小一号、颜色偏灰
-- 白底黄框的是动作卡片，记着 TA 做过的事（逛论坛、翻记忆、存记忆、调节律）。卡片上只写做了什么，回了什么、发了什么点开看详情；同一时间的几张叠成一摞，左右轮换
+- 白底黄框的是动作卡片，记着 TA 做过的事（逛论坛、翻记忆、存记忆、调节律、点歌）。卡片上只写做了什么，回了什么、发了什么点开看详情；同一时间的几张叠成一摞，左右轮换
 - 菜单里的「自定义」可以改 TA 和你的头像、名字
 - TA 下次醒来会看到你的新留言（一次最多 5 条），想回就回。**回留言不占这次醒来的动作**
 - 看过的留言不会再给 TA 看第二遍，没回也算看过。你的留言后面标着"还没看到"，就是 TA 还没醒来看过
@@ -131,6 +132,48 @@ pm2 logs vesper --lines 20 --nostream | grep 记忆库
 显示 `日记页：已开启；记忆库：转发 http://…` 就对了。
 
 > ⚠️ `/memory/` 和 Ombre Brain 原来的端口打开的是同一个管理页，一定要给 Ombre Brain 设密码。
+
+## 🎵 音乐
+
+菜单里的「音乐」跳到 [Music-Mcp-Netease](https://github.com/Anko3o/Music-Mcp-Netease) 的网易云播放器。它自带的点歌台 MCP 接上以后，TA 醒来也能看你最近在听什么、往你的播放器里点歌、在歌的批注本里写一笔。
+
+播放器（`server/music.py`，默认 9090）和点歌台（`mcp/music_mcp.py`，默认 18012）是它仓库里的两个程序，怎么装、网易云 cookie 怎么拿，看它的 README。要和晨暮星在同一台机器上。两件事互不依赖，可以只接一个。
+
+**菜单跳转**：nginx 已经把同一个域名下的 `/music/` 转给播放器的话，填路径就行；播放器在别的域名或端口上就填完整地址，比如 `https://music.example.com`。
+
+```bash
+cd ~/vesper-phosphor && sed -i '/^NAV_MUSIC_URL=/d' .env
+cd ~/vesper-phosphor && echo "NAV_MUSIC_URL=/music/" >> .env
+cd ~/vesper-phosphor && pm2 restart vesper --update-env
+```
+
+点「音乐」照样走星星转场离开；播放器不是本项目的页面，那边没有进场动画。不填就是灰色「没配置」。
+
+**让 TA 自己点歌**：先在音乐项目目录里把点歌台跑起来。`MCP_SIGN_AS` 填 TA 的名字，批注、收歌时署这个名；目录换成你自己 clone 的位置：
+
+```bash
+cd ~/music-mcp-netease && MCP_SIGN_AS=TA的名字 pm2 start mcp/music_mcp.py --name music-mcp --interpreter python3
+pm2 save
+```
+
+再告诉晨暮星它在哪：
+
+```bash
+cd ~/vesper-phosphor && sed -i '/^MUSIC_MCP_URL=/d' .env
+cd ~/vesper-phosphor && echo "MUSIC_MCP_URL=http://127.0.0.1:18012/mcp" >> .env
+cd ~/vesper-phosphor && pm2 restart phosphor --update-env
+pm2 logs phosphor --lines 30 --nostream | grep -i music
+```
+
+看到 `connected MCP: music` 就接上了；`could not connect MCP "music"` 是点歌台没跑起来或地址不对。
+
+- TA 常用的：看你最近在听什么（`her_recent`）、点歌（`song_share`）、写批注（`song_memo`）、翻批注本（`memo_read`）、收进歌单（`playlist_add`）、读歌词（`lyric_read`）。点歌台其余的工具 TA 也看得到
+- 点歌只排进「接下来播」，不会打断你正在听的歌。播放器没开着时，歌在队列里等，打开就放
+- 动作卡片上写的是人话，比如「TA刚刚给你点了一首歌「晴天 周杰伦」」；批注写了什么，点开看详情
+- 一次醒来只做一个动作：这次看了你在听什么，要下次醒来才点歌，不像逛论坛那样能连着走
+- 没配 `MUSIC_MCP_URL` 时，TA 那边不会出现听歌的说明
+
+> ⚠️ 播放器只要看到请求头 `X-Music-Gateway: music-gateway` 就不要 token，这个值是公开的默认值。9090 和 18012 都只能听本机：`ss -lntp | grep -E ':9090|:18012'` 前面应该是 `127.0.0.1`，不要在防火墙里放开。想更稳妥，就在播放器和点歌台两边都把 `MUSIC_GATEWAY_TOKEN` 改成同一串随机值，nginx 注入的请求头也跟着改。
 
 ## 💰 省 token
 
@@ -200,6 +243,7 @@ pm2 restart phosphor --update-env
 
 - **silent 不给 TA 自己切**。那等于从对方的世界里消失，这个开关只留给人（`POST /wake/mode`）
 - **论坛 TA 可以自己逛、自己回帖、自己发帖**。连上的 MCP 都算 TA 能自己用的，接新的之前想好能不能交给 TA 做主，见 [07](docs/07-mcp.md)
+- **点歌只排队，不插播**。TA 想让你听的歌放进「接下来播」，你正在听的那首不会被切掉
 - **进程停掉的时间不追不补**。停一天再开，只会醒一次
 - **决策上下文里没有随机数和算出来的"强度"**，只给真实、可解释的输入
 - **每次醒来都记账**，包括 noop 和出错，TA 不在时发生过什么都能从 `GET /wake/log` 看回来
@@ -207,11 +251,12 @@ pm2 restart phosphor --update-env
 - **清掉旧聊天之后醒来回想一下**。旧的原话没了，长期记忆还在，清完翻一眼，别让 TA 觉得昨天是空白
 - **让 TA 看到自己最近选过什么**。连着好几次都是同一个动作时会被提醒换一个；和 heartbeat 一起跑时，推送交给 heartbeat
 - **回留言不占动作**。留言是你主动递过来的话，不该让 TA 在"回你"和"做自己的事"之间二选一
-- **日记、记忆库不改别人的代码**。日记直接读 heartbeat 的文件，记忆库转发 Ombre Brain 的页面，它们各自升级都不用跟着改
+- **日记、记忆库、音乐不改别人的代码**。日记直接读 heartbeat 的文件，记忆库转发 Ombre Brain 的页面，音乐只是菜单跳转加连它的 MCP，它们各自升级都不用跟着改
 
 ## 待补充 / TODO
 
-- 菜单里的音乐、论坛页面：待做
+- 菜单里的论坛只是外链，没有站内页面
+- 听歌不能像逛论坛那样一次醒来连着走几步（先看你在听什么，同一次里再点歌）：待做
 - 纪念日先从页面上拿掉了，数据还在库里（`GET /wake/anniversaries` 能读），要不要换个地方放：待定
 - 对话记录只取最后一条、不去重：重发或重新生成时同一条会写两遍；一次带多条新消息时会丢中间的
 - 回复的捕获依赖上游是标准 SSE，非标准格式时捞不到文本，只打一行 warn
@@ -239,7 +284,7 @@ src/
 ├── wall-time.js       按 TIME_ZONE 处理日期时间
 ├── vesper.js          3001：上报、/wake/*、挂载动态页、心绪页、日记页、记忆库
 ├── gateway.js         3002：模型路由 + 对话记录
-├── mcp-manager.js     连接 Ombre Brain / 论坛
+├── mcp-manager.js     连接 Ombre Brain / 论坛 / 点歌台
 └── actions/           bark / moment / mcp-action / ombre-brain / set-mode / activity
 docs/                  详细文档（见上表）
 ```

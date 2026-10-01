@@ -23,6 +23,24 @@ const LUTOPIA_OPS = {
   activity: '翻了翻自己发过的东西',
 };
 
+// 点歌台（server 叫 music，见 mcp-manager.js）的工具 → 给人看的说法。动态页是给对方看的，所以用"你"
+const MUSIC_OPS = {
+  her_recent: '看了看你最近在听什么',
+  song_search: '搜了搜歌',
+  song_share: '给你点了一首歌',
+  lyric_read: '读了一首歌的歌词',
+  lyric_share: '挑了一句歌词',
+  song_memo: '在一首歌的批注本里写了一笔',
+  memo_read: '翻了翻你们的批注本',
+  song_comments: '刷了刷一首歌的评论区',
+  song_listen: '认真听了一首歌',
+  playlists: '翻了翻歌单',
+  playlist_add: '往歌单里收了一首歌',
+  her_netease: '看了看你的网易云',
+};
+// 这几个工具在卡片上带一下歌名
+const MUSIC_WITH_SONG = new Set(['song_share', 'song_memo', 'playlist_add', 'lyric_read', 'lyric_share', 'song_listen']);
+
 function short(value, n = 80) {
   const chars = Array.from(String(value ?? '').replace(/\s+/g, ' ').trim());
   return chars.length > n ? `${chars.slice(0, n).join('')}…` : chars.join('');
@@ -57,6 +75,22 @@ function clip(s) {
   return chars.length > MAX_DETAIL_CHARS
     ? `${chars.slice(0, MAX_DETAIL_CHARS).join('')}\n…（后面还有，太长没记下来）`
     : s;
+}
+
+// ---------- 点歌台 → 给人看的话 ----------
+
+function musicSummary(tool, args) {
+  const label = MUSIC_OPS[tool] || `用了点歌台的 ${tool}`;
+  const song = String(args?.query ?? args?.name ?? '').trim();
+  return song && MUSIC_WITH_SONG.has(tool) ? `${label}「${short(song, CARD_TITLE_CHARS)}」` : label;
+}
+
+// 详情里放 TA 写下的话（批注、配文），返回的内容在"返回"里
+function musicWritingDetail(args) {
+  const parts = [];
+  if (args?.memo) parts.push(`批注：${args.memo}`);
+  if (args?.note) parts.push(`配文：${args.note}`);
+  return parts.join('\n') || null;
 }
 
 // ---------- 论坛命令 → 给人看的话 ----------
@@ -115,6 +149,7 @@ export function describeActivity(decision, result) {
         const cmd = String(j.args?.command ?? '').trim();
         return `${AI_NAME}刚刚逛了 Lutopia 论坛，${forumSummary(cmd)}`;
       }
+      if (j.server === 'music') return `${AI_NAME}刚刚${musicSummary(j.tool, j.args)}`;
       return `${AI_NAME}刚刚用了 ${j.server} 的 ${j.tool}`;
     }
     case 'ombre_brain': {
@@ -151,6 +186,9 @@ export function describeActivityDetail(decision, result) {
       const j = tryJson(detail) ?? {};
       if (/lutopia/i.test(String(j.server ?? ''))) {
         const writing = forumWritingDetail(String(j.args?.command ?? ''));
+        if (writing) parts.push(writing);
+      } else if (j.server === 'music') {
+        const writing = musicWritingDetail(j.args);
         if (writing) parts.push(writing);
       }
       break;
