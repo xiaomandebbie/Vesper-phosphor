@@ -44,7 +44,9 @@ export function ombreDashboardBase() {
 }
 
 // 菜单入口。日记、记忆库优先用站内页面；没配站内页面时可以用 NAV_DIARY_URL / NAV_MEMORY_URL 跳外部地址，
-// 都没配就显示成灰色「没配置」。音乐、论坛还没有页面，先占个位置；做好了给它一个 href 就行
+// 都没配就显示成灰色「没配置」。
+// 论坛是给人看的网页（比如 Lutopia 社区首页），填 NAV_FORUM_URL 才能点；和 TA 自己连论坛用的 LUTOPIA_MCP_URL 无关。
+// 音乐还没有页面，先占个位置；做好了给它一个 href 就行
 function navItems() {
   const diary = diaryDir()
     ? { href: '/diary', label: '日记' }
@@ -57,7 +59,7 @@ function navItems() {
     diary,
     { href: '/drives', label: '心绪' },
     { label: '音乐', note: '还没做' },
-    { label: '论坛', note: '还没做' },
+    { href: externalUrl('NAV_FORUM_URL'), label: '论坛', external: true, note: '没配置' },
     memory,
     { href: '/moments/profile', label: '自定义' },
   ];
