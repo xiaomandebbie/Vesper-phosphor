@@ -4,10 +4,13 @@
 //   2. 页面换成晨暮星的配色，顺手去掉播放器自带的两行漏到页面上的注释；
 //   3. 播放器看到 X-Music-Gateway 头就不要 token，这个头只在这里加，浏览器碰不到；
 //   4. 注入一小段控制脚本，晨暮星的悬浮窗用 postMessage 就能暂停、切歌、点红心、打开歌词；
-//   5. 嵌在晨暮星外壳里时也用完整版界面（播放器自己检测到在 iframe 里会切成聊天抽屉的精简版）。
+//   5. 嵌在晨暮星外壳里时也用完整版界面（播放器自己检测到在 iframe 里会切成聊天抽屉的精简版）；
+//   6. 去掉播放器顶栏（music 标题、回主页），换成晨暮星的三条杠菜单，固定在屏幕上、可以拖动。
+//      在外壳里点菜单项：内容区换到那一页、播放器收起，不在播放器里跳页。
 // 播放器的代码一行不改，它以后怎么更新都不受影响。
 // 要拿到原始请求体，所以 vesper.js 里必须挂在 express.json() 之前（和记忆库一样）。
 import { Readable } from 'stream';
+import { renderMenu, CHROME_CSS, CHROME_SCRIPT } from './page-chrome.js';
 
 const PREFIX = '/music';
 const env = (k) => String(process.env[k] ?? '').trim();
@@ -55,14 +58,15 @@ const SKIN_CSS = `
   }
   html, html body { background: linear-gradient(180deg, #efe7f4 0%, #f9f0ee 55%, #fdf8f2 100%) fixed; }
   html .memory-view { background: linear-gradient(180deg, #efe7f4 0%, #f9f0ee 55%, #fdf8f2 100%); }
-  /* 「缩成迷你窗」是桌面独立窗口才有用的，网页里没意义 */
-  #music-mini-btn { display: none !important; }
+  /* 播放器自己的顶栏（music 标题、回主页、缩成迷你窗）占视野，换成晨暮星的三条杠菜单 */
+  html .topbar { display: none !important; }
 `;
 
 // 控制桥：播放器嵌在晨暮星页面里（iframe）时，父页面发这些消息就能遥控它。只认同源消息。
 //   父页 → 播放器：music:toggle / music:next / music:prev / music:like / music:lyrics / music:close-lyrics / music:state-ask
 //   播放器 → 父页：music:state {song, playing, liked, at, duration}（播放、暂停、换歌、红心变化时也会主动推）
-//   顶栏左上角「回主页」在外壳里改成收起播放器（vp:close-music），不另开标签页
+//   三条杠菜单在外壳里点：内容区换页、播放器收起（直接用外壳的 #page 和 vpPlayer，同源可以直接调）；
+//   站外链接开新标签；点「音乐」只收起菜单
 // 播放器原有的 music:play / music:ask / music:tick 照常能用。
 // 播放器脚本里的 state、likedIds、togglePlay 这些是顶层声明，同一页面里别的脚本能直接用到；
 // 哪天上游改名了，这里只是不起作用，不会把播放器弄坏。
@@ -98,12 +102,25 @@ const BRIDGE_SCRIPT = `(function () {
     else if (t !== 'music:state-ask') return;
     setTimeout(post, 250);
   });
+  // 外壳里点三条杠菜单：不在播放器里跳页，换外壳的内容区，再收起播放器
   document.addEventListener('click', function (e) {
     if (window.parent === window) return;
-    var home = e.target.closest ? e.target.closest('#music-home-btn') : null;
-    if (!home) return;
+    var a = e.target.closest ? e.target.closest('.vp-menu a[href]') : null;
+    if (!a) return;
     e.preventDefault(); e.stopPropagation();
-    try { window.parent.postMessage({ type: 'vp:close-music' }, location.origin); } catch (err) {}
+    var menu = a.closest('[data-menu]');
+    if (menu) menu.removeAttribute('open');
+    var u;
+    try { u = new URL(a.href, location.href); } catch (err) { return; }
+    if (u.origin !== location.origin) { window.open(u.href, '_blank', 'noopener'); return; }
+    if (u.pathname.indexOf('/music') === 0) return;
+    try {
+      var P = window.parent;
+      P.document.getElementById('page').src = u.pathname + u.search + u.hash;
+      P.vpPlayer.close();
+    } catch (err) {
+      try { window.parent.postMessage({ type: 'vp:close-music' }, location.origin); } catch (e2) {}
+    }
   }, true);
   if (typeof refreshLikeHearts === 'function') {
     var origHearts = refreshLikeHearts;
@@ -119,10 +136,14 @@ function rewriteHtml(html) {
   let out = html;
   for (const re of STRAY_LINES) out = out.replace(re, '');
   for (const [find, replacement] of FULL_LAYOUT) out = out.split(find).join(replacement);
-  const style = `<style id="vesper-skin">${SKIN_CSS}</style>`;
+  const style = `<style id="vesper-skin">${CHROME_CSS}${SKIN_CSS}</style>`;
   const head = out.search(/<\/head>/i);
   out = head >= 0 ? out.slice(0, head) + style + out.slice(head) : style + out;
-  const script = `<script id="vesper-bridge">${BRIDGE_SCRIPT}</script>`;
+  // 三条杠菜单：固定在屏幕上、按住可以拖（和记忆库那页一样，位置记在这台设备上）
+  const menu = renderMenu(`${PREFIX}/`, { fixed: true });
+  const bodyOpen = /<body(\s[^>]*)?>/i;
+  out = bodyOpen.test(out) ? out.replace(bodyOpen, (m) => m + menu) : out + menu;
+  const script = `<script>${CHROME_SCRIPT}</script><script id="vesper-bridge">${BRIDGE_SCRIPT}</script>`;
   const body = out.toLowerCase().lastIndexOf('</body>');
   return body >= 0 ? out.slice(0, body) + script + out.slice(body) : out + script;
 }
