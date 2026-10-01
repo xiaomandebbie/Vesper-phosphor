@@ -256,20 +256,21 @@ function buildSystemPrompt(context) {
     : '';
 
   // 点歌台（.env 的 MUSIC_MCP_URL，见 mcp-manager.js）配了才告诉 TA 怎么用。
+  // 醒来不能放歌：song_share 在 mcp-manager.js 的 BLOCKED_TOOLS 里挡掉了，这里也不提。
   // 只跟配置有关，进程不重启就不变，不影响前缀缓存
   const musicSection = process.env.MUSIC_MCP_URL
     ? `
 
 ## 听歌
 通过 mcp_call 调用（server 填 "music"），常用：
-  her_recent {"limit":10}                                       看${USER_NAME}最近在播放器里听了什么
-  song_share {"query":"歌名 歌手","mode":"queue","memo":"..."}  把一首歌插进${USER_NAME}播放器的「接下来播」，memo 可选，会写进这首歌的批注本
-  song_memo {"query":"歌名 歌手","memo":"..."}                   往一首歌的批注本记一笔
-  memo_read {}                                                  翻批注本，看你们俩在哪些歌下写过东西
-  playlist_add {"playlist":"歌单名","query":"歌名 歌手"}           把歌收进本地歌单
-  lyric_read {"query":"歌名 歌手"}                               读整篇歌词
-song_share 的 mode 用 queue。不要用 now，会打断对方正在听的歌；也不要用 card，这里没有聊天窗，卡片发不出去。
-播放器没开着的时候，歌会在队列里等，对方打开就会放。不用每次醒来都点歌，有想让对方听的再点。`
+  her_recent {"limit":10}                                  看${USER_NAME}最近在播放器里听了什么
+  playlist_add {"playlist":"歌单名","query":"歌名 歌手"}      把想让${USER_NAME}听的歌收进本地歌单，等对方自己去听
+  song_memo {"query":"歌名 歌手","memo":"..."}              往一首歌的批注本记一笔
+  memo_read {}                                             翻批注本，看你们俩在哪些歌下写过东西
+  playlists {}                                             看本地歌单架
+  lyric_read {"query":"歌名 歌手"}                          读整篇歌词
+  song_comments {"query":"歌名 歌手"}                       刷一首歌的评论区
+醒来时不能放歌，也不能往${USER_NAME}的播放器里塞歌，突然出声会打扰对方。想让对方听的，收进歌单或者写进批注本，对方打开播放器自己会看到。不用每次醒来都动歌单，有想说的再写。`
     : '';
 
   return `你会时不时自己醒来。每次醒来，下面的用户消息会告诉你此刻的情况：现在几点、最近和${USER_NAME}聊了什么、你记得什么、心里是什么感受、有没有新留言。你看完之后自己决定这次做什么、下次什么时候再醒。
