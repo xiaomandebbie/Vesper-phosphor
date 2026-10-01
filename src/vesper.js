@@ -17,9 +17,12 @@ import { registerDiaryRoutes } from './diary-page.js';
 import { registerMemoryProxy } from './memory-proxy.js';
 import { registerMusicProxy } from './music-proxy.js';
 import { registerShellRoutes } from './shell.js';
+import { registerSparkles } from './sparkles.js';
 import { registerAppIconRoutes } from './app-icon.js';
 
 const app = express();
+// 点击星星（见 sparkles.js）：最先挂，转发来的记忆库、音乐页面和我们自己的页面都能加上
+registerSparkles(app);
 // 记忆库 /memory/ 是把 Ombre Brain 的管理页转发过来（见 memory-proxy.js），要原样拿到请求体，
 // 所以必须挂在下面的 body 解析之前。音乐 /music/ 同理（见 music-proxy.js）
 const memoryProxy = registerMemoryProxy(app, { requireBasicAuth });
