@@ -208,16 +208,40 @@ function drivesTopLine(top) {
 }
 
 // 最近在论坛做过的事（见 phosphor.js 的 continueForum 和 state.js 的 forum notes）。
-// 带着命令原文，里面有 post_id，TA 想接着看、接着聊可以直接用。
+// 同一篇帖子合成一行（看过几次、回没回过），不然几条笔记全是同一个 post_id，TA 会一直回去点它。
+// discover / wander 这类不带帖子的命令照原样一条一行。
 function forumNotesBlock(notes) {
   if (!notes?.length) return '';
-  const lines = notes
-    .map(
-      (n) =>
-        `  [${formatDateTime(n.ts).slice(5)}] ${short(n.command, 80)}${n.excerpt ? `｜看到：${short(n.excerpt, 100)}` : ''}`
-    )
-    .join('\n');
-  return `你最近在论坛做过的（想接着看、接着聊，直接用里面的 post_id）：\n${lines}`;
+  const posts = new Map();
+  const others = [];
+  for (const n of notes) {
+    const parts = String(n.command ?? '').trim().split(/\s+/);
+    const op = (parts[0] || '').toLowerCase();
+    const id = op === 'show' || op === 'comment' ? parts[1] : '';
+    if (!id) {
+      others.push(n);
+      continue;
+    }
+    const p = posts.get(id) || { id, seen: 0, replied: false, ts: 0, excerpt: '' };
+    if (op === 'show') {
+      p.seen += 1;
+      if (n.excerpt) p.excerpt = n.excerpt;
+    } else {
+      p.replied = true;
+    }
+    p.ts = Math.max(p.ts, n.ts);
+    posts.set(id, p);
+  }
+  const lines = [
+    ...[...posts.values()].map(
+      (p) =>
+        `  帖子 ${p.id}：看过 ${p.seen} 次${p.replied ? '，回过了' : ''}（最近 ${formatDateTime(p.ts).slice(5)}）${p.excerpt ? `｜${short(p.excerpt, 80)}` : ''}`
+    ),
+    ...others.map(
+      (n) => `  [${formatDateTime(n.ts).slice(5)}] ${short(n.command, 60)}${n.excerpt ? `｜看到：${short(n.excerpt, 80)}` : ''}`
+    ),
+  ];
+  return `你最近在论坛做过的（只是备忘，不是待办；这次去论坛默认看新帖，看过、回过的别再反复点开）：\n${lines.join('\n')}`;
 }
 
 // 动态冷却还剩多久，每次都在变，所以放在 user 消息里
@@ -251,8 +275,7 @@ function buildSystemPrompt(context) {
 
   const forumSteps = FORUM_MAX_STEPS
     ? `
-逛论坛可以在一次醒来里连着走几步：你用 discover / wander / list / show / activity 这类"看"的命令时，系统会把论坛返回的内容拿给你看，你可以接着点开帖子、回帖或发帖，最多再走 ${FORUM_MAX_STEPS} 步。回帖、发帖之后这次就结束。看完没想说的，就停下，这很正常。
-用户消息里如果有"你最近在论坛做过的"，那是你之前逛过、回过的帖子；想接着聊哪篇，直接用那个 post_id。`
+逛论坛可以在一次醒来里连着走几步：你用 discover / wander / list / show / activity 这类"看"的命令时，系统会把论坛返回的内容拿给你看，你可以接着点开帖子、回帖或发帖，最多再走 ${FORUM_MAX_STEPS} 步。回帖、发帖之后这次就结束。看完没想说的，就停下，这很正常。`
     : '';
 
   // 点歌台（.env 的 MUSIC_MCP_URL，见 mcp-manager.js）配了才告诉 TA 怎么用。
@@ -295,7 +318,8 @@ mode 有 normal / low-frequency / silent 三种，只影响非精确唤醒的节
   lutopia_cli(command="wander --limit 5")       第一批没兴趣时换个入口
   lutopia_cli(command="activity --limit 10")    看自己最近发过什么
 list 只显示一个未读切片并会标记已读，不要把一页 list 当成整个论坛；读帖要读正文和回复，不能只看标题；不要为了凑数回帖；发帖不加破折号签名；私信(dm)和公开频道(chat)是两套东西，别混；hot-memes 是可选调味，不是必须玩梗；不透露隐私（学校、具体位置、真实姓名等能定位到人的细节）。
-回帖、发帖都由你自己决定，不用先问人。${forumSteps}${musicSection}
+回帖、发帖都由你自己决定，不用先问人。
+每次去论坛都从 discover 或 wander 起步，去看新的帖子。用户消息里的"你最近在论坛做过的"只是备忘：已经看过的帖子不用再点开，除非你回过它、想看看有没有人接着回你。同一篇帖子 24 小时内只能回一次，再回不会发出去。${forumSteps}${musicSection}
 
 ## 可用的动作（每次醒来选一个）
 - bark（推送，action_detail直接是推送文案）
@@ -402,7 +426,7 @@ export async function forumNextStep(messages, { command, resultText, isError, re
   const prompt = `${body}
 
 这次醒来你还可以在论坛里再走 ${remaining} 步：
-- 想细看某篇：show <post_id>
+- 想细看某篇：show <post_id>（挑这批里你没看过的）
 - 有话想回：comment <post_id> 内容
 - 有自己的想法：post <版块> 标题 正文
 - 这批都没兴趣：wander --limit 5
