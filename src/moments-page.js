@@ -1,9 +1,10 @@
-// 动态页 /moments：标题、此刻心情、唤醒时间、纪念日、小日历、按天看动态、留言、回复、点赞、头像和名字。
+// 动态页 /moments：标题、此刻心情、唤醒时间、小日历、按天看动态、留言、回复、点赞；自定义页 /moments/profile。
 // vesper.js 里挂载：registerMomentRoutes(app, { requireBasicAuth, requireApiKey })
 // 页面是服务端渲染，没有 JavaScript 也能看、能留言。JavaScript 只做锦上添花的事：
 //   语音条点击播放（没有 JS 时退回浏览器自带的播放器）；
 //   同一时间的几张动作卡片叠成一摞，左右箭头轮换（没有 JS 时一张张排开）；
-//   设置页上传头像前在浏览器里裁成正方形。
+//   自定义页上传头像前在浏览器里裁成正方形；
+//   右上角菜单、换页换日期时的星星转场（见 page-chrome.js）。
 import fs from 'fs';
 import path from 'path';
 import { getMoment, listMoments, listMomentComments, addMomentComment, getWakeState } from './state.js';
@@ -11,8 +12,6 @@ import {
   listMomentsBetween,
   listMomentTimestampsBetween,
   listAnniversaries,
-  addAnniversary,
-  deleteAnniversary,
   getComment,
   toggleLike,
   listLikes,
@@ -30,17 +29,16 @@ import {
   formatDateTime,
   parseDate,
   parseMonth,
-  daysBetween,
   daysInMonth,
   firstWeekday,
 } from './wall-time.js';
 import { getTopDrives } from './drives.js';
 import { getWakeTimes } from './wake-info.js';
 import { tidyActivityContent, tidyActivityDetail } from './actions/activity.js';
+import { renderMenu, HEAD_SCRIPT, CHROME_CSS, CHROME_SCRIPT } from './page-chrome.js';
 
 const MEDIA_DIR = process.env.MEDIA_DIR || '/opt/vesper/media';
 const MAX_COMMENT_CHARS = 1000;
-const MAX_ANNIV_NAME = 30;
 const MAX_MOOD_CHARS = 60;
 const MAX_NAME_CHARS = 20;
 const RECENT_LIMIT = 20;
@@ -51,7 +49,7 @@ const AUDIO_BYTES_PER_SEC = 128000 / 8;
 const STACK_WINDOW_MS = 5 * 60 * 1000;
 const WEEKDAYS = ['一', '二', '三', '四', '五', '六', '日'];
 
-// 动态、留言、纪念日名字都是模型 / 用户写的文字，拼进 HTML 前必须转义
+// 动态、留言、名字都是模型 / 用户写的文字，拼进 HTML 前必须转义
 function escapeHtml(value) {
   return String(value ?? '')
     .replace(/&/g, '&amp;')
@@ -61,7 +59,7 @@ function escapeHtml(value) {
     .replace(/'/g, '&#39;');
 }
 
-// 显示用的名字：设置页填过就用填的，没填用 .env 的称呼
+// 显示用的名字：自定义页填过就用填的，没填用 .env 的称呼
 const nameOf = (author) => getProfile(author === 'user' ? 'user' : 'assistant').name;
 
 // 只放行本项目自己生成的媒体路径
@@ -94,9 +92,13 @@ function shiftMonth(y, m, delta) {
   return { y: t.getUTCFullYear(), m: t.getUTCMonth() + 1 };
 }
 
-function pageUrl(y, m, day) {
-  return `/moments?month=${y}-${pad(m)}${day ? `&day=${day}` : ''}`;
+// open：日历要不要展开。翻月份时带上，点日期时不带（看动态就收起来）
+function pageUrl(y, m, day, open = false) {
+  return `/moments?month=${y}-${pad(m)}${day ? `&day=${day}` : ''}${open ? '&open=1' : ''}`;
 }
+
+// "10月01日的动态"
+const dayTitle = (p) => `${pad(p.m)}月${pad(p.d)}日的动态`;
 
 // 头像：设置过就用图片，没设置就是名字第一个字。旁边总会写名字，所以头像本身不再给读屏读一遍
 function avatarHtml(who, size = 'md') {
@@ -178,46 +180,8 @@ function renderWakeLine() {
     .join('<span class="wake-sep" aria-hidden="true">·</span>')}</p>`;
 }
 
-// 过去的日子显示已经多少天，将来的显示还有多少天
-function describeCount(days) {
-  if (days > 0) return `<b>${days}</b> 天`;
-  if (days === 0) return '<b class="today-mark">就是今天</b>';
-  return `还有 <b>${-days}</b> 天`;
-}
-
-function renderAnniversaries(list, today, back) {
-  const items = list
-    .map((a) => {
-      const d = parseDate(a.date);
-      const count = d ? describeCount(daysBetween(d, today)) : '';
-      return `<li class="anniv-item">
-        <div class="anniv-main"><span class="anniv-name">${escapeHtml(a.name)}</span><span class="anniv-date">${escapeHtml(a.date)}</span></div>
-        <div class="anniv-count">${count}</div>
-        <form method="post" action="/moments/anniversaries/${a.id}/delete" class="anniv-del" onsubmit="return confirm('确定删除这个纪念日吗？')">
-          <input type="hidden" name="back" value="${escapeHtml(back)}" />
-          <button type="submit" aria-label="删除纪念日：${escapeHtml(a.name)}" title="删除">×</button>
-        </form>
-      </li>`;
-    })
-    .join('');
-  return `<section class="card" aria-labelledby="anniv-title">
-    <h2 id="anniv-title" class="section-title">纪念日</h2>
-    ${items ? `<ul class="anniv-list">${items}</ul>` : '<p class="empty">还没有纪念日，在下面添加一个吧。</p>'}
-    <details class="anniv-add"${items ? '' : ' open'}>
-      <summary>添加纪念日</summary>
-      <form method="post" action="/moments/anniversaries">
-        <input type="hidden" name="back" value="${escapeHtml(back)}" />
-        <label for="anniv-name">名称</label>
-        <input id="anniv-name" name="name" maxlength="${MAX_ANNIV_NAME}" placeholder="比如：恋爱纪念日" required />
-        <label for="anniv-date">日期</label>
-        <input id="anniv-date" name="date" type="date" required />
-        <button type="submit">保存</button>
-      </form>
-    </details>
-  </section>`;
-}
-
-function renderCalendar({ y, m, today, selected, marked }) {
+// 小日历：平时只露出"2026 年 10 月"这一行，点一下展开日期。左右箭头翻月，翻月后保持展开
+function renderCalendar({ y, m, today, selected, marked, open }) {
   const prev = shiftMonth(y, m, -1);
   const next = shiftMonth(y, m, 1);
   const todayKey = ymd(today);
@@ -241,21 +205,18 @@ function renderCalendar({ y, m, today, selected, marked }) {
   while (cells.length % 7) cells.push('<td></td>');
   const rows = [];
   for (let i = 0; i < cells.length; i += 7) rows.push(`<tr>${cells.slice(i, i + 7).join('')}</tr>`);
-  const onToday = selectedKey === todayKey;
-  return `<section class="card" aria-labelledby="cal-title">
-    <div class="cal-head">
-      <a class="cal-nav" href="${pageUrl(prev.y, prev.m)}" aria-label="上个月">‹</a>
-      <h2 id="cal-title" class="section-title">${y} 年 ${m} 月</h2>
-      <a class="cal-nav" href="${pageUrl(next.y, next.m)}" aria-label="下个月">›</a>
-    </div>
-    <table class="cal">
-      <thead><tr>${WEEKDAYS.map((w) => `<th scope="col">${w}</th>`).join('')}</tr></thead>
-      <tbody>${rows.join('')}</tbody>
-    </table>
-    <div class="cal-foot">
-      ${onToday ? '' : `<a href="${pageUrl(today.y, today.m, todayKey)}">看今天</a>`}
-      ${selected ? '<a href="/moments">看最近的动态</a>' : ''}
-    </div>
+  return `<section class="card cal-card" aria-label="日历">
+    <a class="cal-nav cal-prev" href="${pageUrl(prev.y, prev.m, null, true)}" aria-label="上个月">‹</a>
+    <a class="cal-nav cal-next" href="${pageUrl(next.y, next.m, null, true)}" aria-label="下个月">›</a>
+    <details class="cal-fold"${open ? ' open' : ''}>
+      <summary><h2 class="cal-title">${y} 年 ${m} 月</h2><span class="cal-caret" aria-hidden="true">▾</span><span class="sr-only">，点开看日期</span></summary>
+      <div class="cal-body">
+        <table class="cal">
+          <thead><tr>${WEEKDAYS.map((w) => `<th scope="col">${w}</th>`).join('')}</tr></thead>
+          <tbody>${rows.join('')}</tbody>
+        </table>
+      </div>
+    </details>
   </section>`;
 }
 
@@ -424,7 +385,7 @@ function highlightPlaces(html) {
 }
 
 // 一张动作卡片：白底黄框，只留时间、做了什么，有详情的点开能看；不放头像、点赞和留言。
-// 不显示命令原文：老卡片里存着的命令，在这里整理掉；回帖、发帖显示回了什么、发了什么
+// 卡片上不放命令原文和回帖内容（太长），老卡片在这里整理掉；回了什么、发了什么在详情里
 function renderActivityCard(m, inStack = false) {
   const content = tidyActivityContent(m.content);
   const detail = tidyActivityDetail(m.detail);
@@ -527,18 +488,17 @@ const STACK_SCRIPT = `(function () {
   });
 })();`;
 
-function renderMoment(m, back, showDate) {
+function renderMoment(m, back) {
   if (m.kind === 'activity') return renderActivityCard(m);
 
   const commentsHtml = renderComments(m, back);
   const likeBar = renderLikeBar(m, back);
   const img = safeMediaUrl(m.image_url);
   const audio = safeMediaUrl(m.audio_url);
-  const time = formatDateTime(m.ts);
   return `<article class="moment post" id="m${m.id}">
     ${avatarHtml('assistant')}
     <div class="moment-main">
-      <div class="moment-head"><span class="moment-name">${escapeHtml(nameOf('assistant'))}</span><span class="ts">${escapeHtml(showDate ? time : time.slice(11))}</span></div>
+      <div class="moment-head"><span class="moment-name">${escapeHtml(nameOf('assistant'))}</span><span class="ts">${escapeHtml(formatDateTime(m.ts).slice(11))}</span></div>
       <div class="content">${escapeHtml(m.content)}</div>
       ${img ? `<img class="moment-img" src="${img}" alt="动态配图" loading="lazy" />` : ''}
       ${audio ? renderVoice(audio) : ''}
@@ -549,6 +509,29 @@ function renderMoment(m, back, showDate) {
   </article>`;
 }
 
+// 按天分组（列表是新的在前），每天一个"MM月DD日的动态"标题
+function groupByDay(moments) {
+  const out = [];
+  for (const m of moments) {
+    const key = formatDateTime(m.ts).slice(0, 10);
+    const last = out[out.length - 1];
+    if (last?.key === key) last.items.push(m);
+    else out.push({ key, p: wallParts(m.ts), items: [m] });
+  }
+  return out;
+}
+
+function renderDayGroup(g, back) {
+  const id = `day-${g.key}`;
+  const items = groupForDisplay(g.items)
+    .map((x) => (x.type === 'stack' ? renderStack(x.items) : renderMoment(x.m, back)))
+    .join('');
+  return `<section class="day-group" aria-labelledby="${id}">
+    <h2 id="${id}" class="list-title">${dayTitle(g.p)}</h2>
+    ${items}
+  </section>`;
+}
+
 const STYLE = `
   :root { --ink: #2b2233; --muted: #665a70; --accent: #7a3e5d; --gold: #b7792f; --card: #fffdfb; --line: #eadfe6;
     --activity: #E6B652; --activity-ink: #8a5a14; --place: #9a6412; --voice: #f8d7e3; --voice-press: #f1c1d3; }
@@ -557,7 +540,7 @@ const STYLE = `
     background: linear-gradient(180deg, #efe7f4 0%, #f9f0ee 55%, #fdf8f2 100%); }
   main { max-width: 600px; margin: 0 auto; padding: 28px 16px 48px; }
   .hero { text-align: center; margin: 14px 0 24px; }
-  .hero-sm { margin: 6px 0 8px; }
+  .hero-sm { margin: 10px 0 18px; }
   .title { margin: 0; font-family: "Songti SC", "STSong", "Noto Serif SC", "Source Han Serif SC", serif; font-size: 42px;
     font-weight: 700; letter-spacing: 0.35em; padding-left: 0.35em; color: #5b2e52; }
   .title.title-sm { font-size: 28px; letter-spacing: 0.2em; padding-left: 0.2em; }
@@ -584,26 +567,24 @@ const STYLE = `
   .wake-sep { color: var(--activity); }
   .card { background: var(--card); border-radius: 16px; padding: 16px; margin-bottom: 14px; box-shadow: 0 1px 3px rgba(60, 30, 60, 0.08); }
   .section-title { font-size: 15px; margin: 0 0 10px; color: var(--accent); letter-spacing: 0.1em; }
-  .anniv-list { list-style: none; margin: 0; padding: 0; }
-  .anniv-item { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--line); }
-  .anniv-item:last-child { border-bottom: none; }
-  .anniv-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-  .anniv-name { font-weight: 600; }
-  .anniv-date { font-size: 12px; color: var(--muted); }
-  .anniv-count { font-size: 14px; color: var(--muted); white-space: nowrap; }
-  .anniv-count b { font-family: Georgia, "Times New Roman", serif; font-size: 28px; color: var(--accent); margin-right: 2px; }
-  .anniv-count b.today-mark { font-family: inherit; font-size: 16px; }
-  .anniv-del button { background: none; border: none; color: var(--muted); font-size: 20px; min-width: 44px; min-height: 44px; padding: 0; }
-  .anniv-add summary { cursor: pointer; color: var(--accent); font-size: 14px; margin-top: 8px; padding: 6px 0; }
-  .anniv-add form { display: grid; gap: 6px; margin-top: 8px; }
-  .anniv-add label { font-size: 13px; color: var(--muted); }
   input { padding: 9px 10px; border: 1px solid #cbbfc9; border-radius: 10px; font-size: 16px; background: #fff; color: var(--ink); }
   button { padding: 9px 14px; border: none; border-radius: 10px; background: var(--accent); color: #fff; font-size: 15px; }
-  .cal-head { display: flex; align-items: center; justify-content: space-between; }
-  .cal-head .section-title { margin: 0; }
-  .cal-nav { display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; font-size: 26px;
-    color: var(--accent); text-decoration: none; border-radius: 50%; }
-  .cal { width: 100%; border-collapse: collapse; table-layout: fixed; margin-top: 4px; }
+  /* 日历：平时只有月份这一行，点开才露出日期 */
+  .cal-card { position: relative; padding: 0; }
+  .cal-fold > summary { list-style: none; display: flex; align-items: center; justify-content: center; gap: 6px;
+    min-height: 56px; padding: 6px 56px; cursor: pointer; border-radius: 16px; }
+  .cal-fold > summary::-webkit-details-marker { display: none; }
+  .cal-title { margin: 0; font-size: 15px; color: var(--accent); letter-spacing: 0.1em; }
+  .cal-caret { color: var(--gold); font-size: 12px; transition: transform 0.2s ease; }
+  .cal-fold[open] .cal-caret { transform: rotate(180deg); }
+  .cal-fold[open] .cal-body { animation: cal-in 0.24s ease-out; }
+  @keyframes cal-in { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
+  .cal-body { padding: 0 16px 14px; }
+  .cal-nav { position: absolute; top: 6px; z-index: 1; display: inline-flex; align-items: center; justify-content: center;
+    width: 44px; height: 44px; font-size: 26px; color: var(--accent); text-decoration: none; border-radius: 50%; }
+  .cal-prev { left: 8px; }
+  .cal-next { right: 8px; }
+  .cal { width: 100%; border-collapse: collapse; table-layout: fixed; }
   .cal th { font-size: 12px; color: var(--muted); font-weight: 500; padding: 6px 0; }
   .cal td { text-align: center; padding: 2px; }
   .day { position: relative; display: flex; align-items: center; justify-content: center; height: 42px; border-radius: 12px;
@@ -612,12 +593,7 @@ const STYLE = `
   .day.selected { background: var(--accent); color: #fff; }
   .dot { position: absolute; bottom: 5px; left: 50%; width: 5px; height: 5px; margin-left: -2.5px; border-radius: 50%; background: var(--gold); }
   .day.selected .dot { background: #fff; }
-  .cal-foot { display: flex; gap: 18px; justify-content: center; margin-top: 8px; font-size: 14px; }
-  .cal-foot a { color: var(--accent); padding: 6px 0; }
-  .list-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 22px 4px 10px; }
-  .list-title { font-size: 15px; color: var(--accent); margin: 0; letter-spacing: 0.1em; }
-  .list-link, .back-link { display: inline-flex; align-items: center; min-height: 44px; font-size: 13px; color: var(--accent); }
-  .back-link { font-size: 14px; }
+  .list-title { font-size: 15px; color: var(--accent); margin: 22px 4px 10px; letter-spacing: 0.1em; }
   /* 头像：设置过就是图片，没设置是名字首字，TA 粉色、我黄色 */
   .avatar { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; overflow: hidden;
     object-fit: cover; border-radius: 10px; color: #fff; font-weight: 600; line-height: 1; }
@@ -703,8 +679,8 @@ const STYLE = `
   @media (prefers-reduced-motion: reduce) {
     .playing .w1, .playing .w2 { animation: none; }
     .voice-bar.playing { background: var(--voice-press); }
-    .stack-item.in-next, .stack-item.in-prev, .activity-detail[open] .detail { animation: none; }
-    .stack-dot, .stack-arrow, .hint-arrow { transition: none; }
+    .stack-item.in-next, .stack-item.in-prev, .activity-detail[open] .detail, .cal-fold[open] .cal-body { animation: none; }
+    .stack-dot, .stack-arrow, .hint-arrow, .cal-caret { transition: none; }
   }
   .like-bar { display: flex; align-items: center; gap: 4px; margin-top: 8px; }
   .like-btn { background: none; color: var(--accent); font-size: 22px; line-height: 1; min-width: 44px; min-height: 44px;
@@ -729,8 +705,8 @@ const STYLE = `
   .comment.reply .who { color: var(--muted); }
   .comment-form { display: flex; gap: 8px; margin-top: 10px; }
   .comment-form input { flex: 1; min-width: 0; }
-  .empty { color: var(--muted); font-size: 14px; }
-  /* 头像和名字设置页 */
+  .empty { color: var(--muted); font-size: 14px; margin: 0 4px; }
+  /* 自定义页 */
   .profile-row { display: flex; align-items: flex-start; gap: 16px; }
   .profile-fields { flex: 1; min-width: 0; display: grid; gap: 6px; }
   .profile-fields label { font-size: 13px; color: var(--muted); }
@@ -743,27 +719,42 @@ const STYLE = `
   .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 `;
 
-// head 里那一小段给 html 加上 js 标记：有 JavaScript 才显示语音条，不然留着浏览器自带的播放器
-function layout(title, body, script = '') {
+// head 里那一小段给 html 加上 js 标记：有 JavaScript 才显示语音条，不然留着浏览器自带的播放器。
+// 菜单和星星转场每个页面都有（见 page-chrome.js），current 是菜单里高亮哪一项
+function layout(title, body, script = '', current = '/moments') {
   return `<!DOCTYPE html>
 <html lang="zh">
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>${escapeHtml(title)}</title>
-<script>document.documentElement.className += ' js';</script>
-<style>${STYLE}</style>
+<script>document.documentElement.className += ' js';${HEAD_SCRIPT}</script>
+<style>${STYLE}${CHROME_CSS}</style>
 </head>
-<body><main>${body}</main>${script ? `<script>${script}</script>` : ''}</body>
+<body><main>${renderMenu(current)}${body}</main><script>${script}${CHROME_SCRIPT}</script></body>
 </html>`;
 }
 
-function renderPage({ today, month, selected, anniversaries, marked, moments, back, mood, top }) {
-  const listTitle = selected ? `${selected.m} 月 ${selected.d} 日的动态` : '最近的动态';
-  const empty = selected ? '这一天还没有动态。' : '还没有动态。';
-  const items = groupForDisplay(moments)
-    .map((g) => (g.type === 'stack' ? renderStack(g.items) : renderMoment(g.m, back, !selected)))
-    .join('');
+function renderPage({ today, month, selected, marked, moments, back, mood, top, calOpen }) {
+  let list;
+  if (selected) {
+    const items = groupForDisplay(moments)
+      .map((x) => (x.type === 'stack' ? renderStack(x.items) : renderMoment(x.m, back)))
+      .join('');
+    list = `<section class="day-group" aria-labelledby="day-sel">
+      <h2 id="day-sel" class="list-title">${dayTitle(selected)}</h2>
+      ${items || '<p class="empty">这一天还没有动态。</p>'}
+    </section>`;
+  } else if (moments.length) {
+    list = groupByDay(moments)
+      .map((g) => renderDayGroup(g, back))
+      .join('');
+  } else {
+    list = `<section class="day-group" aria-labelledby="day-today">
+      <h2 id="day-today" class="list-title">${dayTitle(today)}</h2>
+      <p class="empty">还没有动态。</p>
+    </section>`;
+  }
   return layout(
     '晨暮星',
     `<header class="hero">
@@ -772,20 +763,13 @@ function renderPage({ today, month, selected, anniversaries, marked, moments, ba
       ${renderMoodLine(mood, top)}
       ${renderWakeLine()}
     </header>
-    ${renderAnniversaries(anniversaries, today, back)}
-    ${renderCalendar({ y: month.y, m: month.m, today, selected, marked })}
-    <section aria-labelledby="list-title">
-      <div class="list-head">
-        <h2 id="list-title" class="list-title">${listTitle}</h2>
-        <a class="list-link" href="/moments/profile">头像和名字 ›</a>
-      </div>
-      ${items || `<p class="empty">${empty}</p>`}
-    </section>`,
+    ${renderCalendar({ y: month.y, m: month.m, today, selected, marked, open: calOpen })}
+    ${list}`,
     VOICE_SCRIPT + STACK_SCRIPT
   );
 }
 
-// ---------- 头像和名字设置页 /moments/profile ----------
+// ---------- 自定义页 /moments/profile ----------
 
 // 选了图片就在浏览器里裁成 256×256 的 JPEG，塞进隐藏的 avatar_data 一起提交，不用另外装上传组件
 const AVATAR_SCRIPT = `(function () {
@@ -863,16 +847,16 @@ function renderProfileCard(who, saved) {
 
 function renderProfilePage(saved) {
   return layout(
-    '头像和名字 · 晨暮星',
-    `<header class="hero hero-sm"><h1 class="title title-sm">头像和名字</h1></header>
-    <p><a class="back-link" href="/moments">‹ 回动态</a></p>
+    '自定义 · 晨暮星',
+    `<header class="hero hero-sm"><h1 class="title title-sm">自定义</h1></header>
     ${PROFILE_WHO.map((w) => renderProfileCard(w, saved === w)).join('')}`,
-    AVATAR_SCRIPT
+    AVATAR_SCRIPT,
+    '/moments/profile'
   );
 }
 
 function errorPage(message, back) {
-  return layout('出错了', `<div class="card"><p>${escapeHtml(message)}</p><p><a href="${escapeHtml(back)}">返回</a></p></div>`);
+  return layout('出错了', `<div class="card"><p>${escapeHtml(message)}</p><p><a href="${escapeHtml(back)}">返回</a></p></div>`, '', '');
 }
 
 // 你的留言。replyTo 可选：要回复的那条留言 id，必须在同一条动态下
@@ -909,6 +893,7 @@ export function registerMomentRoutes(app, { requireBasicAuth, requireApiKey }) {
     res.json({ ok: true, liked: toggleLike(id, 'user') });
   });
 
+  // 纪念日先从页面上拿掉了，数据还在库里，这个接口照样能读
   app.get('/wake/anniversaries', requireApiKey, (req, res) => res.json(listAnniversaries()));
 
   // ---- 网页 ----
@@ -942,12 +927,12 @@ export function registerMomentRoutes(app, { requireBasicAuth, requireApiKey }) {
           today,
           month,
           selected,
-          anniversaries: listAnniversaries(),
           marked,
           moments,
           back,
           mood: currentMood(),
           top,
+          calOpen: req.query.open === '1',
         })
       );
     } catch (err) {
@@ -983,27 +968,6 @@ export function registerMomentRoutes(app, { requireBasicAuth, requireApiKey }) {
       return res.status(500).send(errorPage('保存失败了，看一下 vesper 的日志。', back));
     }
     res.redirect(303, `/moments/profile?saved=${who}`);
-  });
-
-  app.post('/moments/anniversaries', requireBasicAuth, (req, res) => {
-    const back = safeBack(req.body?.back);
-    if (!sameOrigin(req)) return res.status(403).send(errorPage('请求来源不对', back));
-    const name = String(req.body?.name ?? '').trim();
-    const date = parseDate(req.body?.date);
-    if (!name || name.length > MAX_ANNIV_NAME) {
-      return res.status(400).send(errorPage(`名称不能为空，最多 ${MAX_ANNIV_NAME} 个字`, back));
-    }
-    if (!date) return res.status(400).send(errorPage('日期不对，请重新选择', back));
-    addAnniversary(name, ymd(date));
-    res.redirect(303, back);
-  });
-
-  app.post('/moments/anniversaries/:id/delete', requireBasicAuth, (req, res) => {
-    const back = safeBack(req.body?.back);
-    if (!sameOrigin(req)) return res.status(403).send(errorPage('请求来源不对', back));
-    const id = Number(req.params.id);
-    if (Number.isInteger(id)) deleteAnniversary(id);
-    res.redirect(303, back);
   });
 
   app.post('/moments/:id/comments', requireBasicAuth, (req, res) => {

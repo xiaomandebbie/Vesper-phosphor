@@ -5,18 +5,26 @@
 // 新页面打开时先盖着，星星再闪几下后淡出。系统开了「减弱动态效果」就只淡入淡出。
 // 没有 JavaScript 时链接照常跳，没有转场。表单提交（留言、点赞）不走转场。
 
-// 菜单入口。以后加页面就在这里加一行
+// 菜单入口。soon 的是还没做的页面，先占个位置、不能点；做好了把 soon 换成 href 就行
 export const NAV_ITEMS = [
   { href: '/moments', label: '回到主页' },
+  { label: '日记', soon: true },
   { href: '/drives', label: '心绪' },
+  { label: '音乐', soon: true },
+  { label: '论坛', soon: true },
+  { label: '记忆库', soon: true },
   { href: '/moments/profile', label: '自定义' },
 ];
 
 // 右上角三条杠。<details> 本身就能展开收起，没有 JavaScript 也能用
 export function renderMenu(current) {
-  const items = NAV_ITEMS.map(
-    ({ href, label }) => `<li><a href="${href}"${href === current ? ' aria-current="page"' : ''}>${label}</a></li>`
-  ).join('');
+  const items = NAV_ITEMS.map((item) => {
+    if (item.soon || !item.href) {
+      return `<li><span class="menu-soon" aria-disabled="true">${item.label}<small>还没做</small></span></li>`;
+    }
+    const here = item.href === current;
+    return `<li><a href="${item.href}"${here ? ' aria-current="page"' : ''}>${item.label}</a></li>`;
+  }).join('');
   return `<details class="menu" data-menu>
     <summary class="menu-btn" aria-label="菜单"><span class="bars" aria-hidden="true"><i></i><i></i><i></i></span></summary>
     <nav class="menu-panel" aria-label="页面"><ul>${items}</ul></nav>
@@ -39,15 +47,18 @@ export const CHROME_CSS = `
   .menu[open] .bars i:nth-child(1) { transform: translateY(6px) rotate(45deg); }
   .menu[open] .bars i:nth-child(2) { opacity: 0; }
   .menu[open] .bars i:nth-child(3) { transform: translateY(-6px) rotate(-45deg); }
-  .menu-panel { position: absolute; right: 0; top: 48px; min-width: 9.5em; padding: 6px; background: #fffdfb;
+  .menu-panel { position: absolute; right: 0; top: 48px; min-width: 10em; padding: 6px; background: #fffdfb;
     border: 1px solid #eadfe6; border-radius: 14px; box-shadow: 0 8px 24px rgba(60, 30, 60, 0.16);
     animation: menu-in 0.2s ease-out; transform-origin: top right; }
   .menu-panel ul { list-style: none; margin: 0; padding: 0; }
-  .menu-panel a { display: flex; align-items: center; min-height: 44px; padding: 0 14px; border-radius: 10px;
-    color: #2b2233; text-decoration: none; font-size: 15px; white-space: nowrap; }
+  .menu-panel a, .menu-soon { display: flex; align-items: center; min-height: 44px; padding: 0 14px; border-radius: 10px;
+    font-size: 15px; white-space: nowrap; }
+  .menu-panel a { color: #2b2233; text-decoration: none; }
   .menu-panel a:hover, .menu-panel a:focus-visible { background: #f6eef3; }
   .menu-panel a[aria-current="page"] { color: #7a3e5d; font-weight: 600; }
   .menu-panel a[aria-current="page"]::before { content: '✦'; margin-right: 6px; font-size: 12px; color: #b7792f; }
+  .menu-soon { justify-content: space-between; gap: 12px; color: #8f8296; cursor: default; }
+  .menu-soon small { font-size: 11px; color: #a597ab; }
   .menu-btn:focus-visible, .menu-panel a:focus-visible { outline: 2px solid #7a3e5d; outline-offset: 2px; }
   @keyframes menu-in { from { opacity: 0; transform: translateY(-4px) scale(0.96); } to { opacity: 1; transform: none; } }
 
