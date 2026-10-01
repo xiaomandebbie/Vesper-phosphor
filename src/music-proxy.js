@@ -3,7 +3,8 @@
 //   1. 登录和动态页共用 vesper 的 Basic Auth，以后把播放器嵌进晨暮星页面时不会再弹第二个登录框；
 //   2. 页面换成晨暮星的配色，顺手去掉播放器自带的两行漏到页面上的注释；
 //   3. 播放器看到 X-Music-Gateway 头就不要 token，这个头只在这里加，浏览器碰不到；
-//   4. 注入一小段控制脚本，晨暮星的悬浮窗用 postMessage 就能暂停、切歌、点红心、打开歌词。
+//   4. 注入一小段控制脚本，晨暮星的悬浮窗用 postMessage 就能暂停、切歌、点红心、打开歌词；
+//   5. 嵌在晨暮星外壳里时也用完整版界面（播放器自己检测到在 iframe 里会切成聊天抽屉的精简版）。
 // 播放器的代码一行不改，它以后怎么更新都不受影响。
 // 要拿到原始请求体，所以 vesper.js 里必须挂在 express.json() 之前（和记忆库一样）。
 import { Readable } from 'stream';
@@ -32,6 +33,16 @@ const RESPONSE_SKIP = new Set(['content-encoding', 'content-length', 'transfer-e
 // 播放器 index.html 里有两段注释开头丢了，后半句当正文显示在歌词页上
 const STRAY_LINES = [/^.*syncDiscSpin 还在但查无此盘.*\r?\n/m, /^.*进度条滑块是兔兔本兔.*\r?\n/m];
 
+// 播放器发现自己在 iframe 里就切成聊天抽屉的精简版（没有顶栏、首页、个人主页，默认停在歌单）。
+// 晨暮星外壳里是全屏打开的，要完整版：
+//   - 嵌入检测改成「不算嵌着」；
+//   - 返回键接管只在独立打开时装，不然它往历史里塞记录，会搅乱外壳的后退。
+// 找不到这些原文（上游改了写法）就什么都不换，最多退回精简版，不会弄坏页面。
+const FULL_LAYOUT = [
+  ['try { return window.self !== window.top; } catch { return true; }', 'return false;'],
+  ['if (!isEmbedded) installBackGuard();', 'if (window.parent === window) installBackGuard();'],
+];
+
 // 晨暮星配色：覆盖播放器的颜色变量和底色。布局、动效都不动
 const SKIN_CSS = `
   html:root {
@@ -44,11 +55,14 @@ const SKIN_CSS = `
   }
   html, html body { background: linear-gradient(180deg, #efe7f4 0%, #f9f0ee 55%, #fdf8f2 100%) fixed; }
   html .memory-view { background: linear-gradient(180deg, #efe7f4 0%, #f9f0ee 55%, #fdf8f2 100%); }
+  /* 「缩成迷你窗」是桌面独立窗口才有用的，网页里没意义 */
+  #music-mini-btn { display: none !important; }
 `;
 
 // 控制桥：播放器嵌在晨暮星页面里（iframe）时，父页面发这些消息就能遥控它。只认同源消息。
 //   父页 → 播放器：music:toggle / music:next / music:prev / music:like / music:lyrics / music:close-lyrics / music:state-ask
 //   播放器 → 父页：music:state {song, playing, liked, at, duration}（播放、暂停、换歌、红心变化时也会主动推）
+//   顶栏左上角「回主页」在外壳里改成收起播放器（vp:close-music），不另开标签页
 // 播放器原有的 music:play / music:ask / music:tick 照常能用。
 // 播放器脚本里的 state、likedIds、togglePlay 这些是顶层声明，同一页面里别的脚本能直接用到；
 // 哪天上游改名了，这里只是不起作用，不会把播放器弄坏。
@@ -84,6 +98,13 @@ const BRIDGE_SCRIPT = `(function () {
     else if (t !== 'music:state-ask') return;
     setTimeout(post, 250);
   });
+  document.addEventListener('click', function (e) {
+    if (window.parent === window) return;
+    var home = e.target.closest ? e.target.closest('#music-home-btn') : null;
+    if (!home) return;
+    e.preventDefault(); e.stopPropagation();
+    try { window.parent.postMessage({ type: 'vp:close-music' }, location.origin); } catch (err) {}
+  }, true);
   if (typeof refreshLikeHearts === 'function') {
     var origHearts = refreshLikeHearts;
     window.refreshLikeHearts = function () { var r = origHearts.apply(this, arguments); post(); return r; };
@@ -97,6 +118,7 @@ const BRIDGE_SCRIPT = `(function () {
 function rewriteHtml(html) {
   let out = html;
   for (const re of STRAY_LINES) out = out.replace(re, '');
+  for (const [find, replacement] of FULL_LAYOUT) out = out.split(find).join(replacement);
   const style = `<style id="vesper-skin">${SKIN_CSS}</style>`;
   const head = out.search(/<\/head>/i);
   out = head >= 0 ? out.slice(0, head) + style + out.slice(head) : style + out;
