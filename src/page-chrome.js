@@ -6,6 +6,8 @@
 // 菜单里的外部页面离开时也走转场；那边不是本项目的页面，所以没有进场动画。
 // 没有 JavaScript 时链接照常跳，没有转场。表单提交（留言、点赞）不走转场。
 //
+// 记忆库那页的菜单是固定在屏幕上的，按住可以拖到别处，免得挡住 Ombre Brain 自己的按钮；拖到哪记在这台设备上。
+//
 // 类名都带 vp- 前缀：记忆库那页是别人的页面，样式要和它的类名错开。
 
 const env = (k) => String(process.env[k] ?? '').trim();
@@ -62,7 +64,7 @@ function navItems() {
 }
 
 // 右上角三条杠。<details> 本身就能展开收起，没有 JavaScript 也能用。
-// fixed：固定在屏幕右上角，给记忆库那种不是我们自己排版的页面用
+// fixed：固定在屏幕上、可以拖动，给记忆库那种不是我们自己排版的页面用
 export function renderMenu(current, { fixed = false } = {}) {
   const items = navItems()
     .map((item) => {
@@ -74,8 +76,9 @@ export function renderMenu(current, { fixed = false } = {}) {
       return `<li><a href="${escapeAttr(item.href)}"${attrs}>${item.label}</a></li>`;
     })
     .join('');
+  const hint = fixed ? ' title="点开是菜单，按住可以拖到别处"' : '';
   return `<details class="vp-menu${fixed ? ' vp-menu-fixed' : ''}" data-menu>
-    <summary class="vp-menu-btn" aria-label="菜单"><span class="vp-bars" aria-hidden="true"><i></i><i></i><i></i></span></summary>
+    <summary class="vp-menu-btn" aria-label="菜单"${hint}><span class="vp-bars" aria-hidden="true"><i></i><i></i><i></i></span></summary>
     <nav class="vp-menu-panel" aria-label="页面"><ul>${items}</ul></nav>
   </details>`;
 }
@@ -94,7 +97,9 @@ export const CHROME_CSS = `
     margin: 0; padding: 0; border-radius: 12px; cursor: pointer; color: #7a3e5d; }
   .vp-menu-btn::-webkit-details-marker { display: none; }
   .vp-menu-btn::marker { content: ''; }
-  .vp-menu-fixed .vp-menu-btn { background: rgba(255, 253, 251, 0.94); box-shadow: 0 2px 10px rgba(60, 30, 60, 0.16); }
+  .vp-menu-fixed .vp-menu-btn { background: rgba(255, 253, 251, 0.94); box-shadow: 0 2px 10px rgba(60, 30, 60, 0.16);
+    touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+  .vp-menu-fixed.vp-dragging .vp-menu-btn { cursor: grabbing; box-shadow: 0 6px 18px rgba(60, 30, 60, 0.28); }
   .vp-menu-btn:active { background: rgba(122, 62, 93, 0.08); }
   .vp-bars { display: grid; gap: 4px; width: 20px; }
   .vp-bars i { display: block; height: 2px; border-radius: 1px; background: currentColor; transition: transform 0.25s ease, opacity 0.2s ease; }
@@ -104,6 +109,10 @@ export const CHROME_CSS = `
   .vp-menu-panel { position: absolute; right: 0; top: 48px; min-width: 10em; padding: 6px; background: #fffdfb;
     border: 1px solid #eadfe6; border-radius: 14px; box-shadow: 0 8px 24px rgba(60, 30, 60, 0.16);
     animation: vp-menu-in 0.2s ease-out; transform-origin: top right; }
+  /* 菜单被拖到左半边就往右展开，拖到下半边就往上展开，免得跑出屏幕 */
+  .vp-menu.vp-menu-left .vp-menu-panel { right: auto; left: 0; transform-origin: top left; }
+  .vp-menu.vp-menu-up .vp-menu-panel { top: auto; bottom: 48px; transform-origin: bottom right; }
+  .vp-menu.vp-menu-up.vp-menu-left .vp-menu-panel { transform-origin: bottom left; }
   .vp-menu-panel ul { list-style: none; margin: 0; padding: 0; }
   .vp-menu-panel li { margin: 0; padding: 0; list-style: none; }
   .vp-menu-panel a, .vp-menu-soon { display: flex; align-items: center; min-height: 44px; padding: 0 14px; border-radius: 10px;
@@ -147,7 +156,7 @@ export const CHROME_CSS = `
   }
 `;
 
-// 放在 </body> 前：菜单点外面收起，站内链接和菜单里的外部页面走星星转场
+// 放在 </body> 前：菜单点外面收起，站内链接和菜单里的外部页面走星星转场，固定的菜单可以拖
 export const CHROME_SCRIPT = `(function () {
   var KEY = 'vp-stars';
   var SVG = '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2.5l2.6 6.1 6.6.6-5 4.4 1.5 6.5L12 16.7 6.3 20.1l1.5-6.5-5-4.4 6.6-.6z"/></svg>';
@@ -167,6 +176,61 @@ export const CHROME_SCRIPT = `(function () {
       if (s) s.focus();
     });
   });
+
+  // 固定在屏幕上的菜单（记忆库那页）：按住拖开，松手记住位置；轻点还是开关菜单
+  var fixed = document.querySelector('.vp-menu-fixed');
+  var handle = fixed && fixed.querySelector('summary');
+  if (fixed && handle) {
+    var POS_KEY = 'vp-menu-pos';
+    var pos = null;
+    var place = function (x, y) {
+      var w = handle.offsetWidth || 44, h = handle.offsetHeight || 44;
+      x = Math.min(Math.max(4, x), Math.max(4, window.innerWidth - w - 4));
+      y = Math.min(Math.max(4, y), Math.max(4, window.innerHeight - h - 4));
+      pos = { x: x, y: y };
+      fixed.style.left = x + 'px';
+      fixed.style.top = y + 'px';
+      fixed.style.right = 'auto';
+      fixed.classList.toggle('vp-menu-left', x + w / 2 < window.innerWidth / 2);
+      fixed.classList.toggle('vp-menu-up', y + h / 2 > window.innerHeight / 2);
+    };
+    try {
+      var saved = JSON.parse(localStorage.getItem(POS_KEY) || 'null');
+      if (saved && isFinite(saved.x) && isFinite(saved.y)) place(Number(saved.x), Number(saved.y));
+    } catch (err) {}
+    // 转屏、窗口变小时拉回屏幕里
+    window.addEventListener('resize', function () { if (pos) place(pos.x, pos.y); });
+
+    var drag = null, dragged = false;
+    handle.addEventListener('pointerdown', function (e) {
+      if (e.button !== 0) return;
+      var r = fixed.getBoundingClientRect();
+      drag = { id: e.pointerId, sx: e.clientX, sy: e.clientY, ox: r.left, oy: r.top };
+      dragged = false;
+      try { handle.setPointerCapture(e.pointerId); } catch (err) {}
+    });
+    handle.addEventListener('pointermove', function (e) {
+      if (!drag || e.pointerId !== drag.id) return;
+      var dx = e.clientX - drag.sx, dy = e.clientY - drag.sy;
+      // 挪不到 6 像素算点按，不算拖
+      if (!dragged && Math.abs(dx) + Math.abs(dy) < 6) return;
+      if (!dragged) { dragged = true; fixed.removeAttribute('open'); fixed.classList.add('vp-dragging'); }
+      e.preventDefault();
+      place(drag.ox + dx, drag.oy + dy);
+    });
+    var stop = function (e) {
+      if (!drag || e.pointerId !== drag.id) return;
+      drag = null;
+      fixed.classList.remove('vp-dragging');
+      if (dragged && pos) { try { localStorage.setItem(POS_KEY, JSON.stringify(pos)); } catch (err) {} }
+    };
+    handle.addEventListener('pointerup', stop);
+    handle.addEventListener('pointercancel', stop);
+    // 拖完松手时浏览器还会补一次点击，别让它把菜单打开
+    handle.addEventListener('click', function (e) {
+      if (dragged) { e.preventDefault(); dragged = false; }
+    }, true);
+  }
 
   function veil(count, step) {
     var v = document.createElement('div');
