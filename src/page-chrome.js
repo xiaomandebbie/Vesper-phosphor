@@ -1,10 +1,13 @@
-// 几个页面共用的外框：右上角的三条杠菜单，换页、换日期时的转场，早晚两张脸，以及那几处活起来的细节。
+// 几个页面共用的外框：右上角的三条杠菜单，换页、换日期时的星星转场，早晚两张脸，以及那几处活起来的细节。
 // 动态页、自定义页、心绪页、日记页、收藏页，以及转发过来的记忆库（Ombre Brain 管理页）都从这里拿，
 // 改一处几个页面一起变。
 //
-// 转场：点站内链接时星星一颗颗闪出来、页面向左翻出去，新页从右边翻进来（翻书那部分在 flourish.js）。
-// 菜单里的外部页面不是本项目的，没法翻，所以走老样子：盖上一层雾面再跳。
-// 没有 JavaScript 时链接照常跳，没有转场。表单提交（留言）不走转场。
+// 星星转场：点站内链接时先盖上一层粉色雾面，星星一颗颗闪出来，再跳过去；
+// 新页面打开时先盖着，星星再闪几下后淡出。系统开了「减弱动态效果」就只淡入淡出。
+// 菜单里的外部页面离开时也走转场；那边不是本项目的页面，所以没有进场动画。
+// 没有 JavaScript 时链接照常跳，没有转场。表单提交（留言、点赞）不走转场。
+//
+// 试过给同页面切换加 3D 翻书感，被打回来了 —— 看着头晕。现在就是星星雾面，不要再加了。
 //
 // 早晚两张脸：页面底色按长沙真实的日出日落走（见 sun-time.js），不按系统时区切。
 // 颜色跑在 HEAD_SCRIPT 里，在 head 里最先执行，所以首屏绘制前就定好了，不会先亮一下再变暗。
@@ -97,11 +100,11 @@ export function renderMenu(current, { fixed = false } = {}) {
 }
 
 // 放在 <head> 里最先跑：
-//   1. 上一页是点链接跳过来的，就打上记号 —— vp-stars-in 让星星闪起来，vp-turn-in 让新页从右边翻进来；
+//   1. 上一页是点链接跳过来的，就先把整页盖住，免得内容闪一下才盖上转场；
 //   2. 按长沙的日出日落把当下该用的颜色定下来（见 sun-time.js）。
 //      要在首屏绘制前做完，所以跑在这里，不在 </body> 前。
 export const HEAD_SCRIPT =
-  "try{if(sessionStorage.getItem('vp-stars'))document.documentElement.className+=' vp-stars-in vp-turn-in'}catch(e){}" +
+  "try{if(sessionStorage.getItem('vp-stars'))document.documentElement.classList.add('vp-stars-in')}catch(e){}" +
   FACE_SCRIPT;
 
 // 四张脸要追着改的页面元素。各页 STYLE 里这些颜色是写死的，这里排在它们后面盖过去。
@@ -135,16 +138,6 @@ const FACE_PATCH_CSS = `
   html[data-face="night"] .vp-menu-soon small, html[data-face="dusk"] .vp-menu-soon small { color: var(--muted); }
   html[data-face="night"] .vp-menu-fixed .vp-menu-btn, html[data-face="dusk"] .vp-menu-fixed .vp-menu-btn {
     background: var(--card); }
-`;
-
-// 翻书和星星雾面打架：雾面是不透明的、盖整屏，翻书的动作会整个藏在它后面，等于白做。
-// 所以同站换页（打了 vp-turn 记号那几下）把雾面的底色和光晕都去掉，只留星星本身，
-// 变成「星星闪着、页面翻过去」。菜单里的外部页面没法翻，所以那边雾面照旧盖。
-const TURN_PATCH_CSS = `
-  html.vp-turn-out .vp-veil, html.vp-turn-in .vp-veil,
-  html.vp-turn-in.vp-stars-in body::after {
-    background: none !important; }
-  html.vp-turn-out .vp-veil::before, html.vp-turn-in .vp-veil::before { display: none; }
 `;
 
 export const CHROME_CSS = `
@@ -215,7 +208,7 @@ export const CHROME_CSS = `
     .vp-veil::before, .vp-menu-panel { animation: none; }
     .vp-bars i { transition: none; }
   }
-${FACE_CSS}${FACE_PATCH_CSS}${FLOURISH_CSS}${TURN_PATCH_CSS}`;
+${FACE_CSS}${FACE_PATCH_CSS}${FLOURISH_CSS}`;
 
 // 放在 </body> 前：铺上夜空的星星层，菜单点外面收起，站内链接和菜单里的外部页面走星星转场，固定的菜单可以拖
 export const CHROME_SCRIPT = `(function () {
@@ -370,7 +363,7 @@ export const CHROME_SCRIPT = `(function () {
   window.addEventListener('pageshow', function (e) {
     if (!e.persisted) return;
     leaving = false;
-    root.className = root.className.replace(/\\bvp-(stars-in|turn-in|turn-out)\\b/g, '');
+    root.classList.remove('vp-stars-in');
     try { sessionStorage.removeItem(KEY); } catch (err) {}
     document.querySelectorAll('.vp-veil').forEach(function (v) { v.remove(); });
   });
