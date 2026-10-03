@@ -12,6 +12,7 @@ import {
   getRecentConversation,
 } from './state.js';
 import { registerMomentRoutes } from './moments-page.js';
+import { registerFavoriteRoutes } from './favorites.js';
 import { registerDrivesRoutes } from './drives-page.js';
 import { registerDiaryRoutes } from './diary-page.js';
 import { registerMemoryProxy } from './memory-proxy.js';
@@ -19,6 +20,7 @@ import { registerMusicProxy } from './music-proxy.js';
 import { registerShellRoutes } from './shell.js';
 import { registerSparkles } from './sparkles.js';
 import { registerAppIconRoutes } from './app-icon.js';
+import { renderLoginPage } from './login-page.js';
 
 const app = express();
 // 点击星星（见 sparkles.js）：最先挂，转发来的记忆库、音乐页面和我们自己的页面都能加上
@@ -76,7 +78,9 @@ pruneOldMedia();
 setInterval(pruneOldMedia, 24 * 60 * 60 * 1000);
 
 // 给网页浏览的路由（/moments、/drives、/diary、/memory、/music、/app、/health、/media）加 Basic Auth。
-// 函数声明会提升，上面挂记忆库、音乐时就能用；它读的那几个常量要到请求进来时才用到，那时已经有值了
+// 函数声明会提升，上面挂记忆库、音乐时就能用；它读的那几个常量要到请求进来时才用到，那时已经有值了。
+// 没登录时返回的那一页见 login-page.js：跟着早晚两张脸走，不带菜单、不引要认证的资源。
+// 图片、语音这些非页面请求就不必返回整页 HTML 了，给一行纯文字。
 function requireBasicAuth(req, res, next) {
   if (!BASIC_USER || !BASIC_PASS) return next();
   const auth = req.headers.authorization;
@@ -91,7 +95,9 @@ function requireBasicAuth(req, res, next) {
     }
   }
   res.set('WWW-Authenticate', 'Basic realm="vesper"');
-  return res.status(401).send('需要登录');
+  const wantsHtml = String(req.headers.accept ?? '').includes('text/html');
+  if (!wantsHtml) return res.status(401).send('需要登录');
+  return res.status(401).send(renderLoginPage());
 }
 
 // 给程序化访问（手机快捷指令、以后的前端）用的 x-api-key 校验。
@@ -181,6 +187,9 @@ app.get('/wake/conversation', requireApiKey, (req, res) => {
 // 日记页 /diary（heartbeat 写的日记），见 diary-page.js。
 // 要挂在动态页之前：动态页里留着一个 /diary → /moments 的旧跳转，日记页没配时才轮到它
 const diaryPage = registerDiaryRoutes(app, { requireBasicAuth });
+// 收藏（见 favorites.js）：要挂在动态页之前。
+// /moments/favorites 得比 /moments/:id 先匹配到，不然 favorites 会被当成一个 id
+registerFavoriteRoutes(app, { requireBasicAuth });
 // 动态页 /moments（标题、日历、按天看动态、留言、自定义）以及对应接口，见 moments-page.js
 registerMomentRoutes(app, { requireBasicAuth, requireApiKey });
 // 心绪页 /drives（Drivesoid 的情绪状态），见 drives-page.js
