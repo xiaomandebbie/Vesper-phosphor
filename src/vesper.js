@@ -13,6 +13,7 @@ import {
 } from './state.js';
 import { registerMomentRoutes } from './moments-page.js';
 import { registerFavoriteRoutes } from './favorites.js';
+import { registerStarJarRoutes } from './star-jar.js';
 import { registerDrivesRoutes } from './drives-page.js';
 import { registerDiaryRoutes } from './diary-page.js';
 import { registerMemoryProxy } from './memory-proxy.js';
@@ -187,9 +188,10 @@ app.get('/wake/conversation', requireApiKey, (req, res) => {
 // 日记页 /diary（heartbeat 写的日记），见 diary-page.js。
 // 要挂在动态页之前：动态页里留着一个 /diary → /moments 的旧跳转，日记页没配时才轮到它
 const diaryPage = registerDiaryRoutes(app, { requireBasicAuth });
-// 收藏（见 favorites.js）：要挂在动态页之前。
-// /moments/favorites 得比 /moments/:id 先匹配到，不然 favorites 会被当成一个 id
+// 收藏（见 favorites.js）和星星罐（见 star-jar.js）：要挂在动态页之前。
+// /moments/favorites、/moments/star-jar 得比 /moments/:id 先匹配到，不然会被当成一个 id
 registerFavoriteRoutes(app, { requireBasicAuth });
+registerStarJarRoutes(app, { requireBasicAuth });
 // 动态页 /moments（标题、日历、按天看动态、留言、自定义）以及对应接口，见 moments-page.js
 registerMomentRoutes(app, { requireBasicAuth, requireApiKey });
 // 心绪页 /drives（Drivesoid 的情绪状态），见 drives-page.js
@@ -202,6 +204,6 @@ app.get('/', (req, res) => res.redirect(302, musicProxy ? '/app' : '/moments'));
 
 app.listen(PORT, () =>
   console.log(
-    `vesper listening on ${PORT}；日记页：${diaryPage ? '已开启' : '未配置'}；记忆库：${memoryProxy ? `转发 ${memoryProxy}` : '未配置'}；音乐：${musicProxy ? `转发 ${musicProxy}，外壳 /app` : '未配置'}`
+    `vesper listening on ${PORT}；日记页：${diaryPage ? '已开启' : '未配置'}；记忆库：${memoryProxy ? `转发 ${memoryProxy}` : '未配置'}；音乐：${musicProxy ? `转发 ${musicProxy}，外壳 /app` : '未配置'}；星星罐：/moments/star-jar`
   )
 );

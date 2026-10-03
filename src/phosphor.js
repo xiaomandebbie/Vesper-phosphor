@@ -28,6 +28,7 @@ import { listAllTools, connectAll, callTool, isConnected } from './mcp-manager.j
 import { isSharedTimelineEnabled, describeAction, postSharedEvent } from './timeline.js';
 import { getSharedContext, countRecentChat } from './context.js';
 import { getTopDrives, isDrivesEnabled } from './drives.js';
+import { getUnseenStarReplies, markStarRepliesSeen, hasStarToday, starWindowLabel } from './star-jar.js';
 
 const TICK_MS = 60 * 1000;
 const MISSED_GRACE_MS = 3 * 60 * 1000;
@@ -36,6 +37,8 @@ const DEFAULT_WAKE_MINUTES = 60;
 const MIN_WAKE_MINUTES = 5;
 const MAX_COMMENTS_PER_WAKE = 5;
 const MAX_REPLY_CHARS = 500;
+// 一次醒来最多带几条"新的阳光撒下"（她摘下星星后回的话）。带过的就算告知过，下次不再出现
+const MAX_STAR_REPLIES_PER_WAKE = 3;
 // 做决定时带多少条最近对话。每条在 decide.js 里还会再截短。
 // 条数越多越贵；.env 的 DECIDE_CONTEXT_LIMIT 可改，不填是 12。
 const DECIDE_CONTEXT_LIMIT = (() => {
@@ -286,6 +289,16 @@ async function runDecisionCycle({ kind, scheduledAt = null, selfNote = null, cle
   ]);
   const gapMinutes = wakeState.updated_at ? (Date.now() - wakeState.updated_at) / 60000 : 0;
   const pendingComments = getPendingComments(MAX_COMMENTS_PER_WAKE);
+  // 星星罐：今天那一次机会用没用过，以及她摘下星星后回的话（读库，不调模型）。
+  // 读不到就当没有，不能因为星星罐坏了把整次唤醒拖下水。
+  let starUsedToday = false;
+  let starReplies = [];
+  try {
+    starUsedToday = hasStarToday();
+    starReplies = getUnseenStarReplies(MAX_STAR_REPLIES_PER_WAKE);
+  } catch (err) {
+    console.error('phosphor: 读星星罐失败（不影响这次唤醒）', err.message);
+  }
 
   const missed = getUnacknowledgedMissed();
   const missedSummary = missed.length
@@ -315,6 +328,8 @@ async function runDecisionCycle({ kind, scheduledAt = null, selfNote = null, cle
     recentActions: getRecentActions(8),
     forumNotes: getForumNotes(FORUM_NOTES_SHOWN),
     pendingComments,
+    starUsedToday,
+    starReplies,
     imageEnabled: isImageEnabled(),
     voiceEnabled: isVoiceEnabled(),
     heartbeatActive: isSharedTimelineEnabled(),
@@ -342,6 +357,15 @@ async function runDecisionCycle({ kind, scheduledAt = null, selfNote = null, cle
       repliedCount = handleCommentReplies(decision, pendingComments);
     } catch (err) {
       console.error(`[${kind}] handleCommentReplies failed:`, err);
+    }
+    // 星星罐的回音已经随这次决定给 TA 看过了，标成告知过，下次不再重复
+    if (starReplies.length) {
+      try {
+        markStarRepliesSeen(starReplies.map((r) => r.id));
+        console.log(`phosphor: 带了 ${starReplies.length} 条星星罐的回音给 TA`);
+      } catch (err) {
+        console.error(`[${kind}] markStarRepliesSeen failed:`, err.message);
+      }
     }
     try {
       result = await executeAction(decision);
@@ -371,7 +395,8 @@ async function runDecisionCycle({ kind, scheduledAt = null, selfNote = null, cle
     error: errorMessage,
   });
 
-  // 做了事就写回共享时间线，让另一边醒来时也知道
+  // 做了事就写回共享时间线，让另一边醒来时也知道。
+  // 星星罐那一句不写：describeAction 对 star_jar 返回 null，咽下去的话不该漏到别处去
   if (!errorMessage) await postSharedEvent(describeAction(decision, result));
   if (repliedCount) {
     await postSharedEvent(`自动唤醒：本次未发送推送｜回复了动态下的 ${repliedCount} 条留言`);
@@ -490,7 +515,7 @@ async function main() {
   process.on('SIGINT', () => shutdown('SIGINT'));
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   console.log(
-    `phosphor: 最长唤醒间隔 ${MAX_WAKE_MINUTES} 分钟；决策带最近对话 ${DECIDE_CONTEXT_LIMIT} 条；对话记录清理：${CLEAN_HOURS > 0 ? `每 ${CLEAN_HOURS} 小时，保留最新 ${CONVERSATION_LOG_KEEP} 条` : '关闭'}；论坛一次最多再走 ${FORUM_MAX_STEPS} 步；共享时间线：${isSharedTimelineEnabled() ? '已开启' : '未开启'}；动态配图：${isImageEnabled() ? '已开启' : '未配置'}；动态语音：${isVoiceEnabled() ? '已开启' : '未配置'}；情绪（Drivesoid）：${isDrivesEnabled() ? '已接入' : '未接入'}`
+    `phosphor: 最长唤醒间隔 ${MAX_WAKE_MINUTES} 分钟；决策带最近对话 ${DECIDE_CONTEXT_LIMIT} 条；对话记录清理：${CLEAN_HOURS > 0 ? `每 ${CLEAN_HOURS} 小时，保留最新 ${CONVERSATION_LOG_KEEP} 条` : '关闭'}；论坛一次最多再走 ${FORUM_MAX_STEPS} 步；共享时间线：${isSharedTimelineEnabled() ? '已开启' : '未开启'}；动态配图：${isImageEnabled() ? '已开启' : '未配置'}；动态语音：${isVoiceEnabled() ? '已开启' : '未配置'}；情绪（Drivesoid）：${isDrivesEnabled() ? '已接入' : '未接入'}；星星罐：一天一颗，提示窗 ${starWindowLabel()}`
   );
   await connectAll();
   await tick();

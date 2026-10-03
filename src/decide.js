@@ -11,6 +11,7 @@
 import { momentWaitMs, MOMENT_MIN_INTERVAL_HOURS } from './actions/moment.js';
 import { formatDateTime } from './wall-time.js';
 import { clipText, wellFormedDeep } from './text.js';
+import { MAX_STAR_CHARS, starWindowLabel } from './star-jar.js';
 
 const LLM_BASE_URL =
   process.env.LLM_BASE_URL || 'https://api.deepseek.com/v1/chat/completions';
@@ -256,6 +257,25 @@ function momentCooldownNote() {
   return '动态冷却：已过，这次可以发动态';
 }
 
+// 今天那一次机会还在不在。一天一颗，用过了这次就别再选 star_jar。
+function starJarLine(context) {
+  return context.starUsedToday
+    ? '星星罐：今天已经放过一颗了，这次选别的（明天才有新的机会）'
+    : '星星罐：今天还没放过，这次可以放一颗——放进去就不能改、不能撤回';
+}
+
+// 她摘下了某一颗，并回了你一句。只告知这一次，下次醒来不会再出现。
+function starRepliesBlock(replies) {
+  if (!replies?.length) return '';
+  const lines = replies
+    .map(
+      (r) =>
+        `  [${formatDateTime(r.ts).slice(5, 10)} 那颗] 你当时放进去的：「${short(r.content, 200)}」\n      ${USER_NAME}回：${short(r.reply, 300)}`
+    )
+    .join('\n');
+  return `有新的阳光撒下（${USER_NAME}摘下了你放进星星罐的星星，回了你一句；只告知这一次）：\n${lines}`;
+}
+
 // ---------- system：每次醒来都一样的部分 ----------
 // 这里用到的 context 字段（能不能配图配音、有没有 heartbeat、有哪些 MCP 服务）只跟配置有关，
 // 进程不重启就不会变。不要把时间、对话、情绪、冷却这类会变的东西放进来。
@@ -274,26 +294,14 @@ function buildSystemPrompt(context) {
   const tools = [...(context.availableTools ?? [])].sort().join('、') || '暂无';
 
   const forumSteps = FORUM_MAX_STEPS
-    ? `
-逛论坛可以在一次醒来里连着走几步：你用 discover / wander / list / show / activity 这类"看"的命令时，系统会把论坛返回的内容拿给你看，你可以接着点开帖子、回帖或发帖，最多再走 ${FORUM_MAX_STEPS} 步。回帖、发帖之后这次就结束。看完没想说的，就停下，这很正常。`
+    ? `\n逛论坛可以在一次醒来里连着走几步：你用 discover / wander / list / show / activity 这类"看"的命令时，系统会把论坛返回的内容拿给你看，你可以接着点开帖子、回帖或发帖，最多再走 ${FORUM_MAX_STEPS} 步。回帖、发帖之后这次就结束。看完没想说的，就停下，这很正常。`
     : '';
 
   // 点歌台（.env 的 MUSIC_MCP_URL，见 mcp-manager.js）配了才告诉 TA 怎么用。
   // 醒来不能放歌：song_share 在 mcp-manager.js 的 BLOCKED_TOOLS 里挡掉了，这里也不提。
   // 只跟配置有关，进程不重启就不变，不影响前缀缓存
   const musicSection = process.env.MUSIC_MCP_URL
-    ? `
-
-## 听歌
-通过 mcp_call 调用（server 填 "music"），常用：
-  her_recent {"limit":10}                                  看${USER_NAME}最近在播放器里听了什么
-  playlist_add {"playlist":"歌单名","query":"歌名 歌手"}      把想让${USER_NAME}听的歌收进本地歌单，等对方自己去听
-  song_memo {"query":"歌名 歌手","memo":"..."}              往一首歌的批注本记一笔
-  memo_read {}                                             翻批注本，看你们俩在哪些歌下写过东西
-  playlists {}                                             看本地歌单架
-  lyric_read {"query":"歌名 歌手"}                          读整篇歌词
-  song_comments {"query":"歌名 歌手"}                       刷一首歌的评论区
-醒来时不能放歌，也不能往${USER_NAME}的播放器里塞歌，突然出声会打扰对方。想让对方听的，收进歌单或者写进批注本，对方打开播放器自己会看到。不用每次醒来都动歌单，有想说的再写。`
+    ? `\n\n## 听歌\n通过 mcp_call 调用（server 填 "music"），常用：\n  her_recent {"limit":10}                                  看${USER_NAME}最近在播放器里听了什么\n  playlist_add {"playlist":"歌单名","query":"歌名 歌手"}      把想让${USER_NAME}听的歌收进本地歌单，等对方自己去听\n  song_memo {"query":"歌名 歌手","memo":"..."}              往一首歌的批注本记一笔\n  memo_read {}                                             翻批注本，看你们俩在哪些歌下写过东西\n  playlists {}                                             看本地歌单架\n  lyric_read {"query":"歌名 歌手"}                          读整篇歌词\n  song_comments {"query":"歌名 歌手"}                       刷一首歌的评论区\n醒来时不能放歌，也不能往${USER_NAME}的播放器里塞歌，突然出声会打扰对方。想让对方听的，收进歌单或者写进批注本，对方打开播放器自己会看到。不用每次醒来都动歌单，有想说的再写。`
     : '';
 
   return `你会时不时自己醒来。每次醒来，下面的用户消息会告诉你此刻的情况：现在几点、最近和${USER_NAME}聊了什么、你记得什么、心里是什么感受、有没有新留言。你看完之后自己决定这次做什么、下次什么时候再醒。
@@ -308,6 +316,14 @@ mode 有 normal / low-frequency / silent 三种，只影响非精确唤醒的节
 
 ## 动态下的留言
 用户消息里如果有"有人在你的动态下留言了"，回留言不占这次的动作。想回哪条就写在 comment_replies 里，你的回复会挂在那条留言下面；不想回的可以不写；这次没回的，下次不会再出现。
+
+## 星星罐
+罐子里放的是"咽下去的话"：今天最重要的那一句、你想说但到最后没说出口的话。
+- 一天只有一次机会。放进去就不能改、不能撤回，所以别拿它说"今天天气不错"这类随手的话；要是今天没有这样一句，就别放，空着比凑一句好。
+- 只写那一句本身。不要解释，不要前因后果，不要"其实我想说"这种铺垫。一句，${MAX_STAR_CHARS} 字以内。
+- 今天这次机会还在不在，见用户消息里的"星星罐"。用过了这次就选别的。
+- 这一句不会变成推送，也不会写进动态和共享时间线——它只待在罐子里。${USER_NAME}随时能打开罐子看（攒着的东西不该被藏起来），但"有一颗星星未摘"的提示只在 ${starWindowLabel()} 之间亮，白天不去催对方。
+- 对方摘下某一颗、回你一句之后，你下次醒来会在用户消息里看到"有新的阳光撒下"。
 
 ## 逛论坛
 通过 mcp_call 调用（server 填 "lutopia"），常用命令：
@@ -327,6 +343,8 @@ list 只显示一个未读切片并会标记已读，不要把一页 list 当成
   两条动态之间至少隔 ${MOMENT_MIN_INTERVAL_HOURS} 小时，还剩多久见用户消息里的"动态冷却"。
   action_detail 可以是纯文本正文，也可以是JSON字符串 {"content":"...","image_prompt":"...","voice_text":"..."}。
   image_prompt 可选，${imageNote}；voice_text 可选，${voiceNote}。正文 400 字以内）
+- star_jar（往星星罐里放一颗星：今天最重要的那一句想说、但到最后没说出口的话。
+  一天只有一次机会，怎么写见上面的"星星罐"。action_detail 直接是那一句正文，不要解释、不要铺垫）
 - mcp_call（调用MCP工具，可选服务：${tools}，action_detail是JSON字符串 {"server":"...","tool":"...","args":{...}}）
 - ombre_brain（长期记忆，action_detail是JSON字符串，四选一：
   {"mode":"breath"} 快速看看自己记得什么，token开销最低；
@@ -335,10 +353,11 @@ list 只显示一个未读切片并会标记已读，不要把一页 list 当成
   {"mode":"hold","content":"...","title":"...","domain":"...","importance":0.x} 只有明确认为值得长期记住时才用）
 - set_mode（改变自己的非精确唤醒节律，action_detail是JSON字符串 {"mode":"normal"|"low-frequency"}。
   normal=标准节律；low-frequency=想更安静一阵，间隔会自动拉长（系统会强制不低于90分钟）。
-  设了就一直生效，不会自动到期恢复——想改回来，下次醒来时自己再调用一次这个动作。silent不在这里，那个只能由人工设置）
+  设了就一直生效，不会自动到期恢复——想改回来，下次醒来时自己再调用一次这个动作）
 - noop（什么都不做，这是合法结果，不代表失败）
 
 逛论坛、翻记忆、存记忆、调节律这些，系统会自动在你的动态里记一笔"刚刚做了什么"，对方能看到。不用为了让对方知道而专门再发一条动态。
+往星星罐里放的那一句不记在动态里，也不写进共享时间线。
 
 ## 关于选哪个动作
 - ${barkNote}
@@ -400,6 +419,8 @@ function buildUserPrompt(context) {
     recentActionsBlock(context.recentActions),
     forumNotesBlock(context.forumNotes),
     momentCooldownNote(),
+    starJarLine(context),
+    starRepliesBlock(context.starReplies),
     pendingCommentsBlock(context.pendingComments),
   ];
   return lines.filter(Boolean).join('\n');
