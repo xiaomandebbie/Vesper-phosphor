@@ -104,6 +104,17 @@ export const HEAD_SCRIPT =
 
 // 四张脸要追着改的页面元素。各页 STYLE 里这些颜色是写死的，这里排在它们后面盖过去。
 const FACE_PATCH_CSS = `
+  /* 标题：苹方超细 + 大字距。
+     之前是宋体 700 + 0.35em，粗、紧、端正、居中四个规整叠在一起，所以死沉。
+     苹方是系统字体，一定在；行楷、魏碑这些本机没装就会退回宋体，所以没用。
+     字重、字距、行高得一起改 —— 只换字体名还是那个骨架。
+     字距给最后一个字也加了右边距，用 padding-left 把居中找回来。 */
+  .title { font-family: -apple-system, "PingFang SC", "Helvetica Neue", sans-serif;
+    font-weight: 200; font-size: 34px; letter-spacing: 0.62em; padding-left: 0.62em; line-height: 1.3; }
+  .title.title-sm { font-size: 24px; letter-spacing: 0.42em; padding-left: 0.42em; }
+  /* 副标跟着疏开一点，和标题的留白对得上 */
+  .subtitle { letter-spacing: 0.3em; }
+
   /* 标题的文字渐变：白天是紫→玕→金，夜里换成浅紫→粉→淡金，不然深底上的深紫字认不出来 */
   @supports ((-webkit-background-clip: text) or (background-clip: text)) {
     .title { background: linear-gradient(100deg, var(--t1) 0%, var(--t2) 52%, var(--t3) 100%);
