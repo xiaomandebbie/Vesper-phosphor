@@ -6,11 +6,18 @@
 //   day  日 — 白天。
 //   dusk 暮 — 日落前 45 分钟到日落后 55 分钟。暖光退下去，紫色压上来。
 //   night夜 — 深紫压下来，星在最上面。
-// 晨和暮是过渡段，带一个 0→1 的进度 t，颜色在三个关键色之间真的渐变过去，
-// 所以有「正在日出」「正在日落」的感觉，不是啪一下换皮。
+// 晨和暮是过渡段，带一个 0→1 的进度 t。
 //
-// 服务端渲染首屏时就把当前的脸算好内联进去（不闪白），页面打开后自己按分钟重算，
-// 跨过日出日落那一刻会自己换过去，不用刷新、也没有手动开关。
+// 颜色分两类走，这是被坑过一次后定的规矩：
+//   底色（bg1〜bg3）连续插值，所以有「正在日落」的感觉；
+//   文字和卡片色在过渡的中点整组翻面，不插值。
+// 因为文字色一插值，中段就是中灰字配中灰底，谁也看不清。翻面只发生一次，
+// body 上有 1.2s 的 color 过渡兑着，不生硬。
+//
+// 底色暗的那几张脸会在 <html> 上打 data-dark，所有深色覆盖跟它走。
+// 不按四张脸穷举：暮色渐变到哪一刻该翻成浅字，由颜色自己说。
+//
+// 服务端渲染首屏时就把当前的脸算好内联进去（不闪白），页面打开后自己按分钟重算。
 
 const rad = Math.PI / 180;
 
@@ -87,124 +94,187 @@ export function faceAt(ms = Date.now(), { lat = LAT, lon = LON, tz = process.env
 }
 
 // ── 四张脸的颜色 ──────────────────────────────────────────────────────────
-// 每个键都是一条 CSS 变量。晨、暮是过渡段：前半截从夜/日渐变到晨/暮的最浓处，
-// 后半截再渐变到日/夜，所以暖光在中段最足。
+// 每个键都是一条 CSS 变量，键名就是变量名（`ink` → `--ink`）。
+// 三个数字是 rgb，四个是 rgba。star 是数字：夜空星点的透明度，白天 0，入夜 1。
+// dark 是这张脸的底算不算暗 —— 暗的话 <html> 上打 data-dark，深色覆盖跟着生效。
 //
-// star 是夜空星点的透明度 —— 白天是 0（看不见），入夜升到 1，「星在最上面」。
+// activity / activity-ink / place / card-soft / detail-bg / hl 这几个是动态页里原本写死的颜色：
+// 动作卡的白底、深棕色的「在哪做的」、批注展开后的浅黄底、评论区的浅粉底。
+// 它们之前没跟着换，所以夜里深字落在白底上、或者浅字落在白底上，都糊。
 
 const PALETTE = {
   night: {
-    bg1: [38, 30, 66], bg2: [52, 36, 78], bg3: [63, 42, 80],
-    ink: [240, 234, 246], muted: [185, 172, 200], accent: [226, 166, 196],
-    gold: [226, 183, 106], card: [54, 42, 74], line: [84, 68, 104],
-    t1: [196, 178, 246], t2: [232, 166, 204], t3: [240, 198, 132],
+    dark: true,
+    bg1: [34, 27, 60], bg2: [48, 33, 72], bg3: [58, 38, 74],
+    ink: [243, 238, 250], muted: [196, 184, 212], accent: [236, 176, 206],
+    gold: [240, 200, 128], card: [60, 47, 82], line: [96, 78, 118],
+    t1: [198, 180, 248], t2: [240, 174, 212], t3: [246, 206, 140],
+    activity: [226, 183, 106], 'activity-ink': [246, 214, 152], place: [250, 224, 158],
+    'card-soft': [68, 53, 92], 'detail-bg': [72, 56, 96], hl: [226, 183, 106, 0.26],
     star: 1,
   },
   dawn: {
+    dark: false,
     bg1: [252, 228, 226], bg2: [253, 238, 226], bg3: [255, 249, 240],
     ink: [62, 44, 56], muted: [128, 102, 116], accent: [178, 86, 110],
     gold: [198, 134, 52], card: [255, 253, 250], line: [240, 222, 226],
     t1: [128, 96, 168], t2: [196, 94, 128], t3: [224, 150, 60],
+    activity: [233, 190, 110], 'activity-ink': [148, 96, 28], place: [158, 104, 24],
+    'card-soft': [250, 240, 240], 'detail-bg': [255, 248, 233], hl: [233, 190, 110, 0.36],
     star: 0,
   },
   day: {
+    dark: false,
     bg1: [239, 231, 244], bg2: [249, 240, 238], bg3: [253, 248, 242],
     ink: [43, 34, 51], muted: [102, 90, 112], accent: [122, 62, 93],
     gold: [183, 121, 47], card: [255, 253, 251], line: [234, 223, 230],
     t1: [70, 58, 124], t2: [155, 74, 122], t3: [196, 131, 47],
+    activity: [230, 182, 82], 'activity-ink': [138, 90, 20], place: [154, 100, 18],
+    'card-soft': [243, 238, 242], 'detail-bg': [253, 246, 230], hl: [230, 182, 82, 0.38],
     star: 0,
   },
   dusk: {
-    bg1: [92, 58, 104], bg2: [152, 78, 104], bg3: [214, 134, 94],
-    ink: [250, 240, 238], muted: [214, 192, 196], accent: [246, 184, 160],
-    gold: [246, 198, 124], card: [86, 56, 92], line: [124, 86, 116],
-    t1: [226, 198, 250], t2: [250, 178, 174], t3: [250, 210, 140],
+    dark: true,
+    bg1: [86, 54, 100], bg2: [150, 76, 102], bg3: [214, 134, 94],
+    ink: [252, 244, 242], muted: [224, 204, 206], accent: [250, 192, 168],
+    gold: [250, 206, 134], card: [92, 60, 98], line: [132, 94, 122],
+    t1: [230, 204, 252], t2: [252, 186, 180], t3: [252, 216, 148],
+    activity: [246, 198, 124], 'activity-ink': [252, 226, 168], place: [252, 228, 164],
+    'card-soft': [102, 68, 106], 'detail-bg': [106, 70, 110], hl: [246, 198, 124, 0.28],
     star: 0.55,
   },
 };
 
+// 底色和星点透明度连续插值；其余（文字、卡片、边框）在中点整组翻面
+const FADE_KEYS = ['bg1', 'bg2', 'bg3'];
+
 const lerp = (a, b, k) => a + (b - a) * k;
 
-function mixPalette(a, b, k) {
-  const out = {};
-  for (const key of Object.keys(a)) {
-    out[key] = Array.isArray(a[key])
-      ? a[key].map((v, i) => Math.round(lerp(v, b[key][i], k)))
-      : lerp(a[key], b[key], k);
+// stops 是一串关键色，t 在整串上走 0→1
+function blend(stops, t) {
+  const n = stops.length - 1;
+  const x = clamp01(t) * n;
+  const i = Math.min(Math.floor(x), n - 1);
+  const k = x - i;
+  const A = stops[i], B = stops[i + 1];
+  const side = k < 0.5 ? A : B;      // 文字色：跟近的那边，不插值
+  const out = { dark: side.dark };
+  for (const key of Object.keys(A)) {
+    if (key === 'dark') continue;
+    if (key === 'star') { out.star = lerp(A.star, B.star, k); continue; }
+    out[key] = FADE_KEYS.includes(key)
+      ? A[key].map((v, j) => Math.round(lerp(v, B[key][j], k)))
+      : side[key];
   }
   return out;
 }
 
-// 当前这一刻该用的那套颜色。晨、暮各自分两段插值，中段最浓
+// 当前这一刻该用的那套颜色
 export function paletteFor(face, t = 0) {
-  if (face === 'dawn') {
-    return t < 0.5
-      ? mixPalette(PALETTE.night, PALETTE.dawn, t / 0.5)
-      : mixPalette(PALETTE.dawn, PALETTE.day, (t - 0.5) / 0.5);
-  }
-  if (face === 'dusk') {
-    return t < 0.5
-      ? mixPalette(PALETTE.day, PALETTE.dusk, t / 0.5)
-      : mixPalette(PALETTE.dusk, PALETTE.night, (t - 0.5) / 0.5);
-  }
+  if (face === 'dawn') return blend([PALETTE.night, PALETTE.dawn, PALETTE.day], t);
+  if (face === 'dusk') return blend([PALETTE.day, PALETTE.dusk, PALETTE.night], t);
   return PALETTE[face] || PALETTE.day;
 }
 
-const rgb = (c) => `rgb(${c[0]},${c[1]},${c[2]})`;
+const cssColor = (c) => (c.length > 3 ? `rgba(${c[0]},${c[1]},${c[2]},${c[3]})` : `rgb(${c[0]},${c[1]},${c[2]})`);
 
 // 一串 `--x: ...;`，内联到 <html style> 上。页面里的 :root 变量照旧用，值由这里给
 export function faceVars(face, t = 0) {
   const p = paletteFor(face, t);
-  return [
-    `--bg1:${rgb(p.bg1)}`, `--bg2:${rgb(p.bg2)}`, `--bg3:${rgb(p.bg3)}`,
-    `--ink:${rgb(p.ink)}`, `--muted:${rgb(p.muted)}`, `--accent:${rgb(p.accent)}`,
-    `--gold:${rgb(p.gold)}`, `--card:${rgb(p.card)}`, `--line:${rgb(p.line)}`,
-    `--t1:${rgb(p.t1)}`, `--t2:${rgb(p.t2)}`, `--t3:${rgb(p.t3)}`,
-    `--star:${p.star.toFixed(3)}`,
-  ].join(';');
+  const out = [];
+  for (const key of Object.keys(p)) {
+    if (key === 'dark') continue;
+    out.push(key === 'star' ? `--star:${p.star.toFixed(3)}` : `--${key}:${cssColor(p[key])}`);
+  }
+  return out.join(';');
 }
 
-// 服务端渲染要往 <html> 上挂的东西：data-face 给 CSS 挑规则，style 给首屏颜色
+// 服务端渲染要往 <html> 上挂的东西：
+//   data-face 给 CSS 挑规则，data-dark 让深色覆盖生效，style 给首屏颜色
 export function faceAttrs(ms = Date.now()) {
   const f = faceAt(ms);
-  return ` data-face="${f.face}" style="${faceVars(f.face, f.t)}"`;
+  const p = paletteFor(f.face, f.t);
+  return ` data-face="${f.face}"${p.dark ? ' data-dark' : ''} style="${faceVars(f.face, f.t)}"`;
 }
 
 // ── 页面那一侧 ────────────────────────────────────────────────────────────
 
-// 夜空的星点：铺在最上面一层，不挡点击。白天 --star 是 0，整层看不见。
-// 开了「减弱动态效果」就不呼吸，只是静静亮着。
+// 夜空的星点：铺在最上面一层，不挡点击。整层透明度是 --star，白天 0，整层看不见。
+// 拆成三层：本体是中等大小的一批，::before 是密一点的小星，::after 是几颗大的。
+// 三层周期不同、起始错开，所以是一闪一闪地亮，不是整片一起呼吸。
+// 注意：本体的 opacity 是 --star，不能拿来做动画（一动画就把 --star 盖掉，白天也会冒星），
+// 所以本体闪的是亮度，两个伪元素闪的是自己的透明度。
 export const FACE_CSS = `
   body { background: linear-gradient(180deg, var(--bg1) 0%, var(--bg2) 55%, var(--bg3) 100%);
     transition: background 1.2s linear, color 1.2s linear; }
   .sky { position: fixed; inset: 0; z-index: 9; pointer-events: none; opacity: var(--star, 0);
     transition: opacity 1.6s linear;
+    filter: drop-shadow(0 0 5px rgba(255, 238, 190, 0.75));
+    background-repeat: no-repeat;
     background-image:
-      radial-gradient(1.6px 1.6px at 12% 14%, #fff 50%, transparent 52%),
-      radial-gradient(1.4px 1.4px at 28% 7%, #ffe9b8 50%, transparent 52%),
-      radial-gradient(1.2px 1.2px at 43% 19%, #fff 50%, transparent 52%),
-      radial-gradient(1.7px 1.7px at 58% 9%, #fff3d0 50%, transparent 52%),
-      radial-gradient(1.3px 1.3px at 71% 22%, #fff 50%, transparent 52%),
-      radial-gradient(1.5px 1.5px at 86% 12%, #ffe9b8 50%, transparent 52%),
-      radial-gradient(1.2px 1.2px at 94% 28%, #fff 50%, transparent 52%),
-      radial-gradient(1.4px 1.4px at 7% 33%, #fff 50%, transparent 52%),
-      radial-gradient(1.1px 1.1px at 35% 38%, #ffeec4 50%, transparent 52%),
-      radial-gradient(1.3px 1.3px at 64% 34%, #fff 50%, transparent 52%),
-      radial-gradient(1.2px 1.2px at 79% 42%, #fff 50%, transparent 52%),
-      radial-gradient(1.5px 1.5px at 20% 48%, #fff6dc 50%, transparent 52%);
-    animation: sky-breathe 7s ease-in-out infinite; }
-  @keyframes sky-breathe { 0%, 100% { filter: brightness(1); } 50% { filter: brightness(1.35); } }
-  /* 夜里把卡片和输入框一起压深，不然白卡片浮在深紫上太刺眼 */
-  html[data-face="night"] input, html[data-face="dusk"] input,
-  html[data-face="night"] .vp-menu-panel, html[data-face="dusk"] .vp-menu-panel {
-    background: var(--card); color: var(--ink); border-color: var(--line); }
-  html[data-face="night"] .vp-menu-btn, html[data-face="dusk"] .vp-menu-btn { color: var(--accent); }
-  html[data-face="night"] .vp-menu-panel a, html[data-face="dusk"] .vp-menu-panel a { color: var(--ink); }
-  html[data-face="night"] .vp-menu-panel a:hover, html[data-face="dusk"] .vp-menu-panel a:hover { background: var(--line); }
-  html[data-face="night"] .wake-line, html[data-face="dusk"] .wake-line { background: var(--card); color: var(--gold); }
-  html[data-face="night"] img.avatar, html[data-face="dusk"] img.avatar { background: var(--line); }
+      radial-gradient(2.4px 2.4px at 12% 14%, #fff 48%, transparent 52%),
+      radial-gradient(2.2px 2.2px at 43% 19%, #fff 48%, transparent 52%),
+      radial-gradient(2.6px 2.6px at 71% 11%, #fff3d0 48%, transparent 52%),
+      radial-gradient(2.3px 2.3px at 88% 24%, #ffe9b8 48%, transparent 52%),
+      radial-gradient(2.5px 2.5px at 24% 37%, #fff 48%, transparent 52%),
+      radial-gradient(2.2px 2.2px at 62% 44%, #fff6dc 48%, transparent 52%),
+      radial-gradient(2.4px 2.4px at 92% 52%, #fff 48%, transparent 52%);
+    animation: sky-a 4.2s ease-in-out infinite; }
+  .sky::before, .sky::after { content: ''; position: absolute; inset: 0; background-repeat: no-repeat; }
+  .sky::before {
+    background-image:
+      radial-gradient(1.8px 1.8px at 28% 7%, #ffe9b8 48%, transparent 52%),
+      radial-gradient(1.6px 1.6px at 54% 26%, #fff 48%, transparent 52%),
+      radial-gradient(1.9px 1.9px at 7% 29%, #fff 48%, transparent 52%),
+      radial-gradient(1.7px 1.7px at 37% 48%, #ffeec4 48%, transparent 52%),
+      radial-gradient(1.6px 1.6px at 79% 35%, #fff 48%, transparent 52%),
+      radial-gradient(1.8px 1.8px at 66% 61%, #fff 48%, transparent 52%),
+      radial-gradient(1.7px 1.7px at 16% 58%, #fff6dc 48%, transparent 52%),
+      radial-gradient(1.6px 1.6px at 48% 69%, #fff 48%, transparent 52%);
+    animation: sky-b 5.6s ease-in-out -1.9s infinite; }
+  .sky::after {
+    filter: drop-shadow(0 0 8px rgba(255, 230, 170, 0.9));
+    background-image:
+      radial-gradient(3.4px 3.4px at 19% 9%, #fff 46%, transparent 52%),
+      radial-gradient(3.1px 3.1px at 58% 16%, #fff6dc 46%, transparent 52%),
+      radial-gradient(3.3px 3.3px at 84% 40%, #fff 46%, transparent 52%),
+      radial-gradient(3px 3px at 33% 57%, #ffe9b8 46%, transparent 52%),
+      radial-gradient(3.2px 3.2px at 73% 73%, #fff 46%, transparent 52%);
+    animation: sky-c 7.4s ease-in-out -3.6s infinite; }
+  @keyframes sky-a { 0%, 100% { filter: drop-shadow(0 0 4px rgba(255, 238, 190, 0.6)) brightness(0.8); }
+    50% { filter: drop-shadow(0 0 7px rgba(255, 238, 190, 0.95)) brightness(1.45); } }
+  @keyframes sky-b { 0%, 100% { opacity: 0.32; } 45% { opacity: 1; } }
+  @keyframes sky-c { 0%, 100% { opacity: 0.55; } 60% { opacity: 1; } }
+
+  /* 底色暗的时候：把那些写死的白底、浅粉底、深棕字全换成跟着脸走的色。
+     这整段比各页 STYLE 里的规则排得晚，而且多一层 html[data-dark]，所以盖得住 */
+  html[data-dark] .moment.activity { background: var(--card); }
+  html[data-dark] .act-stack.ready .stack-viewport::before,
+  html[data-dark] .act-stack.ready .stack-viewport::after { background: var(--card); }
+  html[data-dark] .activity-detail .detail { background: var(--detail-bg); }
+  html[data-dark] .comments, html[data-dark] .voice-gone { background: var(--card-soft); }
+  html[data-dark] .act-place { color: var(--place);
+    background: linear-gradient(transparent 60%, var(--hl) 60%); }
+  html[data-dark] .expand-hint, html[data-dark] .stack-arrow { color: var(--activity-ink); }
+  html[data-dark] .stack-dot { background: var(--line); }
+  html[data-dark] .stack-dot.on { background: var(--activity); }
+  html[data-dark] .wake-line { background: var(--card); color: var(--gold); }
+  html[data-dark] input { background: var(--card); color: var(--ink); border-color: var(--line); }
+  html[data-dark] .vp-menu-panel { background: var(--card); color: var(--ink); border-color: var(--line); }
+  html[data-dark] .vp-menu-panel a { color: var(--ink); }
+  html[data-dark] .vp-menu-panel a:hover, html[data-dark] .vp-menu-panel a:focus-visible { background: var(--line); }
+  html[data-dark] .vp-menu-btn { color: var(--accent); }
+  html[data-dark] .vp-menu-fixed .vp-menu-btn { background: var(--card); }
+  html[data-dark] .vp-menu-soon, html[data-dark] .vp-menu-soon small { color: var(--muted); }
+  html[data-dark] img.avatar { background: var(--line); }
+  /* 暗底上 accent 是浅粉，再放白字就看不见了：按钮和选中的那天改用深底色当字 */
+  html[data-dark] button { color: var(--bg1); }
+  html[data-dark] .day.selected { color: var(--bg1); }
+  html[data-dark] .day.selected .dot { background: var(--bg1); }
+  /* 深底上原来那层浅投影看不见，压重一点才有卡片感 */
+  html[data-dark] .card, html[data-dark] .moment { box-shadow: 0 1px 4px rgba(0, 0, 0, 0.32); }
   @media (prefers-reduced-motion: reduce) {
-    .sky { animation: none; }
+    .sky, .sky::before, .sky::after { animation: none; }
     body { transition: none; }
   }
 `;
@@ -215,6 +285,7 @@ export const FACE_SCRIPT = `(function () {
   var LAT = ${LAT}, LON = ${LON}, TZ = ${JSON.stringify(process.env.TIME_ZONE || 'Asia/Shanghai')};
   var DAWN_B = ${DAWN_BEFORE}, DAWN_A = ${DAWN_AFTER}, DUSK_B = ${DUSK_BEFORE}, DUSK_A = ${DUSK_AFTER};
   var P = ${JSON.stringify(PALETTE)};
+  var FADE = ${JSON.stringify(FADE_KEYS)};
   var rad = Math.PI / 180;
   function jdMid(y, m, d) {
     if (m <= 2) { y -= 1; m += 12; }
@@ -257,29 +328,41 @@ export const FACE_SCRIPT = `(function () {
     if (ms >= db && ms < ua) return { f: 'day', t: 0 };
     return { f: 'night', t: 0 };
   }
-  function mix(a, b, k) {
-    var o = {}, key;
-    for (key in a) {
-      o[key] = a[key].length
-        ? [0, 1, 2].map(function (i) { return Math.round(a[key][i] + (b[key][i] - a[key][i]) * k); })
-        : a[key] + (b[key] - a[key]) * k;
+  // 底色插值，文字色在中点整组翻面 —— 和服务端同一套规矩
+  function blend(stops, t) {
+    var n = stops.length - 1;
+    var x = (t < 0 ? 0 : t > 1 ? 1 : t) * n;
+    var i = Math.min(Math.floor(x), n - 1);
+    var k = x - i, A = stops[i], B = stops[i + 1];
+    var side = k < 0.5 ? A : B;
+    var out = { dark: side.dark }, key;
+    for (key in A) {
+      if (key === 'dark') continue;
+      if (key === 'star') { out.star = A.star + (B.star - A.star) * k; continue; }
+      out[key] = FADE.indexOf(key) >= 0
+        ? A[key].map(function (v, j) { return Math.round(v + (B[key][j] - v) * k); })
+        : side[key];
     }
-    return o;
+    return out;
   }
   function pal(f, t) {
-    if (f === 'dawn') return t < 0.5 ? mix(P.night, P.dawn, t / 0.5) : mix(P.dawn, P.day, (t - 0.5) / 0.5);
-    if (f === 'dusk') return t < 0.5 ? mix(P.day, P.dusk, t / 0.5) : mix(P.dusk, P.night, (t - 0.5) / 0.5);
+    if (f === 'dawn') return blend([P.night, P.dawn, P.day], t);
+    if (f === 'dusk') return blend([P.day, P.dusk, P.night], t);
     return P[f] || P.day;
   }
   var root = document.documentElement;
-  var KEYS = ['bg1', 'bg2', 'bg3', 'ink', 'muted', 'accent', 'gold', 'card', 'line', 't1', 't2', 't3'];
   function apply() {
-    var c = face(Date.now()), p = pal(c.f, c.t);
+    var c = face(Date.now()), p = pal(c.f, c.t), key;
     root.setAttribute('data-face', c.f);
-    KEYS.forEach(function (k) {
-      root.style.setProperty('--' + k, 'rgb(' + p[k][0] + ',' + p[k][1] + ',' + p[k][2] + ')');
-    });
-    root.style.setProperty('--star', (+p.star).toFixed(3));
+    if (p.dark) root.setAttribute('data-dark', ''); else root.removeAttribute('data-dark');
+    for (key in p) {
+      if (key === 'dark') continue;
+      if (key === 'star') { root.style.setProperty('--star', (+p.star).toFixed(3)); continue; }
+      var v = p[key];
+      root.style.setProperty('--' + key, v.length > 3
+        ? 'rgba(' + v[0] + ',' + v[1] + ',' + v[2] + ',' + v[3] + ')'
+        : 'rgb(' + v[0] + ',' + v[1] + ',' + v[2] + ')');
+    }
     return c.f === 'dawn' || c.f === 'dusk' ? 30000 : 60000;
   }
   var timer;
