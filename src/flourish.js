@@ -1,7 +1,8 @@
 // 动态页上那几处「活起来」的细节：点赞不刷整页、一摹卡片滑着翻、夜里的心和星是浅粉的。
+// 以及整个站入夜后那些「底色写死了、字色却跟着变浅」的地方。
 //
 // 全部从外框层盖进去（见 page-chrome.js），moments-page.js 一行没动 —— 它 50KB，能不碰就不碰。
-// 所以这里的规则都是追着已有的类名写的，改动态页的结构时要回头看一眼这个文件。
+// 所以这里的规则都是追着已有的类名写的，改页面结构时要回头看一眼这个文件。
 //
 // 没有 JavaScript 时一切照旧：点赞还是表单提交整页刷新，一摹卡片一张张排开。
 // 开了「减弱动态效果」时不跳、不冒心，但点赞不刷页这个好处还留着。
@@ -17,6 +18,29 @@ export const FLOURISH_CSS = `
   html[data-dark] .fav-btn { color: var(--muted); }
   html[data-dark] .fav-btn.on { color: var(--fav); }
   html[data-dark] .fav-entry .fav-stars { color: var(--fav); }
+
+  /* ── 夜里其他几处写死的浅底 ──
+     同一个毛病反复出现了三次：字色按脸变浅了，底色还是写死的白。
+     所以这段把剩下的那几块一次收完：
+       日记页 .hb-status —— rgba(255,253,251,.88)，gateway 运行状态那张卡；
+       心绪页 .hl —— #fff，「此刻最明显的」三张小卡；
+       心绪页 .chip —— #fff6e3 配 #6b4513，那两条小注。
+     进度槽的 --track 也是浅色，跟着换成 --line，不然深底上两条白槽很跳。 */
+  html[data-dark] .hb-status { background: var(--card); border-color: var(--line); color: var(--gold); }
+  html[data-dark] .hb-off, html[data-dark] .hb-hint { color: var(--muted); }
+  html[data-dark] .notice code { background: var(--card-soft); color: var(--ink); }
+  html[data-dark] .entry { background: var(--card); }
+  html[data-dark] .day-nav-link.off { color: var(--muted); }
+
+  html[data-dark] .hl { background: var(--card-soft); border-color: var(--line); }
+  html[data-dark] .hl-val { color: var(--ink); }
+  html[data-dark] .hl-name { color: var(--muted); }
+  html[data-dark] .hl-tag { color: var(--accent); }
+  html[data-dark] .chip { background: var(--card-soft); border-color: var(--line); color: var(--gold); }
+  html[data-dark] { --track: #4b3a68; }
+  /* 小✦是「平常的样子」那个标记，压在进度槽上，描边要跟底色走，不然深底上一圈白光 */
+  html[data-dark] .base { text-shadow: 0 0 2px var(--card), 0 0 2px var(--card); }
+  html[data-dark] .delta.down { color: var(--gold); }
 
   /* ── 一摹动作卡片：滑着翻，和单张一样宽 ──
      等宽的病根是 .stack-row 左右各占了一个 36px 的箭头，比单张卡空了 72px。
@@ -129,7 +153,6 @@ export const FLOURISH_SCRIPT = `(function () {
     dots.parentNode.insertBefore(foot, dots);
     foot.appendChild(prev);
     foot.appendChild(dots);
-    foot.appendChild(next);
     var hint = document.createElement('span');
     hint.className = 'stack-hint';
     hint.setAttribute('aria-hidden', 'true');
