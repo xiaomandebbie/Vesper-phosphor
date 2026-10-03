@@ -5,11 +5,21 @@
 // 坏了不应该把动态页拖下水。和 state.js 共用同一个数据库连接。
 //
 // 只收 TA 发的动态（kind='post'）。行为提示卡片没有点赞条，也不让收。
+//
+// 正文、图片、语音都保留。语音条是从动态页搬过来的一份（renderVoice 和 VOICE_SCRIPT
+// 在 moments-page.js 里没导出，也不值得为了这个去改那个 50KB 的文件）。
+// 两边要是不一致了，以这边为准重写一遍就行。
 
+import fs from 'fs';
+import path from 'path';
 import db from './state.js';
 import { formatDateTime } from './wall-time.js';
 import { renderMenu, HEAD_SCRIPT, CHROME_CSS, CHROME_SCRIPT } from './page-chrome.js';
 import { getProfile } from './moments-store.js';
+
+const MEDIA_DIR = process.env.MEDIA_DIR || '/opt/vesper/media';
+// 语音是 ElevenLabs 默认的 128kbps mp3，先按文件大小估时长；浏览器读到真实时长后再校正
+const AUDIO_BYTES_PER_SEC = 128000 / 8;
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS moment_favorites (
@@ -71,10 +81,82 @@ function escapeHtml(s) {
     .replace(/"/g, '&quot;');
 }
 
+// 只放行自己存的那两个目录里的文件名，不让路径跑出去
+function safeMediaUrl(url, kind) {
+  const re = kind === 'audio' ? /^\/media\/audio\/[\w.-]+$/ : /^\/media\/images\/[\w.-]+$/;
+  const v = String(url ?? '');
+  return re.test(v) ? v : '';
+}
+
+const VOICE_ICON = `<svg class="voice-icon" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false">
+  <circle class="w0" cx="7" cy="12" r="2" fill="currentColor"/>
+  <path class="w1" d="M11 8a5.5 5.5 0 0 1 0 8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+  <path class="w2" d="M15 4.5a10.5 10.5 0 0 1 0 15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+</svg>`;
+
+// 按文件大小估一个时长（秒）。文件已经被按天清理掉了就返回 null
+function audioSeconds(url) {
+  const name = url.split('/').pop();
+  try {
+    const { size } = fs.statSync(path.join(MEDIA_DIR, 'audio', name));
+    return Math.max(1, Math.round(size / AUDIO_BYTES_PER_SEC));
+  } catch {
+    return null;
+  }
+}
+
+const formatSeconds = (s) => (s < 60 ? `${s}″` : `${Math.floor(s / 60)}′${s % 60}″`);
+// 1 秒 96px，60 秒及以上 240px，和动态页一样越长越宽
+const voiceWidth = (s) => Math.round(Math.min(96 + Math.min(s, 60) * 2.4, 240));
+
+function renderVoice(url) {
+  const sec = audioSeconds(url);
+  if (sec == null) return '<div class="voice"><span class="voice-gone">语音已过期</span></div>';
+  return `<div class="voice">
+      <button type="button" class="voice-bar" style="width:${voiceWidth(sec)}px" aria-pressed="false" aria-label="播放语音，约 ${sec} 秒">${VOICE_ICON}</button>
+      <span class="voice-dur" aria-hidden="true">${formatSeconds(sec)}</span>
+      <audio class="voice-audio" controls preload="metadata" src="${escapeHtml(url)}"></audio>
+    </div>`;
+}
+
+// 点语音条播放 / 暂停，读到真实时长后校正宽度和秒数。同时只放一条
+const VOICE_SCRIPT = `(function () {
+  var current = null;
+  function fmt(s) { return s < 60 ? s + '\u2033' : Math.floor(s / 60) + '\u2032' + (s % 60) + '\u2033'; }
+  document.querySelectorAll('.voice').forEach(function (box) {
+    var audio = box.querySelector('audio');
+    var btn = box.querySelector('.voice-bar');
+    var dur = box.querySelector('.voice-dur');
+    if (!audio || !btn) return;
+    function exact() {
+      var d = audio.duration;
+      if (!isFinite(d) || d <= 0) return;
+      var s = Math.max(1, Math.round(d));
+      btn.style.width = Math.round(Math.min(96 + Math.min(s, 60) * 2.4, 240)) + 'px';
+      if (dur) dur.textContent = fmt(s);
+      btn.setAttribute('aria-label', '播放语音，' + s + ' 秒');
+    }
+    function stopped() { btn.classList.remove('playing'); btn.setAttribute('aria-pressed', 'false'); }
+    audio.addEventListener('loadedmetadata', exact);
+    audio.addEventListener('durationchange', exact);
+    audio.addEventListener('play', function () { btn.classList.add('playing'); btn.setAttribute('aria-pressed', 'true'); });
+    audio.addEventListener('pause', stopped);
+    audio.addEventListener('ended', function () { stopped(); audio.currentTime = 0; if (current === audio) current = null; });
+    btn.addEventListener('click', function () {
+      if (!audio.paused) { audio.pause(); return; }
+      if (current && current !== audio) { current.pause(); current.currentTime = 0; }
+      current = audio;
+      var p = audio.play();
+      if (p && p.catch) p.catch(stopped);
+    });
+  });
+})();`;
+
 const STYLE = `
   :root { --ink: #2b2233; --muted: #665a70; --accent: #7a3e5d; --gold: #b7792f; --card: #fffdfb; --line: #eadfe6;
     --bg1: #efe7f4; --bg2: #f9f0ee; --bg3: #fdf8f2;
-    --t1: #463a7c; --t2: #9b4a7a; --t3: #c4832f; }
+    --t1: #463a7c; --t2: #9b4a7a; --t3: #c4832f;
+    --voice: #f8d7e3; --voice-press: #f1c1d3; }
   * { box-sizing: border-box; }
   body { margin: 0; min-height: 100vh; color: var(--ink);
     font-family: -apple-system, "PingFang SC", "Helvetica Neue", sans-serif;
@@ -99,6 +181,30 @@ const STYLE = `
   .ts { color: var(--muted); font-size: 12px; }
   .content { display: block; font-size: 15px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
   .moment-img { max-width: 100%; border-radius: 8px; margin-top: 10px; display: block; }
+
+  /* 语音条：和动态页一样的淡粉色气泡，左边小尖角，时长在气泡外面。
+     没有 JavaScript 时只显示浏览器自带的播放器 */
+  .voice { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
+  .voice-bar, .voice-dur { display: none; }
+  .js .voice-bar { display: inline-flex; }
+  .js .voice-dur { display: inline; }
+  .js .voice-audio { display: none; }
+  .voice-audio { width: 100%; }
+  .voice-bar { position: relative; align-items: center; max-width: calc(100% - 52px); min-height: 40px; margin-left: 6px;
+    padding: 0 12px; border-radius: 6px; background: var(--voice); color: var(--accent); border: 0; cursor: pointer; }
+  .voice-bar::before { content: ''; position: absolute; left: -6px; top: 50%; margin-top: -6px; width: 0; height: 0;
+    border-top: 6px solid transparent; border-bottom: 6px solid transparent; border-right: 6px solid var(--voice); }
+  .voice-bar:active { background: var(--voice-press); }
+  .voice-bar:active::before { border-right-color: var(--voice-press); }
+  .voice-dur { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .voice-gone { display: inline-block; font-size: 13px; color: var(--muted); padding: 8px 12px; border-radius: 6px;
+    background: var(--card-soft, #f3eef2); }
+  .voice-bar.playing { background: var(--voice-press); }
+  .playing .w1 { animation: voice-w1 1.2s steps(1) infinite; }
+  .playing .w2 { animation: voice-w2 1.2s steps(1) infinite; }
+  @keyframes voice-w1 { 0% { opacity: 0; } 33% { opacity: 1; } }
+  @keyframes voice-w2 { 0% { opacity: 0; } 66% { opacity: 1; } }
+
   .fav-when { margin-top: 8px; font-size: 11.5px; color: var(--muted); font-style: italic; }
   .unfav { background: none; border: 0; padding: 0; margin-top: 6px; min-height: 44px;
     color: var(--gold); font-size: 13px; cursor: pointer; }
@@ -106,15 +212,20 @@ const STYLE = `
   .empty b { color: var(--gold); font-weight: 400; }
   a:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+  /* 深底时语音条的文字要跟着浅下来，不然淡粉气泡上的深玕红图标认不出来 */
+  html[data-dark] .voice-bar { color: #7a3e5d; }
+  html[data-dark] .unfav { color: var(--fav, var(--gold)); }
 `;
 
 function renderFavMoment(m, taName, taAvatar) {
   const avatar = taAvatar
     ? `<img class="avatar" src="${escapeHtml(taAvatar)}" alt="" />`
     : `<span class="avatar" aria-hidden="true">${escapeHtml(Array.from(taName)[0] || 'T')}</span>`;
-  const img = /^\/media\/images\/[\w.-]+$/.test(String(m.image_url ?? ''))
-    ? `<img class="moment-img" src="${escapeHtml(m.image_url)}" alt="" loading="lazy" />`
-    : '';
+  const imgUrl = safeMediaUrl(m.image_url, 'image');
+  const img = imgUrl ? `<img class="moment-img" src="${escapeHtml(imgUrl)}" alt="" loading="lazy" />` : '';
+  const audioUrl = safeMediaUrl(m.audio_url, 'audio');
+  const voice = audioUrl ? renderVoice(audioUrl) : '';
   return `<article class="moment" id="m${m.id}">
     ${avatar}
     <div class="moment-main">
@@ -124,6 +235,7 @@ function renderFavMoment(m, taName, taAvatar) {
       </div>
       <span class="content">${escapeHtml(m.content)}</span>
       ${img}
+      ${voice}
       <div class="fav-when">收于 ${escapeHtml(formatDateTime(m.fav_ts))}</div>
       <form method="post" action="/moments/${m.id}/favorite">
         <input type="hidden" name="from" value="page" />
@@ -156,7 +268,7 @@ function renderFavoritesPage() {
   </header>
   <a class="back-link" href="/moments">‹ 回到动态</a>
   ${list}
-</main><script>${CHROME_SCRIPT}</script></body>
+</main><script>${VOICE_SCRIPT}${CHROME_SCRIPT}</script></body>
 </html>`;
 }
 
