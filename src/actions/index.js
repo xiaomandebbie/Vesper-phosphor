@@ -3,6 +3,7 @@ import moment from './moment.js';
 import mcpAction from './mcp-action.js';
 import ombreBrain from './ombre-brain.js';
 import setMode from './set-mode.js';
+import starJar from './star-jar.js';
 import { describeActivity, describeActivityDetail } from './activity.js';
 import { addActivityMoment } from '../moments-store.js';
 
@@ -14,6 +15,7 @@ const actions = {
   mcp_call: mcpAction,
   ombre_brain: ombreBrain,
   set_mode: setMode,
+  star_jar: starJar,
   noop: async () => {},
 };
 
@@ -29,6 +31,7 @@ export async function executeAction(decision) {
 
   // 推送、发动态以外的行动（逛论坛、翻记忆、调节律），在动态里记一笔，点开能看详情。
   // 行为记录不占"6 小时一条"的动态间隔。
+  // 星星罐不在这里：describeActivity 对 star_jar 返回 null，那句话只在星星罐里。
   try {
     const text = describeActivity(decision, result);
     if (text) addActivityMoment(text, describeActivityDetail(decision, result));
