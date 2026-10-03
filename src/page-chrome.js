@@ -1,5 +1,5 @@
 // 几个页面共用的外框：右上角的三条杠菜单，换页、换日期时的星星转场，早晚两张脸，以及那几处活起来的细节。
-// 动态页、自定义页、心绪页、日记页、收藏页，以及转发过来的记忆库（Ombre Brain 管理页）都从这里拿，
+// 动态页、自定义页、心绪页、日记页、收藏页、星星罐，以及转发过来的记忆库（Ombre Brain 管理页）都从这里拿，
 // 改一处几个页面一起变。
 //
 // 星星转场：点站内链接时先盖上一层粉色雾面，星星一颗颗闪出来，再跳过去；
@@ -20,6 +20,7 @@
 
 import { FACE_CSS, FACE_SCRIPT } from './sun-time.js';
 import { FLOURISH_CSS, FLOURISH_SCRIPT } from './flourish.js';
+import { STAR_ENTRY_CSS, STAR_ENTRY_SCRIPT } from './star-entry.js';
 
 const env = (k) => String(process.env[k] ?? '').trim();
 
@@ -71,6 +72,7 @@ function navItems() {
     { href: '/moments', label: '回到主页' },
     diary,
     { href: '/moments/favorites', label: '我的收藏' },
+    { href: '/moments/star-jar', label: '星星罐' },
     { href: '/drives', label: '心绪' },
     { href: externalUrl('NAV_MUSIC_URL', { allowPath: true }), label: '音乐', external: true, note: '没配置' },
     { href: externalUrl('NAV_FORUM_URL'), label: '论坛', external: true, note: '没配置' },
@@ -112,7 +114,7 @@ const FACE_PATCH_CSS = `
   /* 标题：苹方超细 + 大字距。
      之前是宋体 700 + 0.35em，粗、紧、端正、居中四个规整叠在一起，所以死沉。
      苹方是系统字体，一定在；行楷、魏碑这些本机没装就会退回宋体，所以没用。
-     字重、字距、行高得一起改 —— 只换字体名还是那个骨架。
+     字重、字距、行高得一起改 —— 只换字体名还是那个骶架。
      字距给最后一个字也加了右边距，用 padding-left 把居中找回来。 */
   .title { font-family: -apple-system, "PingFang SC", "Helvetica Neue", sans-serif;
     font-weight: 200; font-size: 34px; letter-spacing: 0.62em; padding-left: 0.62em; line-height: 1.3; }
@@ -120,7 +122,7 @@ const FACE_PATCH_CSS = `
   /* 副标跟着疏开一点，和标题的留白对得上 */
   .subtitle { letter-spacing: 0.3em; }
 
-  /* 标题的文字渐变：白天是紫→玕→金，夜里换成浅紫→粉→淡金，不然深底上的深紫字认不出来 */
+  /* 标题的文字渐变：白天是紫→玫→金，夜里换成浅紫→粉→淡金，不然深底上的深紫字认不出来 */
   @supports ((-webkit-background-clip: text) or (background-clip: text)) {
     .title { background: linear-gradient(100deg, var(--t1) 0%, var(--t2) 52%, var(--t3) 100%);
       -webkit-background-clip: text; background-clip: text; color: transparent; }
@@ -208,7 +210,7 @@ export const CHROME_CSS = `
     .vp-veil::before, .vp-menu-panel { animation: none; }
     .vp-bars i { transition: none; }
   }
-${FACE_CSS}${FACE_PATCH_CSS}${FLOURISH_CSS}`;
+${FACE_CSS}${FACE_PATCH_CSS}${FLOURISH_CSS}${STAR_ENTRY_CSS}`;
 
 // 放在 </body> 前：铺上夜空的星星层，菜单点外面收起，站内链接和菜单里的外部页面走星星转场，固定的菜单可以拖
 export const CHROME_SCRIPT = `(function () {
@@ -368,4 +370,5 @@ export const CHROME_SCRIPT = `(function () {
     document.querySelectorAll('.vp-veil').forEach(function (v) { v.remove(); });
   });
 })();
-${FLOURISH_SCRIPT}`;
+${FLOURISH_SCRIPT}
+${STAR_ENTRY_SCRIPT}`;
