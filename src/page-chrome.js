@@ -1,4 +1,4 @@
-// 几个页面共用的外框：右上角的三条杠菜单，以及换页、换日期时的星星转场。
+// 几个页面共用的外框：右上角的三条杠菜单，换页、换日期时的星星转场，以及早晚两张脸。
 // 动态页、自定义页、心绪页、日记页，以及转发过来的记忆库（Ombre Brain 管理页）都从这里拿，改一处几个页面一起变。
 //
 // 星星转场：点站内链接时先盖上一层粉色雾面，星星一颗颗闪出来，再跳过去；
@@ -6,9 +6,16 @@
 // 菜单里的外部页面离开时也走转场；那边不是本项目的页面，所以没有进场动画。
 // 没有 JavaScript 时链接照常跳，没有转场。表单提交（留言、点赞）不走转场。
 //
+// 早晚两张脸：页面底色按长沙真实的日出日落走（见 sun-time.js），不按系统时区切。
+// 颜色跑在 HEAD_SCRIPT 里，在 head 里最先执行，所以首屏绘制前就定好了，不会先亮一下再变暗。
+// 各页自己 STYLE 里 :root 写死的 --ink 这些值照旧留着，当做没 JavaScript 时的底；
+// 有 JavaScript 时行内样式挂在 <html> 上，优先级更高，赢过 :root。
+//
 // 记忆库那页的菜单是固定在屏幕上的，按住可以拖到别处，免得挡住 Ombre Brain 自己的按钮；拖到哪记在这台设备上。
 //
 // 类名都带 vp- 前缀：记忆库那页是别人的页面，样式要和它的类名错开。
+
+import { FACE_CSS, FACE_SCRIPT } from './sun-time.js';
 
 const env = (k) => String(process.env[k] ?? '').trim();
 
@@ -87,8 +94,35 @@ export function renderMenu(current, { fixed = false } = {}) {
   </details>`;
 }
 
-// 放在 <head> 里最先跑：上一页是点链接跳过来的，就先把整页盖住，免得内容闪一下才盖上转场
-export const HEAD_SCRIPT = "try{if(sessionStorage.getItem('vp-stars'))document.documentElement.classList.add('vp-stars-in')}catch(e){}";
+// 放在 <head> 里最先跑：
+//   1. 上一页是点链接跳过来的，就先把整页盖住，免得内容闪一下才盖上转场；
+//   2. 按长沙的日出日落把当下该用的颜色定下来（见 sun-time.js）。
+//      要在首屏绘制前做完，所以跑在这里，不在 </body> 前。
+export const HEAD_SCRIPT =
+  "try{if(sessionStorage.getItem('vp-stars'))document.documentElement.classList.add('vp-stars-in')}catch(e){}" +
+  FACE_SCRIPT;
+
+// 四张脸要追着改的页面元素。各页 STYLE 里这些颜色是写死的，这里排在它们后面盖过去。
+const FACE_PATCH_CSS = `
+  /* 标题的文字渐变：白天是紫→玕→金，夜里换成浅紫→粉→淡金，不然深底上的深紫字认不出来 */
+  @supports ((-webkit-background-clip: text) or (background-clip: text)) {
+    .title { background: linear-gradient(100deg, var(--t1) 0%, var(--t2) 52%, var(--t3) 100%);
+      -webkit-background-clip: text; background-clip: text; color: transparent; }
+  }
+  /* 星星转场的雾面：白天粉色，入夜换成深紫，不然天黑了点个链接闪一屏粉 */
+  html[data-face="night"] .vp-veil, html[data-face="night"].vp-stars-in body::after,
+  html[data-face="dusk"] .vp-veil, html[data-face="dusk"].vp-stars-in body::after {
+    background: linear-gradient(160deg, var(--bg1) 0%, var(--bg2) 55%, var(--bg3) 100%); }
+  html[data-face="night"] .vp-veil::before, html[data-face="dusk"] .vp-veil::before {
+    background:
+      radial-gradient(40% 35% at 25% 30%, rgba(255, 255, 255, 0.16), transparent 70%),
+      radial-gradient(35% 30% at 75% 65%, rgba(226, 166, 196, 0.22), transparent 70%),
+      radial-gradient(30% 25% at 60% 20%, rgba(196, 178, 246, 0.2), transparent 70%); }
+  html[data-face="night"] .vp-menu-soon, html[data-face="dusk"] .vp-menu-soon { color: var(--muted); }
+  html[data-face="night"] .vp-menu-soon small, html[data-face="dusk"] .vp-menu-soon small { color: var(--muted); }
+  html[data-face="night"] .vp-menu-fixed .vp-menu-btn, html[data-face="dusk"] .vp-menu-fixed .vp-menu-btn {
+    background: var(--card); }
+`;
 
 export const CHROME_CSS = `
   main { position: relative; }
@@ -158,14 +192,22 @@ export const CHROME_CSS = `
     .vp-veil::before, .vp-menu-panel { animation: none; }
     .vp-bars i { transition: none; }
   }
-`;
+${FACE_CSS}${FACE_PATCH_CSS}`;
 
-// 放在 </body> 前：菜单点外面收起，站内链接和菜单里的外部页面走星星转场，固定的菜单可以拖
+// 放在 </body> 前：铺上夜空的星星层，菜单点外面收起，站内链接和菜单里的外部页面走星星转场，固定的菜单可以拖
 export const CHROME_SCRIPT = `(function () {
   var KEY = 'vp-stars';
   var SVG = '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2.5l2.6 6.1 6.6.6-5 4.4 1.5 6.5L12 16.7 6.3 20.1l1.5-6.5-5-4.4 6.6-.6z"/></svg>';
   var root = document.documentElement;
   var reduce = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+
+  // 夜空的星星层：白天 --star 是 0，整层透明；入夜浮上来，在最上面。不挡点击
+  if (!document.querySelector('.sky')) {
+    var sky = document.createElement('div');
+    sky.className = 'sky';
+    sky.setAttribute('aria-hidden', 'true');
+    document.body.insertBefore(sky, document.body.firstChild);
+  }
 
   document.addEventListener('click', function (e) {
     document.querySelectorAll('[data-menu][open]').forEach(function (m) {
@@ -292,7 +334,7 @@ export const CHROME_SCRIPT = `(function () {
     void leave.offsetWidth;
     leave.classList.add('on');
     setTimeout(function () { location.href = url.href; }, reduce ? 150 : 900);
-    // 过了好一会儿还在这一页（比如点的是下载链接，页面没换），就把雾面撤掉，不然会一直盖着
+    // 过了好一会儿还在这一页（比如点的是下载链接，页面没换），就把雾面撕掉，不然会一直盖着
     setTimeout(function () {
       leaving = false;
       try { sessionStorage.removeItem(KEY); } catch (err) {}
