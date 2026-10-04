@@ -10,8 +10,10 @@
 //   你发的 TA 下次醒来会看到（见 phosphor.js），想回就在下面留言。
 //
 // 页面是服务端渲染的普通表单，没有 JavaScript 也能发、能改、能删。
+// 配图是唯一的例外：压缩靠 canvas，没 JavaScript 时那个入口整个隐起来（见 my-photo.js）。
 
 import { addUserMoment, editUserMoment, deleteUserMoment, MAX_USER_MOMENT_CHARS } from './moments-store.js';
+import { saveUserMomentImage, PHOTO_FIELD_HTML, PHOTO_CSS, PHOTO_SCRIPT } from './my-photo.js';
 
 function escapeHtml(s) {
   return String(s ?? '')
@@ -42,6 +44,9 @@ function sameOrigin(req) {
 
 // 日历下面那个「写点什么」：平时收起成一行，点开是输入框。
 // 收起是故意的：这页主要是看 TA 发了什么，不该一打开就被一个空输入框盯着。
+//
+// textarea 没有 required：只配一张图、一个字不写也算一条动态。
+// 两样都空时后端会直接跳回来，不写库。
 export function renderComposeBox(back) {
   return `<details class="compose">
     <summary class="compose-open">
@@ -52,8 +57,9 @@ export function renderComposeBox(back) {
     <form class="compose-form" method="post" action="/moments/mine">
       <input type="hidden" name="back" value="${escapeHtml(back)}" />
       <label class="sr-only" for="compose-text">发一条动态</label>
-      <textarea id="compose-text" name="content" rows="4" maxlength="${MAX_USER_MOMENT_CHARS}" required
+      <textarea id="compose-text" name="content" rows="4" maxlength="${MAX_USER_MOMENT_CHARS}"
         placeholder="今天怎么样？"></textarea>
+      ${PHOTO_FIELD_HTML}
       <div class="compose-actions">
         <button type="submit">发出去</button>
         <span class="compose-note">发完还能改。TA 下次醒来会看到</span>
@@ -62,7 +68,8 @@ export function renderComposeBox(back) {
   </details>`;
 }
 
-// 你发的每条下面：改一改 / 删了。收在 <details> 里，不平时占地方
+// 你发的每条下面：改一改 / 删了。收在 <details> 里，不平时占地方。
+// 改只改文字：配图要换就删了重发，不值得为了换图再做一整套上传。
 export function renderPostTools(m, back) {
   return `<details class="mine-tools">
     <summary><span aria-hidden="true">✎</span> 改一改</summary>
@@ -72,6 +79,7 @@ export function renderPostTools(m, back) {
       <textarea id="edit-${m.id}" name="content" rows="4" maxlength="${MAX_USER_MOMENT_CHARS}" required>${escapeHtml(m.content)}</textarea>
       <div class="compose-actions">
         <button type="submit">存下来</button>
+        ${m.image_url ? '<span class="compose-note">配图换不了，要换就删了重发</span>' : ''}
       </div>
     </form>
     <form method="post" action="/moments/mine/${m.id}/delete"
@@ -119,26 +127,57 @@ export const MY_MOMENTS_CSS = `
   html[data-dark] .moment.post.mine { border-left-color: #c79a4a; }
 
   @media (prefers-reduced-motion: reduce) { .compose-caret { transition: none; } }
-`;
+${PHOTO_CSS}`;
 
-// ── 路由 ────────────────────────────────────────────────────────────
+// 选图、压图那段脚本。跟着外框层进页面（page-chrome.js）
+export const MY_MOMENTS_SCRIPT = PHOTO_SCRIPT;
+
+// ── 路由 ──────────────────────────────────────────────
 // 要挂在动态页之前：/moments/mine 得比 /moments/:id 先匹配到。
 
 export function registerMyMomentRoutes(app, { requireBasicAuth }) {
-  // 发一条
+  // 发一条。文字和图至少要有一样
   app.post('/moments/mine', requireBasicAuth, (req, res) => {
     const back = safeBack(req.body?.back);
     if (!sameOrigin(req)) return res.status(403).send('请求来源不对');
+
+    const text = String(req.body?.content ?? '').trim();
+    const raw = String(req.body?.image_data ?? '').trim();
+    if (!text && !raw) return res.redirect(303, back);
+
+    // 先存图：图存不下来就别写这条动态了，免得发出来一条空有正文、图丢了的
+    let imageUrl = null;
+    if (raw) {
+      const r = saveUserMomentImage(raw);
+      if (r.error) {
+        console.error('my-moments: 存配图失败 —', r.error);
+        return res.redirect(303, back);
+      }
+      imageUrl = r.url;
+    }
+
     try {
-      const id = addUserMoment(req.body?.content);
+      const id = addUserMoment(text, imageUrl);
       return res.redirect(303, id ? `${back}#m${id}` : back);
     } catch (err) {
       console.error('my-moments: 发动态失败', err);
+      // 图已经落盘了但这条没写进库，把文件清掉，不留没人认领的图
+      if (imageUrl) {
+        try {
+          const fs = await import('fs');
+          const path = await import('path');
+          const dir = process.env.MEDIA_DIR || '/opt/vesper/media';
+          const name = imageUrl.split('/').pop();
+          fs.default.unlinkSync(path.default.join(dir, 'images', name));
+        } catch {
+          // 清不掉就算了，让它等自动清理
+        }
+      }
       return res.redirect(303, back);
     }
   });
 
-  // 改一改。只能改 author='user' 的
+  // 改一改。只能改 author='user' 的，而且只改文字
   app.post('/moments/mine/:id/edit', requireBasicAuth, (req, res) => {
     const back = safeBack(req.body?.back);
     if (!sameOrigin(req)) return res.status(403).send('请求来源不对');
@@ -152,7 +191,7 @@ export function registerMyMomentRoutes(app, { requireBasicAuth }) {
     res.redirect(303, `${back}#m${id}`);
   });
 
-  // 删了。同样只能删你自己的；下面的留言和点赞一起清掉
+  // 删了。同样只能删你自己的；下面的留言、点赞和配图文件一起清掉
   app.post('/moments/mine/:id/delete', requireBasicAuth, (req, res) => {
     const back = safeBack(req.body?.back);
     if (!sameOrigin(req)) return res.status(403).send('请求来源不对');
