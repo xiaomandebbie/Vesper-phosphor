@@ -1,18 +1,19 @@
-// 收藏：把 TA 发的某条动态收起来，以后在「我的收藏」里翻。
+// 收藏：把某条动态收起来，以后在「我的收藏」里翻。
 // 入口在日历卡片下面，每条动态的点赞旁边一颗星（那两处是脚本插的，见 flourish.js）。
 //
 // 自己一张表、自己一个文件，不动 state.js 和 moments-store.js —— 收藏是后加的东西，
 // 坏了不应该把动态页拖下水。和 state.js 共用同一个数据库连接。
 //
-// 只收 TA 发的动态（kind='post'）。行为提示卡片没有点赞条，也不让收。
+// 收的是 post（两个人自己发的那种），不收 activity 行为卡片——行为卡没有点赞条。
+// 正文、图片、语音、留言都保留：收一条动态往往是为了那下面的一来一回。
 //
-// 正文、图片、语音都保留。语音条是从动态页搬过来的一份（renderVoice 和 VOICE_SCRIPT
-// 在 moments-page.js 里没导出，也不值得为了这个去改那个 50KB 的文件）。
-// 两边要是不一致了，以这边为准重写一遍就行。
+// 语音条是从动态页搬过来的一份（renderVoice 和 VOICE_SCRIPT 在 moments-page.js 里没导出，
+// 也不值得为了这个去改那个 50KB 的文件）。两边要是不一致了，以这边为准重写一遍就行。
 
 import fs from 'fs';
 import path from 'path';
 import db from './state.js';
+import { listMomentComments } from './state.js';
 import { formatDateTime } from './wall-time.js';
 import { renderMenu, HEAD_SCRIPT, CHROME_CSS, CHROME_SCRIPT } from './page-chrome.js';
 import { getProfile } from './moments-store.js';
@@ -55,7 +56,7 @@ export function listFavoriteIds() {
     .map((r) => r.id);
 }
 
-// 收藏的动态正文，按收起来的时间倒序
+// 收藏的动态正文，按收起来的时间倒序。m.* 里带着 author，渲染时按它选头像和名字
 export function listFavoriteMoments() {
   return stmt(
     `SELECT m.*, f.ts AS fav_ts FROM moment_favorites f
@@ -81,9 +82,14 @@ function escapeHtml(s) {
     .replace(/"/g, '&quot;');
 }
 
-// 只放行自己存的那两个目录里的文件名，不让路径跑出去
+// 只放行自己存的那几个目录里的文件名，不让路径跑出去
 function safeMediaUrl(url, kind) {
-  const re = kind === 'audio' ? /^\/media\/audio\/[\w.-]+$/ : /^\/media\/images\/[\w.-]+$/;
+  const re =
+    kind === 'audio'
+      ? /^\/media\/audio\/[\w.-]+$/
+      : kind === 'avatar'
+        ? /^\/media\/avatars\/[\w.-]+$/
+        : /^\/media\/images\/[\w.-]+$/;
   const v = String(url ?? '');
   return re.test(v) ? v : '';
 }
@@ -156,7 +162,7 @@ const STYLE = `
   :root { --ink: #2b2233; --muted: #665a70; --accent: #7a3e5d; --gold: #b7792f; --card: #fffdfb; --line: #eadfe6;
     --bg1: #efe7f4; --bg2: #f9f0ee; --bg3: #fdf8f2;
     --t1: #463a7c; --t2: #9b4a7a; --t3: #c4832f;
-    --voice: #f8d7e3; --voice-press: #f1c1d3; }
+    --voice: #f8d7e3; --voice-press: #f1c1d3; --card-soft: #f3eef2; }
   * { box-sizing: border-box; }
   body { margin: 0; min-height: 100vh; color: var(--ink);
     font-family: -apple-system, "PingFang SC", "Helvetica Neue", sans-serif;
@@ -172,8 +178,10 @@ const STYLE = `
     display: grid; grid-template-columns: 44px minmax(0, 1fr); column-gap: 12px; align-items: start; }
   .avatar { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; overflow: hidden;
     width: 44px; height: 44px; font-size: 18px; object-fit: cover; border-radius: 10px;
-    color: #fff; font-weight: 600; line-height: 1;
-    background: linear-gradient(135deg, #d77aa2, #b35a83); }
+    color: #fff; font-weight: 600; line-height: 1; }
+  /* TA 粉色，你黄色 —— 和动态页一致 */
+  .avatar-ta { background: linear-gradient(135deg, #d77aa2, #b35a83); }
+  .avatar-user { background: linear-gradient(135deg, #e0a646, #c0801f); }
   img.avatar { background: #f3e9ef; }
   .moment-main { min-width: 0; }
   .moment-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 2px 8px; margin-bottom: 4px; }
@@ -198,12 +206,28 @@ const STYLE = `
   .voice-bar:active::before { border-right-color: var(--voice-press); }
   .voice-dur { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
   .voice-gone { display: inline-block; font-size: 13px; color: var(--muted); padding: 8px 12px; border-radius: 6px;
-    background: var(--card-soft, #f3eef2); }
+    background: var(--card-soft); }
   .voice-bar.playing { background: var(--voice-press); }
   .playing .w1 { animation: voice-w1 1.2s steps(1) infinite; }
   .playing .w2 { animation: voice-w2 1.2s steps(1) infinite; }
   @keyframes voice-w1 { 0% { opacity: 0; } 33% { opacity: 1; } }
   @keyframes voice-w2 { 0% { opacity: 0; } 66% { opacity: 1; } }
+
+  /* 留言：收一条动态往往就是为了下面这些话，所以全部保留。
+     楼层之间一条细线，回复缩进。和动态页同一套类名 */
+  .comments { margin-top: 10px; background: var(--card-soft); border-radius: 8px; padding: 8px 10px; }
+  .thread + .thread { border-top: 1px solid var(--line); margin-top: 4px; padding-top: 4px; }
+  .comment { display: flex; align-items: flex-start; gap: 8px; font-size: 14px; line-height: 1.5; padding: 4px 0; }
+  .comment-body { flex: 1; min-width: 0; }
+  .comment-line { word-break: break-word; }
+  .who { font-weight: 600; }
+  .theirs .who { color: var(--accent); }
+  .to { margin-left: 4px; font-size: 12px; color: var(--muted); }
+  .when { color: var(--muted); font-size: 11px; }
+  .comment.reply { margin-left: 12px; padding-left: 8px; border-left: 2px solid var(--line);
+    font-size: 13px; color: var(--muted); }
+  .comment.reply .who { color: var(--muted); }
+  .avatar-sm { width: 26px; height: 26px; border-radius: 7px; font-size: 12px; margin-top: 1px; }
 
   .fav-when { margin-top: 8px; font-size: 11.5px; color: var(--muted); font-style: italic; }
   .unfav { background: none; border: 0; padding: 0; margin-top: 6px; min-height: 44px;
@@ -216,26 +240,100 @@ const STYLE = `
   /* 深底时语音条的文字要跟着浅下来，不然淡粉气泡上的深玕红图标认不出来 */
   html[data-dark] .voice-bar { color: #7a3e5d; }
   html[data-dark] .unfav { color: var(--fav, var(--gold)); }
+  html[data-dark] .comments { background: var(--card-soft); }
 `;
 
-function renderFavMoment(m, taName, taAvatar) {
-  const avatar = taAvatar
-    ? `<img class="avatar" src="${escapeHtml(taAvatar)}" alt="" />`
-    : `<span class="avatar" aria-hidden="true">${escapeHtml(Array.from(taName)[0] || 'T')}</span>`;
+// 一个头像：设过就是图片，没设就是名字首字。size 传 'sm' 是留言里的小头像
+function avatarHtml(profile, size = '') {
+  const cls = `avatar${size === 'sm' ? ' avatar-sm' : ''} ${profile.who === 'user' ? 'avatar-user' : 'avatar-ta'}`;
+  const url = safeMediaUrl(profile.avatarUrl, 'avatar');
+  if (url) return `<img class="${cls}" src="${escapeHtml(url)}" alt="" />`;
+  return `<span class="${cls}" aria-hidden="true">${escapeHtml(Array.from(profile.name)[0] || '·')}</span>`;
+}
+
+// 把留言按「楼」分组：没有 reply_to 的是一楼，回复（包括回复的回复）都挂在它所在那一楼下面。
+// 和动态页的 buildThreads 同一个道理（那边没导出，这边自带一份）。
+function buildThreads(comments) {
+  const byId = new Map(comments.map((c) => [c.id, c]));
+  const rootOf = (c) => {
+    let cur = c;
+    const seen = new Set();
+    while (cur.reply_to && byId.has(cur.reply_to) && !seen.has(cur.id)) {
+      seen.add(cur.id);
+      cur = byId.get(cur.reply_to);
+    }
+    return cur;
+  };
+  const threads = [];
+  const threadOf = new Map();
+  for (const c of comments) {
+    const root = rootOf(c);
+    if (root.id === c.id) {
+      const t = { root: c, replies: [] };
+      threads.push(t);
+      threadOf.set(c.id, t);
+    } else {
+      threadOf.get(root.id)?.replies.push(c);
+    }
+  }
+  return { threads, byId };
+}
+
+function renderComment(c, parent, profiles) {
+  const mine = c.author === 'user';
+  const me = mine ? profiles.user : profiles.assistant;
+  const to = parent
+    ? `<span class="to">回复 ${escapeHtml((parent.author === 'user' ? profiles.user : profiles.assistant).name)}</span>`
+    : '';
+  return `<div class="comment ${mine ? 'mine' : 'theirs'}${parent ? ' reply' : ''}">
+    ${avatarHtml(me, 'sm')}
+    <div class="comment-body">
+      <div class="comment-line"><span class="who">${escapeHtml(me.name)}</span>${to}<span class="sep">：</span><span class="text">${escapeHtml(c.content)}</span></div>
+      <span class="when">${escapeHtml(formatDateTime(c.ts))}</span>
+    </div>
+  </div>`;
+}
+
+// 这条动态下的全部留言。读库出错就当没有，不让整页挂掉
+function renderComments(momentId, profiles) {
+  let rows = [];
+  try {
+    rows = listMomentComments(momentId);
+  } catch (err) {
+    console.error('favorites: 读留言失败', err.message);
+    return '';
+  }
+  if (!rows.length) return '';
+  const { threads, byId } = buildThreads(rows);
+  const html = threads
+    .map(
+      (t) =>
+        `<div class="thread">${renderComment(t.root, null, profiles)}${t.replies
+          .map((r) => renderComment(r, byId.get(r.reply_to), profiles))
+          .join('')}</div>`
+    )
+    .join('');
+  return `<div class="comments">${html}</div>`;
+}
+
+function renderFavMoment(m, profiles) {
+  // 这条是谁发的——之前这里写死成 TA 了，所以你发的那几条也顶着 TA 的头像和名字
+  const who = m.author === 'user' ? profiles.user : profiles.assistant;
   const imgUrl = safeMediaUrl(m.image_url, 'image');
   const img = imgUrl ? `<img class="moment-img" src="${escapeHtml(imgUrl)}" alt="" loading="lazy" />` : '';
   const audioUrl = safeMediaUrl(m.audio_url, 'audio');
   const voice = audioUrl ? renderVoice(audioUrl) : '';
   return `<article class="moment" id="m${m.id}">
-    ${avatar}
+    ${avatarHtml(who)}
     <div class="moment-main">
       <div class="moment-head">
-        <span class="moment-name">${escapeHtml(taName)}</span>
+        <span class="moment-name">${escapeHtml(who.name)}</span>
         <span class="ts">${escapeHtml(formatDateTime(m.ts))}</span>
       </div>
       <span class="content">${escapeHtml(m.content)}</span>
       ${img}
       ${voice}
+      ${renderComments(m.id, profiles)}
       <div class="fav-when">收于 ${escapeHtml(formatDateTime(m.fav_ts))}</div>
       <form method="post" action="/moments/${m.id}/favorite">
         <input type="hidden" name="from" value="page" />
@@ -248,9 +346,10 @@ function renderFavMoment(m, taName, taAvatar) {
 function renderFavoritesPage() {
   pruneFavorites();
   const rows = listFavoriteMoments();
-  const ta = getProfile('assistant');
+  // 两个人的头像和名字各取一次，渲染时按 author 挑
+  const profiles = { assistant: getProfile('assistant'), user: getProfile('user') };
   const list = rows.length
-    ? rows.map((m) => renderFavMoment(m, ta.name, ta.avatarUrl)).join('')
+    ? rows.map((m) => renderFavMoment(m, profiles)).join('')
     : `<p class="empty">还没收过东西。<br>在动态下面点那颗 <b>☆</b>，就收到这里。</p>`;
   return `<!DOCTYPE html>
 <html lang="zh">
@@ -261,7 +360,7 @@ function renderFavoritesPage() {
 <script>document.documentElement.className += ' js';${HEAD_SCRIPT}</script>
 <style>${STYLE}${CHROME_CSS}</style>
 </head>
-<body><main>${renderMenu('/moments')}
+<body><main>${renderMenu('/moments/favorites')}
   <header class="hero">
     <h1 class="title title-sm">我的收藏</h1>
     <p class="subtitle">${rows.length ? `${rows.length} 条` : 'Collected'}</p>
@@ -304,7 +403,7 @@ export function registerFavoriteRoutes(app, { requireBasicAuth }) {
       return fromPage ? res.redirect(303, '/moments/favorites') : res.status(400).json({ ok: false });
     }
     try {
-      // 只收 TA 发的动态
+      // 只收两个人自己发的那种动态，行为卡片不让收
       const row = db.prepare("SELECT id FROM moments WHERE id = ? AND kind = 'post'").get(id);
       if (!row) {
         return fromPage ? res.redirect(303, '/moments/favorites') : res.status(404).json({ ok: false });
