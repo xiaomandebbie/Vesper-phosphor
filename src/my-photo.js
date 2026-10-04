@@ -8,6 +8,10 @@
 // 为什么要在浏览器里先压：手机随手一张图就是几 MB，直接传上行会卡很久，
 // 而且 express 的 body 上限是 1mb（见 vesper.js），原图根本进不来。
 // 缩到长边 1600、质量 0.82，手机屏上看不出差别，体积一般在 200〜400KB。
+//
+// 脚本是内联在入口 HTML 末尾的（见下面 PHOTO_FIELD_HTML）。本来应该跟页面尾部的其他脚本一起走，
+// 但那要改 moments-page.js，它 46KB，能不碰就不碰——内联的效果一样，而且跟着表单走，
+// 哪一页有这个表单就哪一页执行。
 
 import fs from 'fs';
 import path from 'path';
@@ -44,42 +48,7 @@ export function saveUserMomentImage(dataUrl) {
   }
 }
 
-// ── 选图的那个入口 ──────────────────────────────────────────────────────
-// 插在「写点什么」表单里。没有 JavaScript 时整个隐起来：压缩靠 canvas，没 JS 就没法压，
-// 而直接传原图一定超过 1mb 上限。文字还是能正常发。
-
-export const PHOTO_FIELD_HTML = `<div class="mine-photo js-only">
-  <label class="mine-photo-btn" for="mine-photo-file">
-    <span aria-hidden="true">⊕</span> 配一张图
-  </label>
-  <input type="file" id="mine-photo-file" accept="image/*" hidden />
-  <input type="hidden" name="image_data" id="mine-photo-data" />
-  <div class="mine-photo-preview" id="mine-photo-preview" hidden>
-    <img id="mine-photo-img" alt="" />
-    <button type="button" class="mine-photo-drop" id="mine-photo-drop" aria-label="不要这张图">×</button>
-  </div>
-  <p class="mine-photo-note" id="mine-photo-note" hidden></p>
-</div>`;
-
-export const PHOTO_CSS = `
-  .mine-photo { margin-top: 8px; }
-  html:not(.js) .js-only { display: none; }
-  .mine-photo-btn { display: inline-flex; align-items: center; gap: 5px; min-height: 36px; padding: 0 12px;
-    background: var(--card-soft, #f3eef2); border: 1px solid var(--line); border-radius: 10px;
-    color: var(--accent); font-size: 13px; cursor: pointer; }
-  .mine-photo-btn:active { transform: scale(.98); }
-  .mine-photo-preview { position: relative; display: inline-block; margin-top: 8px; }
-  .mine-photo-preview img { display: block; max-width: 160px; max-height: 160px;
-    border-radius: 10px; border: 1px solid var(--line); }
-  .mine-photo-drop { position: absolute; top: -8px; right: -8px; width: 26px; height: 26px;
-    display: flex; align-items: center; justify-content: center;
-    background: var(--card); color: var(--muted); border: 1px solid var(--line);
-    border-radius: 50%; font-size: 15px; line-height: 1; cursor: pointer;
-    box-shadow: 0 1px 4px rgba(60, 30, 60, .18); }
-  .mine-photo-note { margin: 6px 0 0; font-size: 12px; color: var(--muted); }
-  .mine-photo-note.bad { color: var(--accent); }
-`;
-
+// ── 选图、压图 ────────────────────────────────────────────────────────
 // 选完图就在浏览器里缩好压好，存进那个 hidden 字段，跳图片跟表单一起提交。
 // 超大图（比如单反拍的）压完还是太大时，逐步降质量重试，最多三次。
 export const PHOTO_SCRIPT = `(function () {
@@ -112,7 +81,7 @@ export const PHOTO_SCRIPT = `(function () {
   drop.addEventListener('click', clear);
 
   // canvas 重画一遍。透明 PNG 会被压成黑底，所以先铺一层白
-  function shrink(bitmapOrImg, w, h, quality) {
+  function shrink(src, w, h, quality) {
     var scale = Math.min(1, MAX_EDGE / Math.max(w, h));
     var cw = Math.max(1, Math.round(w * scale));
     var ch = Math.max(1, Math.round(h * scale));
@@ -122,7 +91,7 @@ export const PHOTO_SCRIPT = `(function () {
     var ctx = c.getContext('2d');
     ctx.fillStyle = '#fff';
     ctx.fillRect(0, 0, cw, ch);
-    ctx.drawImage(bitmapOrImg, 0, 0, cw, ch);
+    ctx.drawImage(src, 0, 0, cw, ch);
     return c.toDataURL('image/jpeg', quality);
   }
 
@@ -148,7 +117,7 @@ export const PHOTO_SCRIPT = `(function () {
   file.addEventListener('change', function () {
     var f = file.files && file.files[0];
     if (!f) return clear();
-    if (!/^image\\//.test(f.type)) {
+    if (f.type.indexOf('image/') !== 0) {
       say('这不是图片文件', true);
       return clear();
     }
@@ -180,3 +149,40 @@ export const PHOTO_SCRIPT = `(function () {
     el.src = url;
   });
 })();`;
+
+// ── 选图的那个入口 ──────────────────────────────────────────────────────
+// 插在「写点什么」表单里。没有 JavaScript 时整个隐起来：压缩靠 canvas，没 JS 就没法压，
+// 而直接传原图一定超过 1mb 上限。文字还是能正常发。
+// 脚本跟在最后：这样它跑的时候上面那几个元素已经在 DOM 里了。
+export const PHOTO_FIELD_HTML = `<div class="mine-photo js-only">
+  <label class="mine-photo-btn" for="mine-photo-file">
+    <span aria-hidden="true">⊕</span> 配一张图
+  </label>
+  <input type="file" id="mine-photo-file" accept="image/*" hidden />
+  <input type="hidden" name="image_data" id="mine-photo-data" />
+  <div class="mine-photo-preview" id="mine-photo-preview" hidden>
+    <img id="mine-photo-img" alt="" />
+    <button type="button" class="mine-photo-drop" id="mine-photo-drop" aria-label="不要这张图">×</button>
+  </div>
+  <p class="mine-photo-note" id="mine-photo-note" hidden></p>
+</div>
+<script>${PHOTO_SCRIPT}</script>`;
+
+export const PHOTO_CSS = `
+  .mine-photo { margin-top: 8px; }
+  html:not(.js) .js-only { display: none; }
+  .mine-photo-btn { display: inline-flex; align-items: center; gap: 5px; min-height: 36px; padding: 0 12px;
+    background: var(--card-soft, #f3eef2); border: 1px solid var(--line); border-radius: 10px;
+    color: var(--accent); font-size: 13px; cursor: pointer; }
+  .mine-photo-btn:active { transform: scale(.98); }
+  .mine-photo-preview { position: relative; display: inline-block; margin-top: 8px; }
+  .mine-photo-preview img { display: block; max-width: 160px; max-height: 160px;
+    border-radius: 10px; border: 1px solid var(--line); }
+  .mine-photo-drop { position: absolute; top: -8px; right: -8px; width: 26px; height: 26px;
+    display: flex; align-items: center; justify-content: center;
+    background: var(--card); color: var(--muted); border: 1px solid var(--line);
+    border-radius: 50%; font-size: 15px; line-height: 1; cursor: pointer;
+    box-shadow: 0 1px 4px rgba(60, 30, 60, .18); }
+  .mine-photo-note { margin: 6px 0 0; font-size: 12px; color: var(--muted); }
+  .mine-photo-note.bad { color: var(--accent); }
+`;
