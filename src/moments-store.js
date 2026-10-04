@@ -1,4 +1,5 @@
 // 动态页需要的额外表和查询：纪念日、按日期查动态、行为提示、发动态的间隔、点赞、单条留言、头像和名字。
+// 以及你自己发的动态（author='user'）：发、改、删，和"TA 还没看到的那几条"。
 // 和 state.js 共用同一个数据库连接。
 import fs from 'fs';
 import path from 'path';
@@ -9,6 +10,8 @@ const MEDIA_DIR = process.env.MEDIA_DIR || '/opt/vesper/media';
 const AVATAR_DIR = path.join(MEDIA_DIR, 'avatars');
 // 头像在浏览器里已经裁成 256×256 的 JPEG，一般几十 KB。这里再兜一道上限
 const MAX_AVATAR_BYTES = 512 * 1024;
+// 你发的动态最多多少字。比 TA 的宽很多：你可能想写长一点的东西
+export const MAX_USER_MOMENT_CHARS = 2000;
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS anniversaries (
@@ -36,11 +39,15 @@ CREATE TABLE IF NOT EXISTS profiles (
 `);
 
 // 后加的列。已存在时会报错，忽略即可。
-// kind：动态分两种，post（TA 自己发的）和 activity（逛论坛、翻记忆这类行为的提示卡），老数据默认 post。
+// kind：动态分两种，post（有人自己发的）和 activity（逛论坛、翻记忆这类行为的提示卡），老数据默认 post。
 // detail：行为提示卡的详情（做了什么、工具返回了什么），点开卡片才显示。老卡片没有。
+// author：这条是谁发的。这列是后加的，那时只有 TA 会发，所以老数据全归 assistant。
+// seen_by_ta：你发的这条 TA 醒来看过没有（看过但没回也算）。TA 自己发的用不上这列。
 for (const sql of [
   "ALTER TABLE moments ADD COLUMN kind TEXT NOT NULL DEFAULT 'post'",
   'ALTER TABLE moments ADD COLUMN detail TEXT',
+  "ALTER TABLE moments ADD COLUMN author TEXT NOT NULL DEFAULT 'assistant'",
+  'ALTER TABLE moments ADD COLUMN seen_by_ta INTEGER NOT NULL DEFAULT 0',
 ]) {
   try {
     db.exec(sql);
@@ -48,6 +55,8 @@ for (const sql of [
     // column already exists
   }
 }
+
+db.exec("CREATE INDEX IF NOT EXISTS idx_moments_unseen ON moments (author, seen_by_ta)");
 
 const cache = new Map();
 function stmt(sql) {
@@ -62,16 +71,15 @@ function stmt(sql) {
 // 行为提示：两行，第一行 "MM-DD HH:mm"，第二行做了什么。detail 是点开后看到的详情，可以不传
 export function addActivityMoment(text, detail = null) {
   const content = `${formatDateTime().slice(5)}\n${text}`;
-  return stmt("INSERT INTO moments (ts, content, kind, detail) VALUES (?, ?, 'activity', ?)").run(
-    Date.now(),
-    content,
-    detail || null
-  ).lastInsertRowid;
+  return stmt(
+    "INSERT INTO moments (ts, content, kind, detail, author) VALUES (?, ?, 'activity', ?, 'assistant')"
+  ).run(Date.now(), content, detail || null).lastInsertRowid;
 }
 
-// 上一条 TA 自己发的动态（不算行为提示）是什么时候，没有就是 null
+// 上一条 TA 自己发的动态（不算行为提示）是什么时候，没有就是 null。
+// 只算 TA 的：那 6 小时冷却是为了别让 TA 刷屏，你发多少条都不应该占它的额度。
 export function getLastPostTs() {
-  return stmt("SELECT MAX(ts) AS ts FROM moments WHERE kind = 'post'").get()?.ts ?? null;
+  return stmt("SELECT MAX(ts) AS ts FROM moments WHERE kind = 'post' AND author = 'assistant'").get()?.ts ?? null;
 }
 
 // [start, end) 这段时间里的动态，新的在前
@@ -114,6 +122,61 @@ export function toggleLike(momentId, author) {
 // 这条动态谁赞过，先赞的在前
 export function listLikes(momentId) {
   return stmt('SELECT author, ts FROM moment_likes WHERE moment_id = ? ORDER BY ts ASC').all(momentId);
+}
+
+// ---------- 你自己发的动态 ----------
+// 和 TA 发的进同一张表，只是 author='user'。两条规则和 TA 不一样：
+//   不吃 6 小时冷却（那是防 TA 刷屏的），且能改能删。
+// 改、删都带 author='user' 条件：网页上动不了 TA 发的那些。
+
+export function addUserMoment(content) {
+  const text = String(content ?? '').trim();
+  if (!text) return null;
+  return stmt(
+    "INSERT INTO moments (ts, content, kind, author, seen_by_ta) VALUES (?, ?, 'post', 'user', 0)"
+  ).run(Date.now(), text.slice(0, MAX_USER_MOMENT_CHARS)).lastInsertRowid;
+}
+
+export function editUserMoment(id, content) {
+  if (!Number.isInteger(id)) return false;
+  const text = String(content ?? '').trim();
+  if (!text) return false;
+  return (
+    stmt("UPDATE moments SET content = ? WHERE id = ? AND author = 'user'")
+      .run(text.slice(0, MAX_USER_MOMENT_CHARS), id).changes > 0
+  );
+}
+
+// 删你自己那条，连带它下面的留言和点赞一起清掉，不留孤儿行。
+// 收藏表（moment_favorites）里的死条目由 favorites.js 的 pruneFavorites 自己清。
+const deleteUserMomentTx = db.transaction((id) => {
+  const row = stmt("SELECT id FROM moments WHERE id = ? AND author = 'user'").get(id);
+  if (!row) return false;
+  stmt('DELETE FROM moment_comments WHERE moment_id = ?').run(id);
+  stmt('DELETE FROM moment_likes WHERE moment_id = ?').run(id);
+  stmt('DELETE FROM moments WHERE id = ?').run(id);
+  return true;
+});
+
+export function deleteUserMoment(id) {
+  if (!Number.isInteger(id)) return false;
+  return deleteUserMomentTx(id);
+}
+
+// 你发的、TA 醒来还没看到的那几条（从早到晚）。见 phosphor.js
+export function getUnseenUserMoments(limit = 3) {
+  return stmt(
+    `SELECT id, ts, content FROM moments
+     WHERE author = 'user' AND kind = 'post' AND seen_by_ta = 0
+     ORDER BY ts ASC, id ASC LIMIT ?`
+  ).all(limit);
+}
+
+// 给 TA 看过的就算看过了，下次不再重复。没回也算看过（和留言一个道理）
+export function markUserMomentsSeen(ids) {
+  if (!Array.isArray(ids) || !ids.length) return;
+  const update = stmt('UPDATE moments SET seen_by_ta = 1 WHERE id = ?');
+  for (const id of ids) update.run(id);
 }
 
 // ---------- 头像和名字 ----------
