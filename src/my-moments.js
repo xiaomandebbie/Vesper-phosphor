@@ -12,8 +12,12 @@
 // 页面是服务端渲染的普通表单，没有 JavaScript 也能发、能改、能删。
 // 配图是唯一的例外：压缩靠 canvas，没 JavaScript 时那个入口整个隐起来（见 my-photo.js）。
 
+import fs from 'fs';
+import path from 'path';
 import { addUserMoment, editUserMoment, deleteUserMoment, MAX_USER_MOMENT_CHARS } from './moments-store.js';
 import { saveUserMomentImage, PHOTO_FIELD_HTML, PHOTO_CSS, PHOTO_SCRIPT } from './my-photo.js';
+
+const MEDIA_DIR = process.env.MEDIA_DIR || '/opt/vesper/media';
 
 function escapeHtml(s) {
   return String(s ?? '')
@@ -39,6 +43,18 @@ function sameOrigin(req) {
     return new URL(origin).host === req.headers.host;
   } catch {
     return false;
+  }
+}
+
+// 图已经落盘但动态没写进库时，把文件清掉，不留没人认领的图。
+// 路径必须是 /media/images/ 下的文件名，不对就不动
+function dropOrphanImage(url) {
+  const m = /^\/media\/images\/([\w.-]+)$/.exec(String(url ?? ''));
+  if (!m) return;
+  try {
+    fs.unlinkSync(path.join(MEDIA_DIR, 'images', m[1]));
+  } catch {
+    // 清不掉就算了，让它等自动清理
   }
 }
 
@@ -161,18 +177,7 @@ export function registerMyMomentRoutes(app, { requireBasicAuth }) {
       return res.redirect(303, id ? `${back}#m${id}` : back);
     } catch (err) {
       console.error('my-moments: 发动态失败', err);
-      // 图已经落盘了但这条没写进库，把文件清掉，不留没人认领的图
-      if (imageUrl) {
-        try {
-          const fs = await import('fs');
-          const path = await import('path');
-          const dir = process.env.MEDIA_DIR || '/opt/vesper/media';
-          const name = imageUrl.split('/').pop();
-          fs.default.unlinkSync(path.default.join(dir, 'images', name));
-        } catch {
-          // 清不掉就算了，让它等自动清理
-        }
-      }
+      if (imageUrl) dropOrphanImage(imageUrl);
       return res.redirect(303, back);
     }
   });
