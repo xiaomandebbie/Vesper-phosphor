@@ -8,6 +8,7 @@ import { formatDateTime } from './wall-time.js';
 
 const MEDIA_DIR = process.env.MEDIA_DIR || '/opt/vesper/media';
 const AVATAR_DIR = path.join(MEDIA_DIR, 'avatars');
+const IMAGE_DIR = path.join(MEDIA_DIR, 'images');
 // 头像在浏览器里已经裁成 256×256 的 JPEG，一般几十 KB。这里再兜一道上限
 const MAX_AVATAR_BYTES = 512 * 1024;
 // 你发的动态最多多少字。比 TA 的宽很多：你可能想写长一点的东西
@@ -129,12 +130,14 @@ export function listLikes(momentId) {
 //   不吃 6 小时冷却（那是防 TA 刷屏的），且能改能删。
 // 改、删都带 author='user' 条件：网页上动不了 TA 发的那些。
 
-export function addUserMoment(content) {
+// imageUrl：可选，/media/images/xxx。图在浏览器里先压过再传（见 my-photo.js）。
+// 只有图、一个字不写也算一条动态——有时就是想给 TA 看一眼眼前的东西。
+export function addUserMoment(content, imageUrl = null) {
   const text = String(content ?? '').trim();
-  if (!text) return null;
+  if (!text && !imageUrl) return null;
   return stmt(
-    "INSERT INTO moments (ts, content, kind, author, seen_by_ta) VALUES (?, ?, 'post', 'user', 0)"
-  ).run(Date.now(), text.slice(0, MAX_USER_MOMENT_CHARS)).lastInsertRowid;
+    "INSERT INTO moments (ts, content, image_url, kind, author, seen_by_ta) VALUES (?, ?, ?, 'post', 'user', 0)"
+  ).run(Date.now(), text.slice(0, MAX_USER_MOMENT_CHARS), imageUrl || null).lastInsertRowid;
 }
 
 export function editUserMoment(id, content) {
@@ -147,26 +150,43 @@ export function editUserMoment(id, content) {
   );
 }
 
+// 只删自己存在 images 里的文件，路径不对就不动。
+// TA 生成的配图也在这个目录，但你只能删自己那条（下面事务里带了 author='user'）
+function removeImageFile(url) {
+  const m = /^\/media\/images\/([\w.-]+)$/.exec(String(url ?? ''));
+  if (!m) return;
+  try {
+    fs.unlinkSync(path.join(IMAGE_DIR, m[1]));
+  } catch {
+    // 文件已经不在了，或者本来就没有
+  }
+}
+
 // 删你自己那条，连带它下面的留言和点赞一起清掉，不留孤儿行。
 // 收藏表（moment_favorites）里的死条目由 favorites.js 的 pruneFavorites 自己清。
+// 配图文件在事务外面删：文件系统操作不属于事务，放进去也不会回滚
 const deleteUserMomentTx = db.transaction((id) => {
-  const row = stmt("SELECT id FROM moments WHERE id = ? AND author = 'user'").get(id);
-  if (!row) return false;
+  const row = stmt("SELECT id, image_url FROM moments WHERE id = ? AND author = 'user'").get(id);
+  if (!row) return null;
   stmt('DELETE FROM moment_comments WHERE moment_id = ?').run(id);
   stmt('DELETE FROM moment_likes WHERE moment_id = ?').run(id);
   stmt('DELETE FROM moments WHERE id = ?').run(id);
-  return true;
+  return row.image_url || '';
 });
 
 export function deleteUserMoment(id) {
   if (!Number.isInteger(id)) return false;
-  return deleteUserMomentTx(id);
+  const imageUrl = deleteUserMomentTx(id);
+  if (imageUrl === null) return false;
+  if (imageUrl) removeImageFile(imageUrl);
+  return true;
 }
 
 // 你发的、TA 醒来还没看到的那几条（从早到晚）。见 phosphor.js
+// 带上 image_url：TA 该知道这条有图，哪怕它看不到图里是什么
 export function getUnseenUserMoments(limit = 3) {
   return stmt(
-    `SELECT id, ts, content FROM moments
+    `SELECT id, ts, content, image_url FROM moments
      WHERE author = 'user' AND kind = 'post' AND seen_by_ta = 0
      ORDER BY ts ASC, id ASC LIMIT ?`
   ).all(limit);
@@ -209,8 +229,9 @@ export function saveProfileName(who, name) {
   stmt('UPDATE profiles SET name = ?, updated_at = ? WHERE who = ?').run(name || null, Date.now(), who);
 }
 
-// 只认真正的 JPEG / PNG / WebP 文件头，不信 data URL 里自己写的类型
-function sniffImage(buf) {
+// 只认真正的 JPEG / PNG / WebP 文件头，不信 data URL 里自己写的类型。
+// 头像和动态配图共用这一份（见 my-photo.js）
+export function sniffImage(buf) {
   if (buf.length > 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return 'jpg';
   if (buf.length > 8 && buf[0] === 0x89 && buf.toString('ascii', 1, 4) === 'PNG') return 'png';
   if (buf.length > 12 && buf.toString('ascii', 0, 4) === 'RIFF' && buf.toString('ascii', 8, 12) === 'WEBP') return 'webp';
