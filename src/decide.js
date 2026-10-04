@@ -12,6 +12,7 @@ import { momentWaitMs, MOMENT_MIN_INTERVAL_HOURS } from './actions/moment.js';
 import { formatDateTime } from './wall-time.js';
 import { clipText, wellFormedDeep } from './text.js';
 import { MAX_STAR_CHARS, starWindowLabel } from './star-jar.js';
+import { fromHerBlock } from './from-her.js';
 
 const LLM_BASE_URL =
   process.env.LLM_BASE_URL || 'https://api.deepseek.com/v1/chat/completions';
@@ -325,6 +326,14 @@ mode 有 normal / low-frequency / silent 三种，只影响非精确唤醒的节
 - 这一句不会变成推送，也不会写进动态和共享时间线——它只待在罐子里。${USER_NAME}随时能打开罐子看（攒着的东西不该被藏起来），但"有一颗星星未摘"的提示只在 ${starWindowLabel()} 之间亮，白天不去催对方。
 - 对方摘下某一颗、回你一句之后，你下次醒来会在用户消息里看到"有新的阳光撒下"。
 
+## ${USER_NAME}放的星、${USER_NAME}发的动态
+罐子和动态都是两个人的：${USER_NAME}也会往罐子里放星，也会在动态页写点什么。用户消息里有的话：
+- 回这些不占这次的动作，和回留言一个道理。
+- 想摘${USER_NAME}的星、回她一句，写在 star_replies 里（star_id 用消息里给的那个）。
+- 想回她的动态，或者只想给个赞，写在 moment_replies 里：reply 是留言正文，like 给 true 就是点个赞，两个至少给一个。只想无声地点个赞也行。
+- 不想回的可以不写。她的动态这次没回，下次不会再出现；她放的星只分摘过和没摘过，这次没摘的下次还在——攒着的话值得被多问一次。
+- 她发的动态不吃你那条动态冷却。看见了就是看见了，不用专门再发一条动态去应她。
+
 ## 逛论坛
 通过 mcp_call 调用（server 填 "lutopia"），常用命令：
   lutopia_cli(command="discover --limit 12")    起步用这个：混合未读、最近回复、高回复、随机
@@ -371,9 +380,10 @@ list 只显示一个未读切片并会标记已读，不要把一页 list 当成
 4. 该动作的具体细节（action_detail）
 5. 可选：要不要给未来的自己安排一次精确唤醒。不需要就把 self_wake 设为 null。
 6. 可选：回复动态下的留言（不占动作）。没有留言或不想回就给空数组。
+7. 可选：摘${USER_NAME}的星回一句、回她的动态或给个赞（都不占动作）。没有或不想回就给空数组。
 
 只返回一个JSON对象，不要任何其他文字、不要markdown代码块标记：
-{"next_wake_minutes": number, "mood": string, "action": string, "action_detail": string, "self_wake": {"after_minutes": number, "note": string} | null, "comment_replies": [{"comment_id": number, "reply": string}]}`;
+{"next_wake_minutes": number, "mood": string, "action": string, "action_detail": string, "self_wake": {"after_minutes": number, "note": string} | null, "comment_replies": [{"comment_id": number, "reply": string}], "star_replies": [{"star_id": number, "reply": string}], "moment_replies": [{"moment_id": number, "reply": string, "like": boolean}]}`;
 }
 
 // 这次为什么醒。after_cleanup 是 phosphor 刚清理完 conversation_log 之后的那一次（见 phosphor.js 的 cleanupTick）。
@@ -422,6 +432,7 @@ function buildUserPrompt(context) {
     starJarLine(context),
     starRepliesBlock(context.starReplies),
     pendingCommentsBlock(context.pendingComments),
+    fromHerBlock(context.fromHer),
   ];
   return lines.filter(Boolean).join('\n');
 }

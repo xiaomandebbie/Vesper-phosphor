@@ -5,6 +5,9 @@
 //   同一时间的几张动作卡片叠成一摞，左右箭头轮换（没有 JS 时一张张排开）；
 //   自定义页上传头像前在浏览器里裁成正方形；
 //   右上角菜单、换页换日期时的星星转场（见 page-chrome.js）。
+//
+// 两个人都能发动态：TA 自己醒来发的（author='assistant'），和你在这一页写的（author='user'）。
+// 你发的那几条左边一道暗金，下面挂着「改一改 / 删了」，发、改、删都在 my-moments.js 里。
 import fs from 'fs';
 import path from 'path';
 import { getMoment, listMoments, listMomentComments, addMomentComment, getWakeState } from './state.js';
@@ -36,6 +39,12 @@ import { getTopDrives } from './drives.js';
 import { getWakeTimes } from './wake-info.js';
 import { tidyActivityContent, tidyActivityDetail } from './actions/activity.js';
 import { renderMenu, HEAD_SCRIPT, CHROME_CSS, CHROME_SCRIPT } from './page-chrome.js';
+import {
+  renderComposeBox,
+  renderPostTools,
+  MY_MOMENTS_CSS,
+  registerMyMomentRoutes,
+} from './my-moments.js';
 
 const MEDIA_DIR = process.env.MEDIA_DIR || '/opt/vesper/media';
 const MAX_COMMENT_CHARS = 1000;
@@ -402,7 +411,7 @@ function renderActivityCard(m, inStack = false) {
 }
 
 // 列表是新的在前。连着的动作卡片，和这一摞里最新那张相差不超过 STACK_WINDOW_MS 的，归成一摞；
-// 中间夹着 TA 发的动态就断开
+// 中间夹着谁发的动态就断开
 function groupForDisplay(moments) {
   const out = [];
   for (const m of moments) {
@@ -488,21 +497,27 @@ const STACK_SCRIPT = `(function () {
   });
 })();`;
 
+// 一条动态。author 决定头像、名字和边上那道色：TA 发的是粉色，你发的是暗金。
+// 你发的那几条下面挂着「改一改 / 删了」，TA 还没醒来看过时标一句"还没看到"（和留言一个做法）。
 function renderMoment(m, back) {
   if (m.kind === 'activity') return renderActivityCard(m);
 
+  const mine = m.author === 'user';
+  const who = mine ? 'user' : 'assistant';
   const commentsHtml = renderComments(m, back);
   const likeBar = renderLikeBar(m, back);
   const img = safeMediaUrl(m.image_url);
   const audio = safeMediaUrl(m.audio_url);
-  return `<article class="moment post" id="m${m.id}">
-    ${avatarHtml('assistant')}
+  const unseen = mine && !m.seen_by_ta ? '<span class="post-unseen">还没看到</span>' : '';
+  return `<article class="moment post${mine ? ' mine' : ''}" id="m${m.id}">
+    ${avatarHtml(who)}
     <div class="moment-main">
-      <div class="moment-head"><span class="moment-name">${escapeHtml(nameOf('assistant'))}</span><span class="ts">${escapeHtml(formatDateTime(m.ts).slice(11))}</span></div>
+      <div class="moment-head"><span class="moment-name">${escapeHtml(nameOf(who))}</span><span class="ts">${escapeHtml(formatDateTime(m.ts).slice(11))}</span>${unseen}</div>
       <div class="content">${escapeHtml(m.content)}</div>
       ${img ? `<img class="moment-img" src="${img}" alt="动态配图" loading="lazy" />` : ''}
       ${audio ? renderVoice(audio) : ''}
       ${likeBar}
+      ${mine ? renderPostTools(m, back) : ''}
       ${commentsHtml}
       ${commentForm(m, back)}
     </div>
@@ -604,12 +619,14 @@ const STYLE = `
   .avatar-user { background: linear-gradient(135deg, #e0a646, #c0801f); }
   img.avatar { background: #f3e9ef; }
   .moment { background: var(--card); border-radius: 12px; padding: 14px 16px; margin-bottom: 12px; box-shadow: 0 1px 3px rgba(60, 30, 60, 0.08); }
-  /* TA 发的动态：左边头像，右边名字、时间、正文，和朋友圈一样 */
+  /* 有人发的动态：左边头像，右边名字、时间、正文，和朋友圈一样 */
   .moment.post { display: grid; grid-template-columns: 44px minmax(0, 1fr); column-gap: 12px; align-items: start; }
   .moment-main { min-width: 0; }
   .moment-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 2px 8px; margin-bottom: 4px; }
   .moment-name { font-size: 15px; font-weight: 600; color: var(--accent); }
   .moment .ts { color: var(--muted); font-size: 12px; }
+  /* 你发的、TA 还没醒来看过的，标一句。和留言那个"还没看到"一个意思 */
+  .post-unseen { font-size: 11px; color: var(--muted); }
   .moment .content { display: block; font-size: 15px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
   .moment .moment-img { max-width: 100%; border-radius: 8px; margin-top: 10px; display: block; }
   /* 语音条：淡粉色气泡，左边小尖角，时长在气泡外面。没有 JavaScript 时只显示浏览器自带的播放器 */
@@ -720,7 +737,8 @@ const STYLE = `
 `;
 
 // head 里那一小段给 html 加上 js 标记：有 JavaScript 才显示语音条，不然留着浏览器自带的播放器。
-// 菜单和星星转场每个页面都有（见 page-chrome.js），current 是菜单里高亮哪一项
+// 菜单和星星转场每个页面都有（见 page-chrome.js），current 是菜单里高亮哪一项。
+// MY_MOMENTS_CSS 是你发动态那几处的样式（见 my-moments.js）
 function layout(title, body, script = '', current = '/moments') {
   return `<!DOCTYPE html>
 <html lang="zh">
@@ -729,7 +747,7 @@ function layout(title, body, script = '', current = '/moments') {
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>${escapeHtml(title)}</title>
 <script>document.documentElement.className += ' js';${HEAD_SCRIPT}</script>
-<style>${STYLE}${CHROME_CSS}</style>
+<style>${STYLE}${MY_MOMENTS_CSS}${CHROME_CSS}</style>
 </head>
 <body><main>${renderMenu(current)}${body}</main><script>${script}${CHROME_SCRIPT}</script></body>
 </html>`;
@@ -764,6 +782,7 @@ function renderPage({ today, month, selected, marked, moments, back, mood, top, 
       ${renderWakeLine()}
     </header>
     ${renderCalendar({ y: month.y, m: month.m, today, selected, marked, open: calOpen })}
+    ${renderComposeBox(back)}
     ${list}`,
     VOICE_SCRIPT + STACK_SCRIPT
   );
@@ -875,6 +894,10 @@ function createUserComment(momentId, content, replyTo) {
 }
 
 export function registerMomentRoutes(app, { requireBasicAuth, requireApiKey }) {
+  // 你发动态的那几个路由（发、改、删），见 my-moments.js。
+  // 挂在最前面：/moments/mine 要比下面的 /moments/:id/* 先匹配到
+  registerMyMomentRoutes(app, { requireBasicAuth });
+
   // ---- 程序化访问（快捷指令、以后的前端）----
   app.get('/wake/moments', requireApiKey, (req, res) => {
     const limit = Math.min(Number(req.query.limit) || 20, 100);

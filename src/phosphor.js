@@ -29,6 +29,7 @@ import { isSharedTimelineEnabled, describeAction, postSharedEvent } from './time
 import { getSharedContext, countRecentChat } from './context.js';
 import { getTopDrives, isDrivesEnabled } from './drives.js';
 import { getUnseenStarReplies, markStarRepliesSeen, hasStarToday, starWindowLabel } from './star-jar.js';
+import { collectFromHer, handleFromHer } from './from-her.js';
 
 const TICK_MS = 60 * 1000;
 const MISSED_GRACE_MS = 3 * 60 * 1000;
@@ -111,6 +112,7 @@ function normalizeDecision(raw, fallbackMood) {
         .filter((r) => Number.isInteger(r.comment_id) && r.reply)
     : [];
 
+  // star_replies / moment_replies 原样透传，洗形状在 from-her.js 里做（normalizeFromHerReplies）
   return {
     ...d,
     next_wake_minutes: minutes,
@@ -299,6 +301,9 @@ async function runDecisionCycle({ kind, scheduledAt = null, selfNote = null, cle
   } catch (err) {
     console.error('phosphor: 读星星罐失败（不影响这次唤醒）', err.message);
   }
+  // 她放的星、她发的动态（读库，不调模型；见 from-her.js）。
+  // 里面每一项各自 try 包着，读坏了也只是这次没带上，不影响唤醒
+  const fromHer = collectFromHer();
 
   const missed = getUnacknowledgedMissed();
   const missedSummary = missed.length
@@ -330,6 +335,7 @@ async function runDecisionCycle({ kind, scheduledAt = null, selfNote = null, cle
     pendingComments,
     starUsedToday,
     starReplies,
+    fromHer,
     imageEnabled: isImageEnabled(),
     voiceEnabled: isVoiceEnabled(),
     heartbeatActive: isSharedTimelineEnabled(),
@@ -366,6 +372,18 @@ async function runDecisionCycle({ kind, scheduledAt = null, selfNote = null, cle
       } catch (err) {
         console.error(`[${kind}] markStarRepliesSeen failed:`, err.message);
       }
+    }
+    // 她放的星、她发的动态：TA 想回的写回库，带给它看过的动态标成看过。
+    // 和回留言一个规矩，不占这次的动作
+    try {
+      const fh = handleFromHer(decision, fromHer);
+      if (fh.starsPicked || fh.momentsReplied || fh.momentsLiked) {
+        console.log(
+          `phosphor: 摘了 ${fh.starsPicked} 颗她的星，回了 ${fh.momentsReplied} 条她的动态，点了 ${fh.momentsLiked} 个赞`
+        );
+      }
+    } catch (err) {
+      console.error(`[${kind}] handleFromHer failed:`, err);
     }
     try {
       result = await executeAction(decision);
@@ -515,7 +533,7 @@ async function main() {
   process.on('SIGINT', () => shutdown('SIGINT'));
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   console.log(
-    `phosphor: 最长唤醒间隔 ${MAX_WAKE_MINUTES} 分钟；决策带最近对话 ${DECIDE_CONTEXT_LIMIT} 条；对话记录清理：${CLEAN_HOURS > 0 ? `每 ${CLEAN_HOURS} 小时，保留最新 ${CONVERSATION_LOG_KEEP} 条` : '关闭'}；论坛一次最多再走 ${FORUM_MAX_STEPS} 步；共享时间线：${isSharedTimelineEnabled() ? '已开启' : '未开启'}；动态配图：${isImageEnabled() ? '已开启' : '未配置'}；动态语音：${isVoiceEnabled() ? '已开启' : '未配置'}；情绪（Drivesoid）：${isDrivesEnabled() ? '已接入' : '未接入'}；星星罐：一天一颗，提示窗 ${starWindowLabel()}`
+    `phosphor: 最长唤醒间隔 ${MAX_WAKE_MINUTES} 分钟；决策带最近对话 ${DECIDE_CONTEXT_LIMIT} 条；对话记录清理：${CLEAN_HOURS > 0 ? `每 ${CLEAN_HOURS} 小时，保留最新 ${CONVERSATION_LOG_KEEP} 条` : '关闭'}；论坛一次最多再走 ${FORUM_MAX_STEPS} 步；共享时间线：${isSharedTimelineEnabled() ? '已开启' : '未开启'}；动态配图：${isImageEnabled() ? '已开启' : '未配置'}；动态语音：${isVoiceEnabled() ? '已开启' : '未配置'}；情绪（Drivesoid）：${isDrivesEnabled() ? '已接入' : '未接入'}；星星罐：一天一颗，提示窗 ${starWindowLabel()}；她放的星和她发的动态：醒来会带上，回应不占动作`
   );
   await connectAll();
   await tick();
