@@ -1,4 +1,4 @@
-// 你自己发的动态：发一条的那个框、每条下面的「改一改 / 删了」，以及对应的路由和样式。
+// 你自己发的动态：发一条的那个框、每条右上角的「改一改 / 删了」，以及对应的路由和样式。
 //
 // 为什么单独一个文件：moments-page.js 有 50KB，能不碰就不碰（flourish.js 开头那句话的意思）。
 // 那边只改了渲染一条动态的那几行（要按 author 决定头像和名字），其余全在这里。
@@ -84,25 +84,29 @@ export function renderComposeBox(back) {
   </details>`;
 }
 
-// 你发的每条下面：改一改 / 删了。收在 <details> 里，不平时占地方。
+// 你发的每条右上角：改一改 / 删了。
+// 按钮用绝对定位浮在卡片右上（样式在下面），没插进名字那一行——名字长了会把它挤走。
+// 两个表单包在 .mine-tools-panel 里，当成一个浮层从右上展开，不挤正文。
 // 改只改文字：配图要换就删了重发，不值得为了换图再做一整套上传。
 export function renderPostTools(m, back) {
   return `<details class="mine-tools">
-    <summary><span aria-hidden="true">✎</span> 改一改</summary>
-    <form class="compose-form" method="post" action="/moments/mine/${m.id}/edit">
-      <input type="hidden" name="back" value="${escapeHtml(back)}" />
-      <label class="sr-only" for="edit-${m.id}">改这条动态</label>
-      <textarea id="edit-${m.id}" name="content" rows="4" maxlength="${MAX_USER_MOMENT_CHARS}" required>${escapeHtml(m.content)}</textarea>
-      <div class="compose-actions">
-        <button type="submit">存下来</button>
-        ${m.image_url ? '<span class="compose-note">配图换不了，要换就删了重发</span>' : ''}
-      </div>
-    </form>
-    <form method="post" action="/moments/mine/${m.id}/delete"
-      onsubmit="return confirm('删了这条？下面的留言也一起没了。')">
-      <input type="hidden" name="back" value="${escapeHtml(back)}" />
-      <button type="submit" class="mine-del">删了</button>
-    </form>
+    <summary aria-label="改一改或删掉这条"><span aria-hidden="true">✎</span> 改一改</summary>
+    <div class="mine-tools-panel">
+      <form class="compose-form" method="post" action="/moments/mine/${m.id}/edit">
+        <input type="hidden" name="back" value="${escapeHtml(back)}" />
+        <label class="sr-only" for="edit-${m.id}">改这条动态</label>
+        <textarea id="edit-${m.id}" name="content" rows="4" maxlength="${MAX_USER_MOMENT_CHARS}" required>${escapeHtml(m.content)}</textarea>
+        <div class="compose-actions">
+          <button type="submit">存下来</button>
+          ${m.image_url ? '<span class="compose-note">配图换不了，要换就删了重发</span>' : ''}
+        </div>
+      </form>
+      <form method="post" action="/moments/mine/${m.id}/delete"
+        onsubmit="return confirm('删了这条？下面的留言也一起没了。')">
+        <input type="hidden" name="back" value="${escapeHtml(back)}" />
+        <button type="submit" class="mine-del">删了</button>
+      </form>
+    </div>
   </details>`;
 }
 
@@ -124,31 +128,54 @@ export const MY_MOMENTS_CSS = `
   .compose-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
   .compose-note { font-size: 11.5px; line-height: 1.5; color: var(--muted, #665a70); }
 
-  /* 你发的那几条：左边一道暗金，和 TA 发的分得清 */
-  .moment.post.mine { border-left: 3px solid #dba94e; }
+  /* 你发的那几条：左边一道暗金，和 TA 发的分得清。
+     position: relative 是给右上角那个按钮做定位参系用的 */
+  .moment.post.mine { position: relative; border-left: 3px solid #dba94e; }
   .moment.post.mine .moment-name { color: var(--gold, #b7792f); }
+  /* 名字那一行右边给按钮留出位置，不然长名字或「还没看到」会踭到它底下 */
+  .moment.post.mine .moment-head { padding-right: 74px; }
 
-  /* 改一改 / 删了 */
-  .mine-tools { margin-top: 8px; }
-  .mine-tools > summary { list-style: none; display: inline-flex; align-items: center; gap: 4px;
-    min-height: 44px; font-size: 12.5px; color: var(--muted, #665a70); cursor: pointer; }
+  /* 改一改 / 删了：浮在卡片右上角 */
+  .mine-tools { position: absolute; top: 10px; right: 12px; z-index: 3; }
+  .mine-tools > summary { list-style: none; display: inline-flex; align-items: center; gap: 3px;
+    min-height: 30px; padding: 0 9px; border-radius: 9px;
+    font-size: 12px; color: var(--muted, #665a70); cursor: pointer;
+    background: var(--card-soft, #f3eef2); border: 1px solid var(--line, #eadfe6);
+    white-space: nowrap; }
   .mine-tools > summary::-webkit-details-marker { display: none; }
   .mine-tools > summary::marker { content: ''; }
-  .mine-tools .compose-form { padding: 2px 0 10px; }
-  .mine-del { min-height: 44px; padding: 0 14px; font-size: 13px; color: var(--accent, #7a3e5d);
+  .mine-tools > summary:active { transform: scale(0.97); }
+  .mine-tools[open] > summary { color: var(--accent, #7a3e5d); }
+
+  /* 展开的那一层：从右上挂下来的卡片，不挤正文。
+     宽度跟着屏幕走，窄屏上也不会被切掉 */
+  .mine-tools-panel { position: absolute; top: 36px; right: 0;
+    width: min(300px, calc(100vw - 80px));
+    background: var(--card, #fffdfb); border: 1px solid var(--line, #eadfe6);
+    border-radius: 12px; box-shadow: 0 8px 24px rgba(60, 30, 60, 0.18);
+    padding: 12px 14px 10px; animation: mine-tools-in 0.18s ease-out; }
+  @keyframes mine-tools-in { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+  .mine-tools-panel .compose-form { padding: 0 0 8px; }
+  .mine-del { min-height: 40px; padding: 0 14px; font-size: 13px; color: var(--accent, #7a3e5d);
     background: none; border: 1px solid var(--line, #eadfe6); border-radius: 10px; cursor: pointer; }
 
   html[data-dark] .compose-form textarea { background: var(--card); color: var(--ink); }
   html[data-dark] .mine-del { color: var(--gold); }
   html[data-dark] .moment.post.mine { border-left-color: #c79a4a; }
+  html[data-dark] .mine-tools > summary { background: var(--card-soft); border-color: var(--line); }
+  html[data-dark] .mine-tools-panel { background: var(--card); border-color: var(--line);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.42); }
 
-  @media (prefers-reduced-motion: reduce) { .compose-caret { transition: none; } }
+  @media (prefers-reduced-motion: reduce) {
+    .compose-caret { transition: none; }
+    .mine-tools-panel { animation: none; }
+  }
 ${PHOTO_CSS}`;
 
 // 选图、压图那段脚本。跟着外框层进页面（page-chrome.js）
 export const MY_MOMENTS_SCRIPT = PHOTO_SCRIPT;
 
-// ── 路由 ──────────────────────────────────────────────
+// ── 路由 ──────────────────────────────────
 // 要挂在动态页之前：/moments/mine 得比 /moments/:id 先匹配到。
 
 export function registerMyMomentRoutes(app, { requireBasicAuth }) {
