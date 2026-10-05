@@ -145,10 +145,81 @@ curl -s -X POST 服务器:3001/wake/moments/3/like -H "x-api-key: 你的key"
 
 ### iOS 快捷指令怎么配上报
 
-1. 新建快捷指令，加"获取电池电量"
-2. 加"获取 URL 内容"：URL 填 `http://服务器IP:3001/report-status`，方法 `POST`
-3. 头部加 `x-api-key` = 你的 key；请求体选 JSON，加字段 `battery` = 电池电量
-4. 自动化 → 按时间或"打开某 App 时"运行
+上报的是电量、位置、屏幕时间这三样，TA 醒来时会看到。三个字段都可以不传。
+
+#### 先找到 key
+
+在服务器上执行：
+
+```bash
+grep REPORT_STATUS_API_KEY ~/vesper-phosphor/.env
+```
+
+等号后面那一串就是。如果这行是空的（当初没填），现在生成一个：
+
+```bash
+openssl rand -hex 16
+```
+
+把结果写进 `.env` 那一行，然后重启：
+
+```bash
+pm2 restart vesper --update-env
+```
+
+> ⚠️ 这个 key 不要截图、不要贴进聊天。它保护着 `/report-status` 和所有 `/wake/*`，拿到它的人能替你切 silent、能读你们最近的对话记录。
+
+#### 开始配
+
+1. **新建快捷指令**，加「获取电池电量」
+2. **加「计算」**：`电池电量 × 100`
+   iOS 这个动作返回的是 `0.85` 这种小数，直接报上去会变成 0.85%，乘 100 才是 85
+3. **加「获取 URL 内容」**，展开「显示更多」：
+   - URL：`http://你的服务器IP:3001/report-status`
+   - 方法：**POST**
+   - 头部：加一行，键 `x-api-key`，值填上面查到的 key
+   - 请求体：选 **JSON**，加字段 `battery`，值选「计算结果」
+4. **（可选）加位置**：先加「获取当前位置」，再加「获取位置的详细信息」，把「名称」或「街道」作为 `location` 字段塞进请求体
+5. **末尾加「快速查看」**，手动跑一次
+6. 返回 `{"ok":true}` 就是通了
+
+#### 挂自动化
+
+快捷指令 App →「自动化」→ 新建个人自动化 → 选「特定时间」（比如每小时）或「打开某 App 时」→ 关掉「运行前询问」→ 选中刚才那个快捷指令。
+
+#### 两个容易卡住的地方
+
+- **云服务器的防火墙（安全组）要放行 3001 端口**。不放的话快捷指令会一直转圈，最后超时。腾讯云 / 阿里云在控制台的「安全组」里加一条入站规则：协议 TCP、端口 3001、来源填你的手机出口 IP（不确定就先填 `0.0.0.0/0`）
+- 服务器上如果开了 firewalld，也要放：
+
+```bash
+firewall-cmd --add-port=3001/tcp --permanent && firewall-cmd --reload
+```
+
+> ⚠️ 这个接口走的是 http 明文，key 在请求头里裸传。别把 3001 直接开到公网上给人扫，能挂 nginx 反代加 https 最好。
+
+#### 验证上报进来了没
+
+先看设备状态：
+
+```bash
+cd ~/vesper-phosphor
+node -e "const D=require('better-sqlite3');const db=new D('data/state.db');console.log(db.prepare('SELECT * FROM device_reports ORDER BY ts DESC LIMIT 5').all());"
+```
+
+能看到刚上报的那一行、`battery` 是 0～100 之间的整数就对了。
+
+再看 TA 那边读到的：
+
+```bash
+curl -s 服务器:3001/wake/state -H "x-api-key: 你的key"
+```
+
+设备状态本身不进 `/wake/state`，它是每次醒来时拼进决策提示里的（`最近设备状态：电量…%`），想看那一段就翻唤醒日志：
+
+```bash
+pm2 logs phosphor --lines 100 --nostream | grep 电量
+```
 
 ---
 
