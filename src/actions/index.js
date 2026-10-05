@@ -5,6 +5,7 @@ import ombreBrain from './ombre-brain.js';
 import setMode from './set-mode.js';
 import starJar from './star-jar.js';
 import shakeJar from './shake-jar.js';
+import readMemo from './read-memo.js';
 import { describeActivity, describeActivityDetail } from './activity.js';
 import { addActivityMoment } from '../moments-store.js';
 
@@ -18,6 +19,7 @@ const actions = {
   set_mode: setMode,
   star_jar: starJar,
   shake_jar: shakeJar,
+  read_memo: readMemo,
   noop: async () => {},
 };
 
@@ -35,6 +37,7 @@ export async function executeAction(decision) {
   // 行为记录不占"6 小时一条"的动态间隔。
   // 星星罐不在这里：describeActivity 对 star_jar 返回 null，那句话只在星星罐里。
   // 摇罐子（shake_jar）也不在：它在自己里面写好了卡片，落出来的那句话收在详情里。
+  // 翻批注本（read_memo）同理：卡片在它自己里面写，批注正文收在详情里。
   try {
     const text = describeActivity(decision, result);
     if (text) addActivityMoment(text, describeActivityDetail(decision, result));
