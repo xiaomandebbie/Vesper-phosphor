@@ -19,7 +19,7 @@ import {
   addForumNotes,
   closeDb,
 } from './state.js';
-import { decideWithMessages, forumNextStep, FORUM_MAX_STEPS } from './decide.js';
+import { decideWithMessages, forumNextStep, musicNextStep, FORUM_MAX_STEPS, MUSIC_MAX_STEPS } from './decide.js';
 import { executeAction } from './actions/index.js';
 import { describeActivity, describeActivityDetail } from './actions/activity.js';
 import { addActivityMoment } from './moments-store.js';
@@ -72,6 +72,15 @@ const FORUM_READ_OPS = new Set(['discover', 'wander', 'list', 'show', 'activity'
 const FORUM_WRITE_OPS = new Set(['comment', 'post']);
 // 下次醒来带多少条"最近在论坛做过的"
 const FORUM_NOTES_SHOWN = 6;
+
+// 点歌台：「看」和「听」的工具做完可以接着走；「写」的做完这次就结束。
+// song_share 在 mcp-manager.js 的 BLOCKED_TOOLS 里，醒来根本调不到，不列在这儿。
+// lyric_read 不一定每个版本都有，列着也无害：没这个工具时调用会失败然后停下。
+const MUSIC_READ_TOOLS = new Set([
+  'her_recent', 'her_netease', 'song_search', 'memo_read',
+  'playlists', 'lyric_read', 'song_comments', 'song_listen',
+]);
+const MUSIC_WRITE_TOOLS = new Set(['song_memo', 'playlist_add', 'lyric_share']);
 
 // 模型返回的 JSON 字段不一定齐全、类型也不一定对。
 // 缺 next_wake_minutes 会让 next_wake_at 变成 NaN（存进库里是 NULL），之后每分钟都判定"该醒了"，
@@ -266,6 +275,94 @@ async function continueForum(decision, firstResult, messages) {
   return steps;
 }
 
+// ---------- 听歌连着走几步 ----------
+
+// 这次醒来的动作是不是一次点歌台调用；是就返回 { server, tool, args }
+function musicCallOf(decision) {
+  if (decision?.action !== 'mcp_call') return null;
+  let j;
+  try {
+    j = JSON.parse(decision.action_detail);
+  } catch {
+    return null;
+  }
+  if (!j || j.server !== 'music' || !j.tool) return null;
+  return { server: 'music', tool: String(j.tool), args: j.args ?? {} };
+}
+
+// 续走的每一步：和第一步一样在动态里记一张行为卡片；写批注、收歌单再写一笔共享时间线
+async function recordMusicStep(tool, args, result, mood) {
+  const fake = {
+    action: 'mcp_call',
+    action_detail: JSON.stringify({ server: 'music', tool, args }),
+    mood,
+  };
+  try {
+    const text = describeActivity(fake, result);
+    if (text) addActivityMoment(text, describeActivityDetail(fake, result));
+  } catch (err) {
+    console.error('phosphor: 记录听歌行为卡片失败', err.message);
+  }
+  if (MUSIC_WRITE_TOOLS.has(tool)) await postSharedEvent(describeAction(fake, result));
+}
+
+// 醒来选的是点歌台「看」或「听」的工具时，把返回内容交还给 TA，让 TA 决定下一步。
+// 停下来的情况：TA 给了 null、写了批注或收了歌单、走满 MUSIC_MAX_STEPS、
+// 出错、给了不存在的工具名、或者重复了同一个「工具＋参数」。
+async function continueMusic(decision, firstResult, messages) {
+  const call = musicCallOf(decision);
+  if (!call) return;
+  const key = (tool, args) => `${tool}|${JSON.stringify(args ?? {})}`;
+  const steps = [{
+    tool: call.tool, args: call.args,
+    text: toolText(firstResult), error: isToolError(firstResult),
+  }];
+  let convo = messages;
+
+  while (convo && steps.length - 1 < MUSIC_MAX_STEPS) {
+    const last = steps[steps.length - 1];
+    if (last.error || !MUSIC_READ_TOOLS.has(last.tool)) break;
+
+    let next;
+    try {
+      next = await musicNextStep(convo, {
+        tool: last.tool,
+        resultText: last.text,
+        isError: last.error,
+        remaining: MUSIC_MAX_STEPS - (steps.length - 1),
+      });
+    } catch (err) {
+      console.error('phosphor: 问听歌下一步失败，这次就听到这里', err.message);
+      break;
+    }
+    convo = next.messages;
+
+    const tool = next.tool;
+    if (!tool) {
+      console.log('phosphor: 听完了，这次不再继续');
+      break;
+    }
+    if (!MUSIC_READ_TOOLS.has(tool) && !MUSIC_WRITE_TOOLS.has(tool)) {
+      console.log(`phosphor: 点歌台没有这个工具（${tool}），停下`);
+      break;
+    }
+    if (steps.some((s) => key(s.tool, s.args) === key(tool, next.args))) {
+      console.log(`phosphor: 听歌这一步重复了（${tool}），停下`);
+      break;
+    }
+
+    let result = null;
+    try {
+      result = await callTool('music', tool, next.args);
+    } catch (err) {
+      console.error(`phosphor: 点歌台调用失败（${tool}）`, err.message);
+    }
+    steps.push({ tool, args: next.args, text: toolText(result), error: isToolError(result) });
+    console.log(`phosphor: 听歌第 ${steps.length} 步：${tool}${isToolError(result) ? '（失败）' : ''}`);
+    await recordMusicStep(tool, next.args, result, decision.mood);
+  }
+}
+
 // 走过的论坛步骤记下来，下次醒来带上。"看"的记一小段看到的内容，"写"的命令本身就是内容。失败的不记。
 function rememberForumSteps(steps) {
   const notes = steps
@@ -403,6 +500,16 @@ async function runDecisionCycle({ kind, scheduledAt = null, selfNote = null, cle
     }
   }
 
+  // 听歌：查完一首可以接着翻批注、读歌词、刷评论，最后写一笔或收进歌单。
+  // 和论坛一样：出什么错都不影响这次唤醒剩下的收尾
+  if (decision && !errorMessage) {
+    try {
+      await continueMusic(decision, result, messages);
+    } catch (err) {
+      console.error(`[${kind}] continueMusic failed:`, err);
+    }
+  }
+
   logWake({
     kind,
     scheduledAt,
@@ -533,7 +640,7 @@ async function main() {
   process.on('SIGINT', () => shutdown('SIGINT'));
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   console.log(
-    `phosphor: 最长唤醒间隔 ${MAX_WAKE_MINUTES} 分钟；决策带最近对话 ${DECIDE_CONTEXT_LIMIT} 条；对话记录清理：${CLEAN_HOURS > 0 ? `每 ${CLEAN_HOURS} 小时，保留最新 ${CONVERSATION_LOG_KEEP} 条` : '关闭'}；论坛一次最多再走 ${FORUM_MAX_STEPS} 步；共享时间线：${isSharedTimelineEnabled() ? '已开启' : '未开启'}；动态配图：${isImageEnabled() ? '已开启' : '未配置'}；动态语音：${isVoiceEnabled() ? '已开启' : '未配置'}；情绪（Drivesoid）：${isDrivesEnabled() ? '已接入' : '未接入'}；星星罐：一天一颗，提示窗 ${starWindowLabel()}；她放的星和她发的动态：醒来会带上，回应不占动作`
+    `phosphor: 最长唤醒间隔 ${MAX_WAKE_MINUTES} 分钟；决策带最近对话 ${DECIDE_CONTEXT_LIMIT} 条；对话记录清理：${CLEAN_HOURS > 0 ? `每 ${CLEAN_HOURS} 小时，保留最新 ${CONVERSATION_LOG_KEEP} 条` : '关闭'}；论坛一次最多再走 ${FORUM_MAX_STEPS} 步；听歌一次最多再走 ${MUSIC_MAX_STEPS} 步；共享时间线：${isSharedTimelineEnabled() ? '已开启' : '未开启'}；动态配图：${isImageEnabled() ? '已开启' : '未配置'}；动态语音：${isVoiceEnabled() ? '已开启' : '未配置'}；情绪（Drivesoid）：${isDrivesEnabled() ? '已接入' : '未接入'}；星星罐：一天一颗，提示窗 ${starWindowLabel()}；她放的星和她发的动态：醒来会带上，回应不占动作`
   );
   await connectAll();
   await tick();

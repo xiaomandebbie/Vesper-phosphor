@@ -44,6 +44,16 @@ export const FORUM_MAX_STEPS = (() => {
 // 论坛每一步返回的内容最多带多少字给模型看
 const FORUM_RESULT_MAX_CHARS = 4000;
 
+// 听歌一次醒来最多再多走几步（第一步是醒来时选的那个工具，不算在里面）。
+// .env 的 MUSIC_MAX_STEPS 可改，不填是 3，填 0 就是原来那样只走一步，最多 5。
+export const MUSIC_MAX_STEPS = (() => {
+  const raw = String(process.env.MUSIC_MAX_STEPS ?? '').trim();
+  const n = Number(raw);
+  return raw && Number.isInteger(n) && n >= 0 ? Math.min(n, 5) : 3;
+})();
+// 点歌台每一步返回的内容最多带多少字。歌词、评论区、听感分析都可能很长，比论坛收紧一些
+const MUSIC_RESULT_MAX_CHARS = 3000;
+
 // 可选：给 system 消息打 Anthropic 风格的 cache_control 标记。
 // DeepSeek、OpenAI 这类是自动前缀缓存，不用开。上游是 Claude 且中转站支持透传 cache_control 时才开，
 // 不支持的中转站可能直接报 400，报错就删掉这一行。
@@ -176,6 +186,12 @@ function clipForumResult(value) {
   return clipText(s, FORUM_RESULT_MAX_CHARS, '\n…（后面太长，没放进来）');
 }
 
+function clipMusicResult(value) {
+  const s = String(value ?? '').trim();
+  if (!s) return '（什么都没返回）';
+  return clipText(s, MUSIC_RESULT_MAX_CHARS, '\n…（后面太长，没放进来）');
+}
+
 // 最近几次选了什么。让模型自己看到"我一直在做同一件事"，比写死规则更自然，也是选下一个动作的主要参考。
 function recentActionsBlock(recentActions) {
   if (!recentActions?.length) return '';
@@ -301,8 +317,24 @@ function buildSystemPrompt(context) {
   // 点歌台（.env 的 MUSIC_MCP_URL，见 mcp-manager.js）配了才告诉 TA 怎么用。
   // 醒来不能放歌：song_share 在 mcp-manager.js 的 BLOCKED_TOOLS 里挡掉了，这里也不提。
   // 只跟配置有关，进程不重启就不变，不影响前缀缓存
+  // 听歌也能连着走几步（和论坛一样）。只跟配置有关，进程不重启就不变，不影响前缀缓存
+  const musicSteps = MUSIC_MAX_STEPS
+    ? `\n听歌可以在一次醒来里连着走几步：你用 her_recent / song_search / memo_read / playlists / lyric_read / song_comments / song_listen 这类「看」和「听」的工具时，系统会把返回的内容拿给你看，你可以接着往下翻——查这首歌的批注、读歌词、刷评论、认真听一遍，最多再走 ${MUSIC_MAX_STEPS} 步。写批注（song_memo）或者收进歌单（playlist_add）之后这次就结束。听完没想写的，就停下，这很正常。`
+    : '';
+
   const musicSection = process.env.MUSIC_MCP_URL
-    ? `\n\n## 听歌\n通过 mcp_call 调用（server 填 "music"），常用：\n  her_recent {"limit":10}                                  看${USER_NAME}最近在播放器里听了什么\n  playlist_add {"playlist":"歌单名","query":"歌名 歌手"}      把想让${USER_NAME}听的歌收进本地歌单，等对方自己去听\n  song_memo {"query":"歌名 歌手","memo":"..."}              往一首歌的批注本记一笔\n  memo_read {}                                             翻批注本，看你们俩在哪些歌下写过东西\n  playlists {}                                             看本地歌单架\n  lyric_read {"query":"歌名 歌手"}                          读整篇歌词\n  song_comments {"query":"歌名 歌手"}                       刷一首歌的评论区\n醒来时不能放歌，也不能往${USER_NAME}的播放器里塞歌，突然出声会打扰对方。想让对方听的，收进歌单或者写进批注本，对方打开播放器自己会看到。不用每次醒来都动歌单，有想说的再写。`
+    ? `\n\n## 听歌\n通过 mcp_call 调用（server 填 "music"），常用：\n  her_recent {"limit":10}                                  看${USER_NAME}最近在播放器里听了什么\n  playlist_add {"playlist":"歌单名","query":"歌名 歌手"}      把想让${USER_NAME}听的歌收进本地歌单，等对方自己去听\n  song_memo {"query":"歌名 歌手","memo":"..."}              往一首歌的批注本记一笔\n  memo_read {}                                             翻批注本，看你们俩在哪些歌下写过东西\n  playlists {}                                             看本地歌单架\n  lyric_read {"query":"歌名 歌手"}                          读整篇歌词\n  song_comments {"query":"歌名 歌手"}                       刷一首歌的评论区\n醒来时不能放歌，也不能往${USER_NAME}的播放器里塞歌，突然出声会打扰对方。想让对方听的，收进歌单或者写进批注本，对方打开播放器自己会看到。不用每次醒来都动歌单，有想说的再写。${musicSteps}`
+    : '';
+
+  // 翻批注本走 MUSIC_PLAYER_URL（转发到播放器），和上面听歌那段的 MUSIC_MCP_URL 不是同一个。
+  // 没配播放器时不把这条给模型看：它只会返回 null，白白占掉这次醒来的行动。
+  const memoActionNote = process.env.MUSIC_PLAYER_URL
+    ? `
+- read_memo（翻批注本，随机翻出一首写过批注的歌，看看当时在那首歌旁边写了什么。
+  不需要 action_detail。批注本空的时候翻不出东西，那就别选它。
+  注意：${USER_NAME}在播放器里写批注是不会通知你的，所以只能你自己想起来去翻。
+  翻到的那一页会记在你的动态里，点开能看到批注正文——不写进推送和共享时间线。
+  想指定看哪一首、或者想顺手写一笔，用 mcp_call 的 memo_read / song_memo）`
     : '';
 
   return `你会时不时自己醒来。每次醒来，下面的用户消息会告诉你此刻的情况：现在几点、最近和${USER_NAME}聊了什么、你记得什么、心里是什么感受、有没有新留言。你看完之后自己决定这次做什么、下次什么时候再醒。
@@ -357,7 +389,7 @@ list 只显示一个未读切片并会标记已读，不要把一页 list 当成
   一天只有一次机会，怎么写见上面的"星星罐"。action_detail 直接是那一句正文，不要解释、不要铺垫）
 - shake_jar（摇一摇星星罐，随机落出一颗旧星星，回头看看当时咽下去的是什么话。
   不需要 action_detail。罐子空的时候摇不出东西，那就别选它。
-  摇出来的那一句会记在你的动态里，点开能看到——不写进推送和共享时间线）
+  摇出来的那一句会记在你的动态里，点开能看到——不写进推送和共享时间线）${memoActionNote}
 - mcp_call（调用MCP工具，可选服务：${tools}，action_detail是JSON字符串 {"server":"...","tool":"...","args":{...}}）
 - ombre_brain（长期记忆，action_detail是JSON字符串，四选一：
   {"mode":"breath"} 快速看看自己记得什么，token开销最低；
@@ -474,3 +506,32 @@ export async function forumNextStep(messages, { command, resultText, isError, re
   const cmd = typeof parsed?.forum_command === 'string' ? parsed.forum_command.trim() : '';
   return { command: cmd || null, messages: [...next, { role: 'assistant', content }] };
 }
+
+// ---------- 听歌的下一步 ----------
+// messages 是到目前为止的整段对话（最后一条是模型上一次的回答）。
+// 把点歌台刚返回的内容追加进去，问 TA 下一步做什么。
+// 和论坛那边的区别：论坛是一条命令字符串，点歌台是「工具名＋参数」，所以这里要回两个字段。
+export async function musicNextStep(messages, { tool, resultText, isError, remaining }) {
+  const body = isError
+    ? `点歌台这次出错了（你刚才用的：${tool}）：\n${clipMusicResult(resultText)}`
+    : `点歌台返回了（你刚才用的：${tool}）：\n${clipMusicResult(resultText)}`;
+  const prompt = `${body}
+
+这次醒来你还可以在点歌台再走 ${remaining} 步，比如：
+- 想知道这首歌你们写过什么：memo_read {"query":"歌名 歌手"}
+- 想读整篇歌词：lyric_read {"query":"歌名 歌手"}
+- 想看看大家怎么说：song_comments {"query":"歌名 歌手"}
+- 想认真听一遍（频谱、BPM、鼓点）：song_listen {"query":"歌名 歌手"}
+- 想换一首看看：song_search {"q":"关键词"}
+- 有话想写在这首歌旁边：song_memo {"query":"歌名 歌手","memo":"..."}
+- 想收进歌单等她自己发现：playlist_add {"playlist":"歌单名","query":"歌名 歌手"}
+写批注或者收进歌单之后，这次听歌就结束了。看完不想再做什么就给 null，这是正常的；不用每次都往歌单里塞东西。
+只返回一个JSON对象，不要任何其他文字：{"music_tool": "工具名" 或 null, "music_args": {...}}`;
+
+  const next = [...messages, { role: 'user', content: prompt }];
+  const { parsed, content } = await askJson(next);
+  const nextTool = typeof parsed?.music_tool === 'string' ? parsed.music_tool.trim() : '';
+  const args = parsed?.music_args && typeof parsed.music_args === 'object' ? parsed.music_args : {};
+  return { tool: nextTool || null, args, messages: [...next, { role: 'assistant', content }] };
+}
+
