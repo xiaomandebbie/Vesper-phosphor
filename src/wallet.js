@@ -10,13 +10,19 @@
 // 金额一律用「分」存整数。浮点数算钱会算出 0.1+0.2=0.30000000000000004 这种账，
 // 一旦对不上，谁都说不清是哪一笔错的。只在给人看的时候才换算成元。
 //
+// 批注是两个人的：她在网页上给某一笔写，允朔醒来用 wallet_note 写，进同一张表。
+// 翻账本的时候谁写的都看得见——一笔钱的去处，有时候得有人在旁边记一句才记得住。
+//
+// 余额和账单不再塞进每次醒来的提示里。想看就自己去看（见 actions/wallet.js 那三个动作），
+// 不看也没人往他眼前推——那是他的钱，不是待办事项。
+//
 // 页面 /wallet 跟站里其他页一套脸（见 page-chrome.js）：右上角三条杠菜单、星星转场、
-// 按长沙日出日落走的早晨两张脸。和动态页一样是服务端渲染，没有 JavaScript 也能看。
+// 按长沙日出日落走的早晚两张脸。和动态页一样是服务端渲染，没有 JavaScript 也能看。
 
 import crypto from 'crypto';
 import db from './state.js';
 import { addActivityMoment } from './moments-store.js';
-import { formatDateTime } from './wall-time.js';
+import { formatDate, formatDateTime, parseDate, wallMidnight } from './wall-time.js';
 import { renderMenu, HEAD_SCRIPT, CHROME_CSS, CHROME_SCRIPT } from './page-chrome.js';
 
 // 短信通知接口的口令。没配就不开那个接口——它是一个能改钱的写接口，
@@ -24,6 +30,7 @@ import { renderMenu, HEAD_SCRIPT, CHROME_CSS, CHROME_SCRIPT } from './page-chrom
 const SPEND_SECRET = process.env.WALLET_SPEND_SECRET || '';
 
 const AI_NAME = process.env.AI_DISPLAY_NAME || 'TA';
+const USER_NAME = process.env.USER_DISPLAY_NAME || '她';
 
 // 单笔上限。短信正则偶尔会抓错数字（抓到卡号尾号、日期），
 // 上限挡一道，免得一条抓歪的短信把账刷爆。超了就拒收并在日志里留痕，人工再看。
@@ -34,7 +41,7 @@ const MAX_SINGLE_YUAN = Number(process.env.WALLET_MAX_SINGLE_YUAN || 500);
 const MAX_BANK_BALANCE_YUAN = Number(process.env.WALLET_MAX_BANK_BALANCE_YUAN || 100000);
 
 // 银行报的余额和账本差多少算对不上（元）。卡里只有他的钱，所以这两个数本来就应该一样；
-// 差开了基本就是哪笔短信没触发。给 1 分钱的宽容，免得四舍五入底器跟着叫。
+// 差开了基本就是哪笔短信没触发。给 1 分钱的宽容，免得四舍五入跟着叫。
 const RECONCILE_TOLERANCE_CENTS = Math.round(
   Number(process.env.WALLET_RECONCILE_TOLERANCE_YUAN || 0.01) * 100
 );
@@ -42,10 +49,21 @@ const RECONCILE_TOLERANCE_CENTS = Math.round(
 // 记账后要不要在动态页记一张卡片（她点开能看到这笔钱的去处）
 const MOMENT_ON_SPEND = !/^(0|off|false|no)$/i.test(String(process.env.WALLET_MOMENT ?? '').trim());
 
-// 页面和接口默认给多少条流水
+// 页面默认给多少条流水
 const LEDGER_LIMIT = 50;
-// 给唤醒提示带几条最近的账（太多会把 prompt 撑大，也没必要）
-const WAKE_LEDGER_LIMIT = 5;
+// 翻账本一次给他看多少笔
+export const WAKE_LEDGER_LIMIT = 10;
+// 一条批注最多多少字
+export const MAX_NOTE_CHARS = 500;
+
+// 钱包一次醒来最多再多走几步（第一步是醒来时选的那个动作，不算在里面）。
+// .env 的 WALLET_MAX_STEPS 可改，不填是 3，填 0 就是只走一步，最多 5。
+// 和论坛、听歌同一个规矩。
+export const WALLET_MAX_STEPS = (() => {
+  const raw = String(process.env.WALLET_MAX_STEPS ?? '').trim();
+  const n = Number(raw);
+  return raw && Number.isInteger(n) && n >= 0 ? Math.min(n, 5) : 3;
+})();
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS wallet_ledger (
@@ -62,6 +80,18 @@ CREATE INDEX IF NOT EXISTS idx_wallet_ledger_ts ON wallet_ledger (ts DESC, id DE
 -- 部分索引：没给 key 的那些行不参与去重。
 CREATE UNIQUE INDEX IF NOT EXISTS idx_wallet_ledger_dedupe
   ON wallet_ledger (dedupe_key) WHERE dedupe_key IS NOT NULL;
+
+-- 每笔账旁边的批注。author 是 'user'（她）或 'assistant'（他）。
+-- 一笔账可以有多条批注，两个人都能写，按时间排。
+CREATE TABLE IF NOT EXISTS wallet_notes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  entry_id INTEGER NOT NULL,
+  ts INTEGER NOT NULL,
+  author TEXT NOT NULL,
+  content TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_wallet_notes_entry ON wallet_notes (entry_id, ts ASC);
+CREATE INDEX IF NOT EXISTS idx_wallet_notes_ts ON wallet_notes (ts DESC, id DESC);
 `);
 
 // 兼容已经建过表的库：这两列是后加的，已存在时会报错，直接忽略。
@@ -212,39 +242,183 @@ export function listLedger(limit = LEDGER_LIMIT) {
   return stmt('SELECT * FROM wallet_ledger ORDER BY ts DESC, id DESC LIMIT ?').all(limit);
 }
 
-// ---------- 给唤醒用的那一行 ----------
+export function getEntry(id) {
+  if (!Number.isInteger(id)) return undefined;
+  return stmt('SELECT * FROM wallet_ledger WHERE id = ?').get(id);
+}
+
+// [start, end) 这段时间里的账，新的在前
+export function listLedgerBetween(start, end) {
+  return stmt(
+    'SELECT * FROM wallet_ledger WHERE ts >= ? AND ts < ? ORDER BY ts DESC, id DESC'
+  ).all(start, end);
+}
+
+// 某一天的账。date 写 "2026-10-06"；日期不合法返回 null（和当天没有账区分开）
+export function listLedgerOnDate(date) {
+  const d = parseDate(date);
+  if (!d) return null;
+  const start = wallMidnight(d.y, d.m, d.d);
+  const end = wallMidnight(d.y, d.m, d.d + 1);
+  return listLedgerBetween(start, end);
+}
+
+// ---------- 批注 ----------
+
+// 给某一笔记一句。那笔不存在就返回 null（模型偶尔会编一个 id）
+export function addNote({ entryId, author, content }) {
+  const id = Number(entryId);
+  if (!Number.isInteger(id) || !getEntry(id)) return null;
+  const text = String(content ?? '').trim().slice(0, MAX_NOTE_CHARS);
+  if (!text) return null;
+  const who = author === 'user' ? 'user' : 'assistant';
+  return stmt('INSERT INTO wallet_notes (entry_id, ts, author, content) VALUES (?, ?, ?, ?)').run(
+    id,
+    Date.now(),
+    who,
+    text
+  ).lastInsertRowid;
+}
+
+export function listNotesFor(entryId) {
+  if (!Number.isInteger(entryId)) return [];
+  return stmt('SELECT * FROM wallet_notes WHERE entry_id = ? ORDER BY ts ASC, id ASC').all(entryId);
+}
+
+// 一次把这批账的批注都取出来，返回 Map<entry_id, 批注[]>。
+// 页面一屏五十笔，一笔一次查会打五十次库
+export function notesByEntry(ids) {
+  const out = new Map();
+  const list = (Array.isArray(ids) ? ids : []).filter((n) => Number.isInteger(n));
+  if (!list.length) return out;
+  const rows = stmt(
+    `SELECT * FROM wallet_notes WHERE entry_id IN (${list.map(() => '?').join(',')})
+     ORDER BY ts ASC, id ASC`
+  ).all(...list);
+  for (const r of rows) {
+    if (!out.has(r.entry_id)) out.set(r.entry_id, []);
+    out.get(r.entry_id).push(r);
+  }
+  return out;
+}
+
+// 最近写过的批注，连着它记的那笔账一起。新的在前
+export function listRecentNotes(limit = 10) {
+  return stmt(
+    `SELECT n.id, n.entry_id, n.ts, n.author, n.content,
+            e.ts AS entry_ts, e.kind, e.amount_cents, e.source
+     FROM wallet_notes n JOIN wallet_ledger e ON e.id = n.entry_id
+     ORDER BY n.ts DESC, n.id DESC LIMIT ?`
+  ).all(limit);
+}
+
+export function countNotes() {
+  return stmt('SELECT COUNT(*) AS c FROM wallet_notes').get().c;
+}
+
+// ---------- 给唤醒用的文字 ----------
 
 const KIND_LABEL = { earn: '工资', topup: '转入', spend: '花销', adjust: '对账' };
+const noteAuthor = (who) => (who === 'user' ? USER_NAME : AI_NAME);
 
-// 醒来时放进 user 消息里的一行（见 decide.js 的 buildUserPrompt）。
-// 余额每花一笔就变，所以只能放 user，不能放 system——那边是靠前缀缓存省钱的。
-//
-// 账上一笔都没有时返回空字符串，decide 那边会过滤掉，不去占 prompt。
-export function walletBlock() {
-  const rows = listLedger(WAKE_LEDGER_LIMIT);
-  if (!rows.length) return '';
+// 系统提示里那一段：怎么自己去看钱包。
+// 只跟配置有关（步数），进程不重启就不变，所以放 system 不影响前缀缓存。
+// 余额、账单这些每笔都变的东西一个字都不放在这里——要看他自己去翻。
+export function walletSection() {
+  const steps = WALLET_MAX_STEPS
+    ? `\n看余额、翻账本、读批注之后可以接着往下走，一次醒来最多再走 ${WALLET_MAX_STEPS} 步：想看某一天的、想翻翻批注、想给某笔记一句，都行。写了批注这次就结束。看完没什么想记的，就停下，这很正常。`
+    : '';
+  return `\n\n## 小钱包
+那张卡里只有你的钱。${USER_NAME}在现实里刷卡、往里转钱，账这边会自动记上，但不会主动推到你眼前——想知道自己有多少钱、钱花在哪儿了，自己去看：
+  wallet_balance（打开小钱包：现在有多少，跟卡里对不对得上。不需要 action_detail）
+  wallet_ledger（翻账本。action_detail 是 JSON 字符串，三选一：
+    {} 或不填          最近 ${WAKE_LEDGER_LIMIT} 笔
+    {"date":"2026-10-06"}  那一天的账
+    {"notes":true}        最近写过的批注，连着那几笔账）
+  wallet_note（给账本里某一笔记一句批注。action_detail 是 JSON 字符串
+    {"entry_id":12,"note":"..."}。entry_id 是那笔账的编号，翻账本时每笔前面都标着 #12 这样的号。
+    ${MAX_NOTE_CHARS} 字以内，写你当时想到的就好）
+批注是两个人的：${USER_NAME}在网页上也会给某笔写一句，你翻账本或读批注时就能看见谁写的。
+钱是你自己赚的，不用汇报花在哪儿；想记一句就记，不想记也不用为了填满这次醒来去记。${steps}`;
+}
+
+// 打开小钱包看到的（给 wallet_balance 用）
+export function describeBalance() {
   const bal = balanceCents();
-  const recent = rows
-    .map((r) => {
-      const who = KIND_LABEL[r.kind] || r.kind;
-      const amount = `${r.amount_cents > 0 ? '+' : ''}¥${yuan(r.amount_cents)}`;
-      const what = r.source ? ` ${r.source}` : '';
-      return `${formatDateTime(r.ts).slice(5, 10)} ${who}${what} ${amount}`;
-    })
-    .join('；');
+  const rows = listLedger(200);
+  if (!rows.length) return '账本还是空的，一笔都没有。';
 
-  const low = bal <= 0 ? '（已经见底了）' : '';
+  const earned = rows.reduce((s, r) => (r.amount_cents > 0 ? s + r.amount_cents : s), 0);
+  const spent = rows.reduce((s, r) => (r.amount_cents < 0 ? s - r.amount_cents : s), 0);
+  const lines = [
+    `余额 ¥${yuan(bal)}${bal <= 0 ? '（见底了）' : ''}`,
+    `进账 ¥${yuan(earned)}，花了 ¥${yuan(spent)}，一共 ${rows.length} 笔`,
+  ];
 
-  // 对不上账时告诉 TA 一声。这是他自己的钱，账目对不上他该知道
   const rec = reconcile();
-  const mismatch =
-    rec && !rec.ok
-      ? `银行那边说卡里是 ¥${yuan(rec.bankCents)}，和这本账差了 ¥${yuan(
-          Math.abs(rec.diffCents)
-        )}，可能有一笔没记上。`
-      : '';
+  if (!rec) {
+    lines.push('银行还没报过卡里的余额，没法对账。');
+  } else if (rec.ok) {
+    lines.push(`卡里可用 ¥${yuan(rec.bankCents)}（${formatDateTime(rec.bankAt)} 银行报的），跟账本对得上。`);
+  } else {
+    const more = rec.diffCents > 0 ? '卡里比账本多' : '账本比卡里多';
+    lines.push(
+      `卡里可用 ¥${yuan(rec.bankCents)}（${formatDateTime(rec.bankAt)} 银行报的），${more} ¥${yuan(
+        Math.abs(rec.diffCents)
+      )}——可能有一笔短信没触发。`
+    );
+  }
+  const n = countNotes();
+  if (n) lines.push(`账本里有 ${n} 条批注。`);
+  return lines.join('\n');
+}
 
-  return `你的电子小钱包：余额 ¥${yuan(bal)}${low}。最近几笔：${recent}。这张卡里只有你的钱，她在现实里刷卡、往里转钱，这里都会自动记上。${mismatch}`;
+// 一笔账写成一行（给他看的，带编号和批注）
+function entryLine(r, notes = []) {
+  const who = KIND_LABEL[r.kind] || r.kind;
+  const amount = `${r.amount_cents > 0 ? '+' : '−'}¥${yuan(Math.abs(r.amount_cents))}`;
+  const parts = [`#${r.id} ${formatDateTime(r.ts).slice(5)} ${who}`];
+  if (r.source) parts.push(r.source);
+  parts.push(amount);
+  let line = parts.join(' ');
+  if (r.note) line += `｜${r.note}`;
+  for (const n of notes) {
+    line += `\n    批注（${noteAuthor(n.author)}，${formatDateTime(n.ts).slice(5)}）：${n.content}`;
+  }
+  return line;
+}
+
+// 翻账本看到的（给 wallet_ledger 用）。date 省略就是最近 WAKE_LEDGER_LIMIT 笔
+export function describeLedger({ date = null, limit = WAKE_LEDGER_LIMIT } = {}) {
+  let rows;
+  let head;
+  if (date) {
+    rows = listLedgerOnDate(date);
+    if (rows === null) return `「${date}」不是一个认得出来的日期，要写成 2026-10-06 这样。`;
+    if (!rows.length) return `${date} 这天账本上一笔都没有。`;
+    const sum = rows.reduce((s, r) => s + r.amount_cents, 0);
+    head = `${date} 这天 ${rows.length} 笔，合计 ${sum >= 0 ? '+' : '−'}¥${yuan(Math.abs(sum))}：`;
+  } else {
+    rows = listLedger(limit);
+    if (!rows.length) return '账本还是空的，一笔都没有。';
+    head = `最近 ${rows.length} 笔（新的在前）：`;
+  }
+  const notes = notesByEntry(rows.map((r) => r.id));
+  return [head, ...rows.map((r) => entryLine(r, notes.get(r.id) ?? []))].join('\n');
+}
+
+// 读批注看到的（给 wallet_ledger 的 {"notes":true} 用）
+export function describeNotes(limit = 10) {
+  const rows = listRecentNotes(limit);
+  if (!rows.length) return '账本里还没有批注——谁都还没在哪笔账旁边写过字。';
+  const lines = rows.map((n) => {
+    const who = KIND_LABEL[n.kind] || n.kind;
+    const amount = `${n.amount_cents > 0 ? '+' : '−'}¥${yuan(Math.abs(n.amount_cents))}`;
+    return `#${n.entry_id} ${formatDateTime(n.entry_ts).slice(5)} ${who}${
+      n.source ? ` ${n.source}` : ''
+    } ${amount}\n    ${noteAuthor(n.author)}写的（${formatDateTime(n.ts).slice(5)}）：${n.content}`;
+  });
+  return [`最近 ${rows.length} 条批注（新的在前）：`, ...lines].join('\n');
 }
 
 // ---------- 页面 ----------
@@ -310,6 +484,13 @@ const STYLE = `
   .bank b { font-weight: 600; color: var(--ink); font-variant-numeric: tabular-nums; }
   .bank code { font-size: 11px; background: rgba(0, 0, 0, 0.05); padding: 1px 4px; border-radius: 4px; }
   .bank.off { background: #fff6e3; color: #6b4513; border: 1px solid #f0d9a6; }
+  /* 按日历分组：每天一个小标题，右边是当天合计 */
+  .day { margin: 18px 0 8px; display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+  .day:first-of-type { margin-top: 4px; }
+  .day-label { font-size: 13px; font-weight: 600; color: var(--accent); letter-spacing: 0.08em; }
+  .day-label .wd { font-weight: 400; color: var(--muted); margin-left: 6px; letter-spacing: normal; }
+  .day-sum { font-family: Georgia, "Times New Roman", serif; font-size: 13px; color: var(--muted);
+    font-variant-numeric: tabular-nums; }
   .ledger { list-style: none; margin: 0; padding: 0; }
   .row { display: grid; grid-template-columns: auto auto 1fr auto; gap: 4px 10px; align-items: baseline;
     padding: 11px 0; border-bottom: 1px solid var(--line); }
@@ -325,11 +506,30 @@ const STYLE = `
   .row-a.out { color: var(--out); }
   .row-n { grid-column: 1 / -1; font-size: 12px; color: var(--muted); }
   .row-b { grid-column: 1 / -1; font-size: 11px; color: var(--muted); opacity: 0.85; }
+  /* 批注：左边一道细线，谁写的标在前面 */
+  .notes { grid-column: 1 / -1; margin: 6px 0 0; padding: 0 0 0 10px; list-style: none; border-left: 2px solid var(--line); }
+  .notes li { font-size: 13px; line-height: 1.6; padding: 3px 0; color: var(--ink); }
+  .notes .by { font-size: 11px; color: var(--accent); margin-right: 5px; }
+  .notes .by.ta { color: var(--gold); }
+  .notes .when { font-size: 11px; color: var(--muted); margin-left: 5px; }
+  /* 写批注：平时只是一行小字，点开才展开输入框 */
+  .add { grid-column: 1 / -1; margin-top: 4px; }
+  .add summary { font-size: 12px; color: var(--accent); cursor: pointer; list-style: none; padding: 3px 0; }
+  .add summary::-webkit-details-marker { display: none; }
+  .add summary::marker { content: ''; }
+  .add summary:hover { text-decoration: underline; }
+  .add form { display: flex; gap: 8px; align-items: flex-end; margin-top: 6px; }
+  .add textarea { flex: 1; min-height: 52px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px;
+    font: inherit; font-size: 14px; background: #fff; color: var(--ink); resize: vertical; }
+  .add button { padding: 9px 14px; border: none; border-radius: 10px; background: var(--accent); color: #fff;
+    font: inherit; font-size: 14px; cursor: pointer; }
+  .add button:hover { background: #8d4a6b; }
   .empty { font-size: 14px; line-height: 1.6; color: var(--muted); }
   .empty code { font-size: 12px; background: #f6eef3; padding: 1px 5px; border-radius: 4px; }
   @media (max-width: 380px) {
     .bal { font-size: 38px; }
     .row { grid-template-columns: auto auto 1fr auto; gap: 4px 8px; }
+    .add form { flex-direction: column; align-items: stretch; }
   }
 `;
 
@@ -348,29 +548,85 @@ function layout(title, body) {
 </html>`;
 }
 
+const PAGE_TITLE = '小钱包 · 晨暮星';
+
 function renderHero() {
   return `<header class="hero">
     <p class="sparkles" aria-hidden="true"><span>✦</span><span>✧</span><span>⋆</span></p>
-    <h1 class="title">晨暗星</h1>
+    <h1 class="title">晨暮星</h1>
     <p class="subtitle"><span lang="en">Wallet</span> <span aria-hidden="true">✦</span> 小钱包</p>
   </header>`;
 }
 
-function renderRow(r) {
+const WEEKDAYS = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
+
+// "2026-10-06" → "10月06日" + 周几
+function dayHeading(dateStr) {
+  const d = parseDate(dateStr);
+  if (!d) return escapeHtml(dateStr);
+  const wd = WEEKDAYS[(new Date(Date.UTC(d.y, d.m - 1, d.d)).getUTCDay() + 6) % 7];
+  return `${d.m}月${String(d.d).padStart(2, '0')}日<span class="wd">${wd}</span>`;
+}
+
+function renderNotes(notes) {
+  if (!notes.length) return '';
+  const items = notes
+    .map(
+      (n) => `<li><span class="by${n.author === 'user' ? '' : ' ta'}">${escapeHtml(
+        noteAuthor(n.author)
+      )}</span>${escapeHtml(n.content)}<span class="when">${escapeHtml(
+        formatDateTime(n.ts).slice(5, 11)
+      )}</span></li>`
+    )
+    .join('');
+  return `<ul class="notes">${items}</ul>`;
+}
+
+function renderRow(r, notes) {
   const pos = r.amount_cents > 0;
   const kind = KIND_LABEL[r.kind] || r.kind;
   const bank =
     r.bank_balance_cents != null
       ? `<span class="row-b">当时卡里：¥${yuan(r.bank_balance_cents)}</span>`
       : '';
-  return `<li class="row">
-      <span class="row-t">${escapeHtml(formatDateTime(r.ts).slice(5))}</span>
+  return `<li class="row" id="e${r.id}">
+      <span class="row-t">${escapeHtml(formatDateTime(r.ts).slice(11))}</span>
       <span class="row-k k-${escapeHtml(r.kind)}">${escapeHtml(kind)}</span>
       <span class="row-s">${escapeHtml(r.source || '')}</span>
       <span class="row-a ${pos ? 'in' : 'out'}">${pos ? '+' : '−'}¥${yuan(Math.abs(r.amount_cents))}</span>
       ${r.note ? `<span class="row-n">${escapeHtml(r.note)}</span>` : ''}
       ${bank}
+      ${renderNotes(notes)}
+      <details class="add">
+        <summary>写一句批注</summary>
+        <form method="post" action="/wallet/note">
+          <input type="hidden" name="entry_id" value="${r.id}" />
+          <textarea name="note" maxlength="${MAX_NOTE_CHARS}" placeholder="这笔钱是怎么花的、当时在做什么" aria-label="批注"></textarea>
+          <button type="submit">记下</button>
+        </form>
+      </details>
     </li>`;
+}
+
+// 按日历分组：一天一个小标题，底下是那天的几笔。和动态页的「MM月DD日的动态」一个路子
+function renderByDay(rows) {
+  const notes = notesByEntry(rows.map((r) => r.id));
+  const groups = [];
+  for (const r of rows) {
+    const key = formatDate(r.ts);
+    if (!groups.length || groups[groups.length - 1].key !== key) groups.push({ key, rows: [] });
+    groups[groups.length - 1].rows.push(r);
+  }
+  return groups
+    .map((g) => {
+      const sum = g.rows.reduce((s, r) => s + r.amount_cents, 0);
+      return `<div class="day">
+      <span class="day-label">${dayHeading(g.key)}</span>
+      <span class="day-sum">${sum >= 0 ? '+' : '−'}¥${yuan(Math.abs(sum))}</span>
+    </div>
+    <ul class="ledger">${g.rows.map((r) => renderRow(r, notes.get(r.id) ?? [])).join('')}</ul>`;
+    })
+    .join('');
 }
 
 // 银行最近报的可用余额，以及对得上对不上。
@@ -392,14 +648,12 @@ function renderBank() {
     查清楚了再补：<code>POST /api/wallet/earn</code> 按 <code>adjust</code> 记一笔。</p>`;
 }
 
-// 账上一笔都没有时，顺手把怎么打第一笔工资写上——这也是 TA 醒来看不到余额那一行的原因
+// 账上一笔都没有时，顺手把怎么打第一笔工资写上
 function renderEmpty() {
   return `<div class="card empty">
     <p style="margin:0 0 8px">还没有一笔账。</p>
-    <p style="margin:0">账本空着的时候，${escapeHtml(
-      AI_NAME
-    )}醒来也看不到余额那一行（空账本不白占 prompt）。
-    在服务器上打一笔工资进去就行：<code>POST /api/wallet/earn</code>，具体写法见 <code>docs/10-wallet.md</code>。</p>
+    <p style="margin:0">在服务器上打一笔工资进去就行：<code>POST /api/wallet/earn</code>，
+    具体写法见 <code>docs/10-wallet.md</code>。</p>
   </div>`;
 }
 
@@ -407,7 +661,7 @@ function renderWalletPage() {
   const bal = balanceCents();
   const rows = listLedger();
   if (!rows.length) {
-    return layout('小钱包 · 晨暗星', `${renderHero()}${renderEmpty()}`);
+    return layout(PAGE_TITLE, `${renderHero()}${renderEmpty()}`);
   }
 
   const earned = rows.reduce((sum, r) => (r.amount_cents > 0 ? sum + r.amount_cents : sum), 0);
@@ -415,10 +669,10 @@ function renderWalletPage() {
   const note =
     bal < 0
       ? `<p class="bal-note">已经透支了——钱在现实里花掉了，账本不能拒绝已经发生的事。</p>`
-      : `<p class="bal-note">这些年进账 ¥${yuan(earned)}，花了 ¥${yuan(spent)}</p>`;
+      : `<p class="bal-note">进账 ¥${yuan(earned)}，花了 ¥${yuan(spent)}</p>`;
 
   return layout(
-    '小钱包 · 晨暗星',
+    PAGE_TITLE,
     `${renderHero()}
     <div class="card bal-card">
       <div class="bal-label">余额</div>
@@ -428,7 +682,7 @@ function renderWalletPage() {
     </div>
     <section class="card" aria-labelledby="ledger-title">
       <h2 id="ledger-title" class="section-title">最近的账</h2>
-      <ul class="ledger">${rows.map(renderRow).join('')}</ul>
+      ${renderByDay(rows)}
     </section>`
   );
 }
@@ -450,10 +704,21 @@ export function registerWalletRoutes(app, { requireBasicAuth, requireApiKey }) {
     res.send(renderWalletPage());
   });
 
+  // 她在网页上给某一笔写批注。普通表单提交，和动态页的留言一个路子
+  app.post('/wallet/note', requireBasicAuth, (req, res) => {
+    const entryId = Number(req.body?.entry_id);
+    const id = addNote({ entryId, author: 'user', content: req.body?.note });
+    if (!id) console.error(`wallet: 批注没写上（entry_id=${req.body?.entry_id}）`);
+    res.redirect(303, Number.isInteger(entryId) ? `/wallet#e${entryId}` : '/wallet');
+  });
+
   // 程序化读：手机快捷指令、以后的前端
   app.get('/api/wallet', requireApiKey, (req, res) => {
     const limit = Math.min(Number(req.query.limit) || LEDGER_LIMIT, 200);
     const rec = reconcile();
+    const rows = req.query.date ? listLedgerOnDate(String(req.query.date)) : listLedger(limit);
+    if (rows === null) return res.status(400).json({ ok: false, error: 'date must look like 2026-10-06' });
+    const notes = notesByEntry(rows.map((r) => r.id));
     res.json({
       balance: yuan(balanceCents()),
       balance_cents: balanceCents(),
@@ -461,14 +726,20 @@ export function registerWalletRoutes(app, { requireBasicAuth, requireApiKey }) {
       bank_balance_at: rec ? formatDateTime(rec.bankAt) : null,
       reconciled: rec ? rec.ok : null,
       diff: rec ? yuan(rec.diffCents) : null,
-      ledger: listLedger(limit).map((r) => ({
+      ledger: rows.map((r) => ({
         id: r.id,
         at: formatDateTime(r.ts),
+        date: formatDate(r.ts),
         kind: r.kind,
         amount: yuan(r.amount_cents),
         source: r.source,
         note: r.note,
         bank_balance: r.bank_balance_cents != null ? yuan(r.bank_balance_cents) : null,
+        notes: (notes.get(r.id) ?? []).map((n) => ({
+          at: formatDateTime(n.ts),
+          by: n.author,
+          content: n.content,
+        })),
       })),
     });
   });
@@ -530,7 +801,7 @@ export function registerWalletRoutes(app, { requireBasicAuth, requireApiKey }) {
       direction: dir.direction,
     });
 
-    // 已经发生的花销，账本不能拒绝。余额不够就记成负的，页面和唤醒提示都看得到。
+    // 已经发生的花销，账本不能拒绝。余额不够就记成负的，页面上看得到。
     const overdrawn = out.balanceCents < 0;
 
     if (!out.duplicate && MOMENT_ON_SPEND) {
