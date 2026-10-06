@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""把钱包挂进 vesper.js、decide.js 和 .env.example。
+"""把钱包挂进 vesper.js、decide.js、page-chrome.js 和 .env.example。
 
-src/wallet.js 是新文件，不用动；这个脚本只负责那三处很小的接线，
-免得为了加四行去重写两个大文件。
+src/wallet.js 是新文件，不用动；这个脚本只负责那几处很小的接线，
+免得为了加几行去重写几个大文件。
 
 改之前每个文件存一份 .bak-wallet；打过一次之后再跑会说「已经打过了」，
-不会打第二遍，也不会弄坏什么。
+不会打第二遍，也不会弄坏什么。已经打过早先版本的也能直接再跑：
+已打的跳过，只补新增的那几处。
 
 用法：
     python3 scripts/add_wallet_hooks.py --check   # 只看每处能不能对上，不写
@@ -55,6 +56,13 @@ PATCHES = [
         "    fromHerBlock(context.fromHer),",
         "\n    walletBlock(),",
         "walletBlock(),",
+    ),
+    (
+        "src/page-chrome.js",
+        "菜单里加小钱包",
+        "    { href: '/drives', label: '心绪' },",
+        "\n    { href: '/wallet', label: '小钱包' },",
+        "label: '小钱包'",
     ),
 ]
 

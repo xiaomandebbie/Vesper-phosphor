@@ -11,11 +11,15 @@
 //
 // 金额一律用「分」存整数。浮点数算钱会算出 0.1+0.2=0.30000000000000004 这种账，
 // 一旦对不上，谁都说不清是哪一笔错的。只在给人看的时候才换算成元。
+//
+// 页面 /wallet 跟站里其他页一套脸（见 page-chrome.js）：右上角三条杠菜单、星星转场、
+// 按长沙日出日落走的早晨两张脸。和动态页一样是服务端渲染，没有 JavaScript 也能看。
 
 import crypto from 'crypto';
 import db from './state.js';
 import { addActivityMoment } from './moments-store.js';
 import { formatDateTime } from './wall-time.js';
+import { renderMenu, HEAD_SCRIPT, CHROME_CSS, CHROME_SCRIPT } from './page-chrome.js';
 
 // 短信扣款接口的口令。没配就不开那个接口——它是一个能改钱的写接口，
 // 一旦端口暴露在公网上，不设口令等于谁都能往账上记花销。
@@ -144,11 +148,159 @@ export function walletBlock() {
   return `你的电子小钱包：余额 ¥${yuan(bal)}${low}。最近几笔：${recent}。这是你自己的钱，她在现实里刷那张卡，这里会自动扣。`;
 }
 
-// ---------- 路由 ----------
+// ---------- 页面 ----------
 
-function esc(s) {
-  return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
+
+// 配色和心绪页、动态页一致（粉、暖黄）。进账用深绿，出账用梅红——
+// 两个颜色在米白底上都读得清，也没跳出这套脸。
+const STYLE = `
+  :root { --ink: #2b2233; --muted: #665a70; --accent: #7a3e5d; --gold: #b7792f; --card: #fffdfb; --line: #eadfe6;
+    --in: #2f7d5a; --out: #a8445c; }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; color: var(--ink); font-family: -apple-system, "PingFang SC", "Helvetica Neue", sans-serif;
+    background: linear-gradient(180deg, #efe7f4 0%, #f9f0ee 55%, #fdf8f2 100%); }
+  /* 背景里零星的小星星，粉的黄的 */
+  body::before { content: ''; position: fixed; inset: 0; pointer-events: none; z-index: 0;
+    background-image:
+      radial-gradient(1.5px 1.5px at 12% 18%, rgba(230, 182, 82, 0.9) 50%, transparent 51%),
+      radial-gradient(1px 1px at 78% 9%, rgba(215, 121, 159, 0.8) 50%, transparent 51%),
+      radial-gradient(2px 2px at 88% 36%, rgba(230, 182, 82, 0.7) 50%, transparent 51%),
+      radial-gradient(1px 1px at 30% 62%, rgba(215, 121, 159, 0.7) 50%, transparent 51%),
+      radial-gradient(1.5px 1.5px at 64% 78%, rgba(230, 182, 82, 0.8) 50%, transparent 51%),
+      radial-gradient(1px 1px at 8% 88%, rgba(155, 74, 122, 0.6) 50%, transparent 51%),
+      radial-gradient(1.5px 1.5px at 50% 30%, rgba(215, 121, 159, 0.6) 50%, transparent 51%),
+      radial-gradient(1px 1px at 94% 70%, rgba(230, 182, 82, 0.8) 50%, transparent 51%); }
+  main { position: relative; z-index: 1; max-width: 600px; margin: 0 auto; padding: 22px 16px 48px; }
+  .hero { text-align: center; margin: 6px 0 20px; }
+  .sparkles { margin: 0 0 4px; height: 18px; color: var(--gold); font-size: 14px; letter-spacing: 0.6em; padding-left: 0.6em; }
+  .sparkles span { display: inline-block; animation: twinkle 3.2s ease-in-out infinite; }
+  .sparkles span:nth-child(2) { animation-delay: 1s; color: #d7799f; }
+  .sparkles span:nth-child(3) { animation-delay: 2s; }
+  @keyframes twinkle { 0%, 100% { opacity: 0.35; transform: scale(0.85); } 50% { opacity: 1; transform: scale(1.1); } }
+  @media (prefers-reduced-motion: reduce) { .sparkles span { animation: none; opacity: 0.8; } }
+  .title { margin: 0; font-family: "Songti SC", "STSong", "Noto Serif SC", serif; font-size: 42px; font-weight: 700;
+    letter-spacing: 0.35em; padding-left: 0.35em; color: #5b2e52; }
+  @supports ((-webkit-background-clip: text) or (background-clip: text)) {
+    .title { background: linear-gradient(100deg, #463a7c 0%, #9b4a7a 52%, #c4832f 100%);
+      -webkit-background-clip: text; background-clip: text; color: transparent; }
+  }
+  .subtitle { margin: 6px 0 0; font-family: "Cormorant Garamond", "Didot", Georgia, serif; font-style: italic;
+    font-size: 14px; letter-spacing: 0.2em; color: var(--muted); }
+  .card { background: var(--card); border-radius: 16px; padding: 16px; margin-bottom: 14px;
+    box-shadow: 0 1px 3px rgba(60, 30, 60, 0.08); }
+  .section-title { font-size: 15px; margin: 0 0 10px; color: var(--accent); letter-spacing: 0.1em; }
+  .notice { font-size: 14px; line-height: 1.6; border-left: 4px solid var(--gold); }
+  /* 余额卡：一大行数，左边一道暖黄，右下角一颗星 */
+  .bal-card { position: relative; text-align: center; padding: 24px 16px 20px; border-left: 4px solid var(--gold); }
+  .bal-card::after { content: '✦'; position: absolute; right: 12px; bottom: 8px; font-size: 10px; color: var(--gold); opacity: 0.8; }
+  .bal-label { font-size: 12px; letter-spacing: 0.22em; color: var(--muted); }
+  .bal { margin: 6px 0 0; font-family: Georgia, "Times New Roman", serif; font-size: 46px; font-weight: 700; line-height: 1.15;
+    color: var(--accent); font-variant-numeric: tabular-nums; }
+  .bal.neg { color: var(--out); }
+  .bal-note { margin: 8px 0 0; font-size: 12px; color: var(--muted); }
+  .ledger { list-style: none; margin: 0; padding: 0; }
+  .row { display: grid; grid-template-columns: auto auto 1fr auto; gap: 4px 10px; align-items: baseline;
+    padding: 11px 0; border-bottom: 1px solid var(--line); }
+  .row:last-child { border-bottom: none; }
+  .row-t { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .row-k { font-size: 11px; padding: 2px 8px; border-radius: 999px; background: #f6eef3; color: var(--accent); }
+  .row-k.k-earn { background: #e8f3ec; color: var(--in); }
+  .row-k.k-adjust { background: #fff6e3; color: #6b4513; }
+  .row-s { font-size: 14px; }
+  .row-a { font-family: Georgia, "Times New Roman", serif; font-size: 17px; font-weight: 700;
+    font-variant-numeric: tabular-nums; text-align: right; }
+  .row-a.in { color: var(--in); }
+  .row-a.out { color: var(--out); }
+  .row-n { grid-column: 1 / -1; font-size: 12px; color: var(--muted); }
+  .empty { font-size: 14px; line-height: 1.6; color: var(--muted); }
+  .empty code { font-size: 12px; background: #f6eef3; padding: 1px 5px; border-radius: 4px; }
+  @media (max-width: 380px) {
+    .bal { font-size: 38px; }
+    .row { grid-template-columns: auto auto 1fr auto; gap: 4px 8px; }
+  }
+`;
+
+// 菜单和星星转场每个页面都有（见 page-chrome.js）
+function layout(title, body) {
+  return `<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>${escapeHtml(title)}</title>
+<script>${HEAD_SCRIPT}</script>
+<style>${STYLE}${CHROME_CSS}</style>
+</head>
+<body><main>${renderMenu('/wallet')}${body}</main><script>${CHROME_SCRIPT}</script></body>
+</html>`;
+}
+
+function renderHero() {
+  return `<header class="hero">
+    <p class="sparkles" aria-hidden="true"><span>✦</span><span>✧</span><span>⋆</span></p>
+    <h1 class="title">晨暗星</h1>
+    <p class="subtitle"><span lang="en">Wallet</span> <span aria-hidden="true">✦</span> 小钱包</p>
+  </header>`;
+}
+
+function renderRow(r) {
+  const pos = r.amount_cents > 0;
+  const kind = KIND_LABEL[r.kind] || r.kind;
+  return `<li class="row">
+      <span class="row-t">${escapeHtml(formatDateTime(r.ts).slice(5))}</span>
+      <span class="row-k k-${escapeHtml(r.kind)}">${escapeHtml(kind)}</span>
+      <span class="row-s">${escapeHtml(r.source || '')}</span>
+      <span class="row-a ${pos ? 'in' : 'out'}">${pos ? '+' : '−'}¥${yuan(Math.abs(r.amount_cents))}</span>
+      ${r.note ? `<span class="row-n">${escapeHtml(r.note)}</span>` : ''}
+    </li>`;
+}
+
+// 账上一笔都没有时，顺手把怎么打第一笔工资写上——这也是 TA 醒来看不到余额那一行的原因
+function renderEmpty() {
+  return `<div class="card empty">
+    <p style="margin:0 0 8px">还没有一笔账。</p>
+    <p style="margin:0">账本空着的时候，${escapeHtml(AI_NAME)}醒来也看不到余额那一行（空账本不白占 prompt）。
+    在服务器上打一笔工资进去就行：<code>POST /api/wallet/earn</code>，具体写法见 <code>docs/10-wallet.md</code>。</p>
+  </div>`;
+}
+
+function renderWalletPage() {
+  const bal = balanceCents();
+  const rows = listLedger();
+  if (!rows.length) {
+    return layout('小钱包 · 晨暗星', `${renderHero()}${renderEmpty()}`);
+  }
+
+  const earned = rows.reduce((sum, r) => (r.amount_cents > 0 ? sum + r.amount_cents : sum), 0);
+  const spent = rows.reduce((sum, r) => (r.amount_cents < 0 ? sum - r.amount_cents : sum), 0);
+  const overdrawn = bal < 0
+    ? `<p class="bal-note">已经透支了——钱在现实里花掉了，账本不能拒绝已经发生的事。</p>`
+    : `<p class="bal-note">这些年赚了 ¥${yuan(earned)}，花了 ¥${yuan(spent)}</p>`;
+
+  return layout(
+    '小钱包 · 晨暗星',
+    `${renderHero()}
+    <div class="card bal-card">
+      <div class="bal-label">余额</div>
+      <p class="bal ${bal < 0 ? 'neg' : ''}">¥${yuan(bal)}</p>
+      ${overdrawn}
+    </div>
+    <section class="card" aria-labelledby="ledger-title">
+      <h2 id="ledger-title" class="section-title">最近的账</h2>
+      <ul class="ledger">${rows.map(renderRow).join('')}</ul>
+    </section>`
+  );
+}
+
+// ---------- 路由 ----------
 
 // 定长比较，别用 ===：口令比较的耗时不该随猜对几个字符而变化
 function secretOk(given) {
@@ -158,75 +310,12 @@ function secretOk(given) {
   return crypto.timingSafeEqual(a, b);
 }
 
-function renderWalletPage() {
-  const bal = balanceCents();
-  const rows = listLedger();
-  const list = rows.length
-    ? rows
-        .map((r) => {
-          const pos = r.amount_cents > 0;
-          return `<li>
-  <span class="t">${esc(formatDateTime(r.ts))}</span>
-  <span class="k">${esc(KIND_LABEL[r.kind] || r.kind)}</span>
-  <span class="s">${esc(r.source || '')}</span>
-  <span class="a ${pos ? 'in' : 'out'}">${pos ? '+' : ''}¥${yuan(r.amount_cents)}</span>
-  ${r.note ? `<span class="n">${esc(r.note)}</span>` : ''}
-</li>`;
-        })
-        .join('\n')
-    : '<li class="empty">还没有一笔账。</li>';
-
-  return `<!doctype html>
-<html lang="zh-CN"><head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${esc(AI_NAME)}的钱包</title>
-<style>
-  :root { color-scheme: light dark; }
-  body { margin: 0; padding: 24px 16px 48px; font: 16px/1.6 -apple-system, system-ui, sans-serif;
-         background: #eef2fb; color: #2b3048; }
-  main { max-width: 620px; margin: 0 auto; }
-  h1 { font-size: 18px; font-weight: 600; margin: 0 0 20px; letter-spacing: .04em; }
-  .card { background: #fff; border-radius: 18px; padding: 22px 20px; margin-bottom: 20px;
-          box-shadow: 0 2px 16px rgba(80,96,160,.10); }
-  .bal-label { font-size: 13px; opacity: .6; }
-  .bal { font-size: 36px; font-weight: 600; margin-top: 4px; letter-spacing: .02em; }
-  .bal.neg { color: #c2453c; }
-  h2 { font-size: 14px; font-weight: 600; opacity: .7; margin: 0 0 12px; }
-  ul { list-style: none; margin: 0; padding: 0; }
-  li { display: grid; grid-template-columns: auto auto 1fr auto; gap: 4px 10px;
-       align-items: baseline; padding: 11px 0; border-bottom: 1px solid rgba(120,135,185,.14); }
-  li:last-child { border-bottom: none; }
-  .t { font-size: 12px; opacity: .55; font-variant-numeric: tabular-nums; }
-  .k { font-size: 12px; padding: 1px 7px; border-radius: 999px; background: rgba(120,135,185,.14); }
-  .s { font-size: 14px; }
-  .a { font-variant-numeric: tabular-nums; font-weight: 600; }
-  .a.in { color: #2f7d5a; }
-  .a.out { color: #c2453c; }
-  .n { grid-column: 1 / -1; font-size: 13px; opacity: .6; }
-  .empty { opacity: .5; }
-  @media (prefers-color-scheme: dark) {
-    body { background: #171a24; color: #e4e7f2; }
-    .card { background: #21252f; box-shadow: none; }
-  }
-</style></head><body><main>
-<h1>${esc(AI_NAME)}的钱包</h1>
-<div class="card">
-  <div class="bal-label">余额</div>
-  <div class="bal ${bal < 0 ? 'neg' : ''}">¥${yuan(bal)}</div>
-</div>
-<div class="card">
-  <h2>最近的账</h2>
-  <ul>
-${list}
-  </ul>
-</div>
-</main></body></html>`;
-}
-
 export function registerWalletRoutes(app, { requireBasicAuth, requireApiKey }) {
   // 页面：给人看的余额和账单
-  app.get('/wallet', requireBasicAuth, (req, res) => res.send(renderWalletPage()));
+  app.get('/wallet', requireBasicAuth, (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    res.send(renderWalletPage());
+  });
 
   // 程序化读：手机快捷指令、以后的前端
   app.get('/api/wallet', requireApiKey, (req, res) => {
