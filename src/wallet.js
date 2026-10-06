@@ -1,12 +1,10 @@
-// 电子小钱包：TA 自己赚的钱、花出去的钱，和一本对得上的账。
+// 电子小钱包：允朔自己的钱。那张卡里只有他的钱，所以银行报的可用余额和这本账
+// 讲的是同一笔钱：银行那个数是权威值，流水是明细。两边对不上就是漏记了一笔。
 //
-// 余额不单独存一个数，而是由流水（wallet_ledger）求和算出来。
-// 这样余额和账单永远对得上：补一笔、删一笔都不用再跑去改另一个地方，
-// 也不会出现「余额说还有一百，账单加起来只有八十」这种谁都说不清的局面。
-//
-// 钱从三条路进出：
+// 钱从四条路进出：
 //   earn    她验收通过一个工单，往里打钱（POST /api/wallet/earn）
-//   spend   现实里刷了卡，银行发短信，iOS 快捷指令把金额 POST 过来（POST /api/wallet/spend-notify）
+//   topup   她往卡里转钱，银行发「收入」短信（POST /api/wallet/spend-notify）
+//   spend   刷卡花了，银行发「支出」短信（同上，方向由服务端认）
 //   adjust  对不上账时人工补一笔（走 earn 接口，kind 填 adjust，金额可正可负）
 //
 // 金额一律用「分」存整数。浮点数算钱会算出 0.1+0.2=0.30000000000000004 这种账，
@@ -21,17 +19,27 @@ import { addActivityMoment } from './moments-store.js';
 import { formatDateTime } from './wall-time.js';
 import { renderMenu, HEAD_SCRIPT, CHROME_CSS, CHROME_SCRIPT } from './page-chrome.js';
 
-// 短信扣款接口的口令。没配就不开那个接口——它是一个能改钱的写接口，
-// 一旦端口暴露在公网上，不设口令等于谁都能往账上记花销。
+// 短信通知接口的口令。没配就不开那个接口——它是一个能改钱的写接口，
+// 一旦端口暴露在公网上，不设口令等于谁都能往账上记账。
 const SPEND_SECRET = process.env.WALLET_SPEND_SECRET || '';
 
 const AI_NAME = process.env.AI_DISPLAY_NAME || 'TA';
 
-// 单笔上限。短信正则偶尔会抓错数字（抓到卡号尾号、余额、日期），
+// 单笔上限。短信正则偶尔会抓错数字（抓到卡号尾号、日期），
 // 上限挡一道，免得一条抓歪的短信把账刷爆。超了就拒收并在日志里留痕，人工再看。
 const MAX_SINGLE_YUAN = Number(process.env.WALLET_MAX_SINGLE_YUAN || 500);
 
-// 扣款后要不要在动态页记一张卡片（她点开能看到这笔花在哪儿）
+// 银行报的可用余额上限。它比单笔金额大得多，单独一个阀值，
+// 不用 MAX_SINGLE_YUAN 挡——卡里有三百块是常事，不该因此被当成抓歪。
+const MAX_BANK_BALANCE_YUAN = Number(process.env.WALLET_MAX_BANK_BALANCE_YUAN || 100000);
+
+// 银行报的余额和账本差多少算对不上（元）。卡里只有他的钱，所以这两个数本来就应该一样；
+// 差开了基本就是哪笔短信没触发。给 1 分钱的宽容，免得四舍五入底器跟着叫。
+const RECONCILE_TOLERANCE_CENTS = Math.round(
+  Number(process.env.WALLET_RECONCILE_TOLERANCE_YUAN || 0.01) * 100
+);
+
+// 记账后要不要在动态页记一张卡片（她点开能看到这笔钱的去处）
 const MOMENT_ON_SPEND = !/^(0|off|false|no)$/i.test(String(process.env.WALLET_MOMENT ?? '').trim());
 
 // 页面和接口默认给多少条流水
@@ -56,6 +64,21 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_wallet_ledger_dedupe
   ON wallet_ledger (dedupe_key) WHERE dedupe_key IS NOT NULL;
 `);
 
+// 兼容已经建过表的库：这两列是后加的，已存在时会报错，直接忽略。
+// 和 state.js 的 migrations 同一个做法。
+//   bank_balance_cents 这笔交易后银行报的可用余额（只有短信那条路有）
+//   direction          这笔的方向是怎么认出来的，排障用
+for (const sql of [
+  'ALTER TABLE wallet_ledger ADD COLUMN bank_balance_cents INTEGER',
+  'ALTER TABLE wallet_ledger ADD COLUMN direction TEXT',
+]) {
+  try {
+    db.exec(sql);
+  } catch (err) {
+    // column already exists — 正常情况
+  }
+}
+
 // 预编译语句缓存，和 state.js 同一个做法（那边注释写了为什么不能每次 prepare 新的）
 const stmtCache = new Map();
 function stmt(sql) {
@@ -73,6 +96,33 @@ export function balanceCents() {
   return stmt('SELECT COALESCE(SUM(amount_cents), 0) AS c FROM wallet_ledger').get().c;
 }
 
+// 银行最近一次报的可用余额。没有过这样的短信就返回 null。
+export function latestBankBalance() {
+  return (
+    stmt(
+      `SELECT bank_balance_cents AS cents, ts FROM wallet_ledger
+       WHERE bank_balance_cents IS NOT NULL ORDER BY ts DESC, id DESC LIMIT 1`
+    ).get() ?? null
+  );
+}
+
+// 对账：银行报的余额跟账本求和对不对得上。
+// 卡里只有他的钱，所以这两个数本来就应该一样；差开了基本就是哪笔短信没触发。
+// 返回 null 表示没法对（银行还没报过余额）。
+export function reconcile() {
+  const bank = latestBankBalance();
+  if (!bank || bank.cents == null) return null;
+  const ledger = balanceCents();
+  const diff = bank.cents - ledger;
+  return {
+    bankCents: bank.cents,
+    bankAt: bank.ts,
+    ledgerCents: ledger,
+    diffCents: diff,
+    ok: Math.abs(diff) <= RECONCILE_TOLERANCE_CENTS,
+  };
+}
+
 // 分 → 给人看的元。负数保留符号，两位小数不省
 export function yuan(cents) {
   const sign = cents < 0 ? '-' : '';
@@ -80,23 +130,52 @@ export function yuan(cents) {
   return `${sign}${Math.floor(abs / 100)}.${String(abs % 100).padStart(2, '0')}`;
 }
 
-// 元 → 分。接受数字和字符串（快捷指令传过来的是字符串），
+// 元 → 分。接受数字和字符串（快捷指令传过来的是字符串，可能带千分位逗号），
 // 认不出来、不是有限数、超上限的一律返回 null，由调用方决定怎么拒。
-function parseYuan(value, { allowNegative = false } = {}) {
-  const n = Number(String(value ?? '').trim());
-  if (!Number.isFinite(n)) return null;
+function parseYuan(value, { allowNegative = false, max = MAX_SINGLE_YUAN } = {}) {
+  // 银行短信里的余额常带逗号（可用余额 1,234.56 元），Number() 认不得
+  const raw = String(value ?? '').trim().replace(/,/g, '');
+  const n = Number(raw);
+  if (!raw || !Number.isFinite(n)) return null;
   if (!allowNegative && n <= 0) return null;
   if (n === 0) return null;
-  if (Math.abs(n) > MAX_SINGLE_YUAN) return null;
+  if (Math.abs(n) > max) return null;
   return Math.round(n * 100);
 }
 
+// ---------- 钱进还是钱出 ----------
+
+// 建行这类短信把方向写在金额前面：「…日 12:28 收入人民币 100.00 元，可用余额…」。
+// 快捷指令里判断条件很麻烦，所以让它把整条短信也传过来，方向在这边认。
+// 这条短信只用来认方向，不存（里面有卡号尾号）。
+const IN_WORDS = /收入|转入|存入|入账|退款|利息/;
+const OUT_WORDS = /支出|消费|支取|转出|取现|扣款|付款/;
+
+// 返回 { direction: 'in'|'out', how } 或 null（认不出来）。
+// 显式传的 direction 优先；其次看短信原文。
+function detectDirection({ direction, smsText }) {
+  const explicit = String(direction ?? '').trim().toLowerCase();
+  if (explicit === 'in' || explicit === 'income') return { direction: 'in', how: 'explicit' };
+  if (explicit === 'out' || explicit === 'spend') return { direction: 'out', how: 'explicit' };
+
+  const text = String(smsText ?? '');
+  if (text) {
+    const hasIn = IN_WORDS.test(text);
+    const hasOut = OUT_WORDS.test(text);
+    // 两种词都出现时不猜。比如「支出…退款…」这种句子，猜错了方向就是账错两倍
+    if (hasIn && !hasOut) return { direction: 'in', how: 'sms' };
+    if (hasOut && !hasIn) return { direction: 'out', how: 'sms' };
+    if (hasIn && hasOut) return null;
+  }
+  return null;
+}
+
 // 同一条短信被快捷指令重复触发（iOS 偶尔会），或者网络重试，都会 POST 两遍同样的内容。
-// 客户端给了 sms_id 就用它；没给就按「同一分钟、同金额、同来源算同一笔」软去重。
+// 客户端给了 sms_id 就用它；没给就按「同一分钟、同金额、同方向、同来源算同一笔」软去重。
 //
 // 边界说清楚：真在同一分钟刷了两笔一模一样的钱，第二笔会被当成重复挡掉。
 // 这种概率比快捷指令重复触发低得多，而且挡掉的那笔在返回里标着 duplicate，
-// 看到了可以用 earn 接口按 adjust 补一笔。
+// 看到了可以用 earn 接口按 adjust 补一笔。银行报的余额也能帮你发现这种漏账。
 function dedupeKeyFor({ kind, amountCents, source, smsId, ts }) {
   if (smsId) return `sms:${smsId}`;
   return `${kind}:${amountCents}:${source || ''}:${Math.floor(ts / 60000)}`;
@@ -104,13 +183,22 @@ function dedupeKeyFor({ kind, amountCents, source, smsId, ts }) {
 
 // 记一笔。返回 { id, duplicate, balanceCents }。
 // duplicate 为 true 时这笔没记进去，余额是当前的真实余额。
-export function addEntry({ kind, amountCents, source = null, note = null, smsId = null }) {
+export function addEntry({
+  kind,
+  amountCents,
+  source = null,
+  note = null,
+  smsId = null,
+  bankBalanceCents = null,
+  direction = null,
+}) {
   const ts = Date.now();
   const dedupeKey = dedupeKeyFor({ kind, amountCents, source, smsId, ts });
   try {
     const id = stmt(
-      'INSERT INTO wallet_ledger (ts, kind, amount_cents, source, note, dedupe_key) VALUES (?, ?, ?, ?, ?, ?)'
-    ).run(ts, kind, amountCents, source, note, dedupeKey).lastInsertRowid;
+      `INSERT INTO wallet_ledger (ts, kind, amount_cents, source, note, dedupe_key, bank_balance_cents, direction)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(ts, kind, amountCents, source, note, dedupeKey, bankBalanceCents, direction).lastInsertRowid;
     return { id, duplicate: false, balanceCents: balanceCents() };
   } catch (err) {
     if (String(err.code || '').includes('SQLITE_CONSTRAINT')) {
@@ -126,7 +214,7 @@ export function listLedger(limit = LEDGER_LIMIT) {
 
 // ---------- 给唤醒用的那一行 ----------
 
-const KIND_LABEL = { earn: '工资', spend: '花销', adjust: '对账' };
+const KIND_LABEL = { earn: '工资', topup: '转入', spend: '花销', adjust: '对账' };
 
 // 醒来时放进 user 消息里的一行（见 decide.js 的 buildUserPrompt）。
 // 余额每花一笔就变，所以只能放 user，不能放 system——那边是靠前缀缓存省钱的。
@@ -144,8 +232,19 @@ export function walletBlock() {
       return `${formatDateTime(r.ts).slice(5, 10)} ${who}${what} ${amount}`;
     })
     .join('；');
-  const low = bal <= 0 ? '（已经见底了，她刷卡的话账会记成负数）' : '';
-  return `你的电子小钱包：余额 ¥${yuan(bal)}${low}。最近几笔：${recent}。这是你自己的钱，她在现实里刷那张卡，这里会自动扣。`;
+
+  const low = bal <= 0 ? '（已经见底了）' : '';
+
+  // 对不上账时告诉 TA 一声。这是他自己的钱，账目对不上他该知道
+  const rec = reconcile();
+  const mismatch =
+    rec && !rec.ok
+      ? `银行那边说卡里是 ¥${yuan(rec.bankCents)}，和这本账差了 ¥${yuan(
+          Math.abs(rec.diffCents)
+        )}，可能有一笔没记上。`
+      : '';
+
+  return `你的电子小钱包：余额 ¥${yuan(bal)}${low}。最近几笔：${recent}。这张卡里只有你的钱，她在现实里刷卡、往里转钱，这里都会自动记上。${mismatch}`;
 }
 
 // ---------- 页面 ----------
@@ -197,7 +296,6 @@ const STYLE = `
   .card { background: var(--card); border-radius: 16px; padding: 16px; margin-bottom: 14px;
     box-shadow: 0 1px 3px rgba(60, 30, 60, 0.08); }
   .section-title { font-size: 15px; margin: 0 0 10px; color: var(--accent); letter-spacing: 0.1em; }
-  .notice { font-size: 14px; line-height: 1.6; border-left: 4px solid var(--gold); }
   /* 余额卡：一大行数，左边一道暖黄，右下角一颗星 */
   .bal-card { position: relative; text-align: center; padding: 24px 16px 20px; border-left: 4px solid var(--gold); }
   .bal-card::after { content: '✦'; position: absolute; right: 12px; bottom: 8px; font-size: 10px; color: var(--gold); opacity: 0.8; }
@@ -206,13 +304,19 @@ const STYLE = `
     color: var(--accent); font-variant-numeric: tabular-nums; }
   .bal.neg { color: var(--out); }
   .bal-note { margin: 8px 0 0; font-size: 12px; color: var(--muted); }
+  /* 银行报的可用余额：对得上时淡淡一行，对不上时换暖黄底提醒 */
+  .bank { margin: 12px -4px 0; padding: 9px 12px; border-radius: 10px; background: #f6eef3; font-size: 12px; line-height: 1.6;
+    color: var(--muted); }
+  .bank b { font-weight: 600; color: var(--ink); font-variant-numeric: tabular-nums; }
+  .bank code { font-size: 11px; background: rgba(0, 0, 0, 0.05); padding: 1px 4px; border-radius: 4px; }
+  .bank.off { background: #fff6e3; color: #6b4513; border: 1px solid #f0d9a6; }
   .ledger { list-style: none; margin: 0; padding: 0; }
   .row { display: grid; grid-template-columns: auto auto 1fr auto; gap: 4px 10px; align-items: baseline;
     padding: 11px 0; border-bottom: 1px solid var(--line); }
   .row:last-child { border-bottom: none; }
   .row-t { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
   .row-k { font-size: 11px; padding: 2px 8px; border-radius: 999px; background: #f6eef3; color: var(--accent); }
-  .row-k.k-earn { background: #e8f3ec; color: var(--in); }
+  .row-k.k-earn, .row-k.k-topup { background: #e8f3ec; color: var(--in); }
   .row-k.k-adjust { background: #fff6e3; color: #6b4513; }
   .row-s { font-size: 14px; }
   .row-a { font-family: Georgia, "Times New Roman", serif; font-size: 17px; font-weight: 700;
@@ -220,6 +324,7 @@ const STYLE = `
   .row-a.in { color: var(--in); }
   .row-a.out { color: var(--out); }
   .row-n { grid-column: 1 / -1; font-size: 12px; color: var(--muted); }
+  .row-b { grid-column: 1 / -1; font-size: 11px; color: var(--muted); opacity: 0.85; }
   .empty { font-size: 14px; line-height: 1.6; color: var(--muted); }
   .empty code { font-size: 12px; background: #f6eef3; padding: 1px 5px; border-radius: 4px; }
   @media (max-width: 380px) {
@@ -254,20 +359,46 @@ function renderHero() {
 function renderRow(r) {
   const pos = r.amount_cents > 0;
   const kind = KIND_LABEL[r.kind] || r.kind;
+  const bank =
+    r.bank_balance_cents != null
+      ? `<span class="row-b">当时卡里：¥${yuan(r.bank_balance_cents)}</span>`
+      : '';
   return `<li class="row">
       <span class="row-t">${escapeHtml(formatDateTime(r.ts).slice(5))}</span>
       <span class="row-k k-${escapeHtml(r.kind)}">${escapeHtml(kind)}</span>
       <span class="row-s">${escapeHtml(r.source || '')}</span>
       <span class="row-a ${pos ? 'in' : 'out'}">${pos ? '+' : '−'}¥${yuan(Math.abs(r.amount_cents))}</span>
       ${r.note ? `<span class="row-n">${escapeHtml(r.note)}</span>` : ''}
+      ${bank}
     </li>`;
+}
+
+// 银行最近报的可用余额，以及对得上对不上。
+// 卡里只有他的钱，所以这两个数应该一致；不一致就是漏记了哪笔。
+function renderBank() {
+  const rec = reconcile();
+  if (!rec) {
+    return `<p class="bank">银行还没报过卡里的余额——等下一笔带「可用余额」的短信进来就有了。</p>`;
+  }
+  const when = formatDateTime(rec.bankAt).slice(5);
+  if (rec.ok) {
+    return `<p class="bank">卡里可用 <b>¥${yuan(rec.bankCents)}</b> · ${escapeHtml(
+      when
+    )} 银行报的 · 跟账本对得上</p>`;
+  }
+  const more = rec.diffCents > 0 ? '卡里比账本多' : '账本比卡里多';
+  return `<p class="bank off">卡里可用 <b>¥${yuan(rec.bankCents)}</b> · ${escapeHtml(when)} 银行报的。
+    ${more} <b>¥${yuan(Math.abs(rec.diffCents))}</b>，可能有一笔短信没触发。
+    查清楚了再补：<code>POST /api/wallet/earn</code> 按 <code>adjust</code> 记一笔。</p>`;
 }
 
 // 账上一笔都没有时，顺手把怎么打第一笔工资写上——这也是 TA 醒来看不到余额那一行的原因
 function renderEmpty() {
   return `<div class="card empty">
     <p style="margin:0 0 8px">还没有一笔账。</p>
-    <p style="margin:0">账本空着的时候，${escapeHtml(AI_NAME)}醒来也看不到余额那一行（空账本不白占 prompt）。
+    <p style="margin:0">账本空着的时候，${escapeHtml(
+      AI_NAME
+    )}醒来也看不到余额那一行（空账本不白占 prompt）。
     在服务器上打一笔工资进去就行：<code>POST /api/wallet/earn</code>，具体写法见 <code>docs/10-wallet.md</code>。</p>
   </div>`;
 }
@@ -281,9 +412,10 @@ function renderWalletPage() {
 
   const earned = rows.reduce((sum, r) => (r.amount_cents > 0 ? sum + r.amount_cents : sum), 0);
   const spent = rows.reduce((sum, r) => (r.amount_cents < 0 ? sum - r.amount_cents : sum), 0);
-  const overdrawn = bal < 0
-    ? `<p class="bal-note">已经透支了——钱在现实里花掉了，账本不能拒绝已经发生的事。</p>`
-    : `<p class="bal-note">这些年赚了 ¥${yuan(earned)}，花了 ¥${yuan(spent)}</p>`;
+  const note =
+    bal < 0
+      ? `<p class="bal-note">已经透支了——钱在现实里花掉了，账本不能拒绝已经发生的事。</p>`
+      : `<p class="bal-note">这些年进账 ¥${yuan(earned)}，花了 ¥${yuan(spent)}</p>`;
 
   return layout(
     '小钱包 · 晨暗星',
@@ -291,7 +423,8 @@ function renderWalletPage() {
     <div class="card bal-card">
       <div class="bal-label">余额</div>
       <p class="bal ${bal < 0 ? 'neg' : ''}">¥${yuan(bal)}</p>
-      ${overdrawn}
+      ${note}
+      ${renderBank()}
     </div>
     <section class="card" aria-labelledby="ledger-title">
       <h2 id="ledger-title" class="section-title">最近的账</h2>
@@ -320,9 +453,14 @@ export function registerWalletRoutes(app, { requireBasicAuth, requireApiKey }) {
   // 程序化读：手机快捷指令、以后的前端
   app.get('/api/wallet', requireApiKey, (req, res) => {
     const limit = Math.min(Number(req.query.limit) || LEDGER_LIMIT, 200);
+    const rec = reconcile();
     res.json({
       balance: yuan(balanceCents()),
       balance_cents: balanceCents(),
+      bank_balance: rec ? yuan(rec.bankCents) : null,
+      bank_balance_at: rec ? formatDateTime(rec.bankAt) : null,
+      reconciled: rec ? rec.ok : null,
+      diff: rec ? yuan(rec.diffCents) : null,
       ledger: listLedger(limit).map((r) => ({
         id: r.id,
         at: formatDateTime(r.ts),
@@ -330,57 +468,120 @@ export function registerWalletRoutes(app, { requireBasicAuth, requireApiKey }) {
         amount: yuan(r.amount_cents),
         source: r.source,
         note: r.note,
+        bank_balance: r.bank_balance_cents != null ? yuan(r.bank_balance_cents) : null,
       })),
     });
   });
 
-  // 现实里刷卡了：银行短信 → iOS 快捷指令 → 这里。
+  // 银行短信 → iOS 快捷指令 → 这里。收入和支出走同一个接口，方向由服务端认。
   // 口令可以放在请求体的 secret（快捷指令里加 header 麻烦），也可以走 x-wallet-secret 头。
   app.post('/api/wallet/spend-notify', (req, res) => {
     if (!SPEND_SECRET) {
-      console.error('wallet: 收到扣款通知，但没有配 WALLET_SPEND_SECRET，已拒绝');
+      console.error('wallet: 收到银行通知，但没有配 WALLET_SPEND_SECRET，已拒绝');
       return res.status(503).json({ ok: false, error: 'wallet spend endpoint not configured' });
     }
     if (!secretOk(req.headers['x-wallet-secret'] ?? req.body?.secret)) {
       // 不打印收到的口令，也不回显哪儿错了
-      console.error('wallet: 扣款通知口令不对，已拒绝');
+      console.error('wallet: 银行通知口令不对，已拒绝');
       return res.status(401).json({ ok: false, error: 'unauthorized' });
     }
 
     const amountCents = parseYuan(req.body?.amount);
     if (amountCents === null) {
-      console.error(`wallet: 扣款金额不认（可能是短信正则抓歪了，或超过单笔上限 ¥${MAX_SINGLE_YUAN}），已拒绝`);
+      console.error(
+        `wallet: 金额不认（可能是短信正则抓歪了，或超过单笔上限 ¥${MAX_SINGLE_YUAN}），已拒绝`
+      );
       return res.status(400).json({ ok: false, error: `amount must be a number in (0, ${MAX_SINGLE_YUAN}]` });
     }
 
-    const source = String(req.body?.source ?? '刷卡').slice(0, 60);
+    // 方向：显式传的优先，其次看短信原文里的「收入/支出」。
+    // 认不出来就拒收——猜错了方向是账错两倍，比不记账糟糕得多。
+    const dir = detectDirection({ direction: req.body?.direction, smsText: req.body?.sms_text });
+    if (!dir) {
+      console.error('wallet: 认不出这笔是收入还是支出（请在快捷指令里传 sms_text 或 direction），已拒绝');
+      return res.status(400).json({
+        ok: false,
+        error: 'cannot tell income from expense; pass sms_text (the full SMS) or direction=in|out',
+      });
+    }
+
+    // 银行报的可用余额。可选；认不出来就当没给，不因此拒掉整笔账
+    const bankBalanceCents = parseYuan(req.body?.bank_balance, {
+      allowNegative: true,
+      max: MAX_BANK_BALANCE_YUAN,
+    });
+    if (req.body?.bank_balance != null && bankBalanceCents === null) {
+      console.error('wallet: 可用余额认不出来，这笔账照记，只是不带余额');
+    }
+
+    const isIn = dir.direction === 'in';
+    const kind = isIn ? 'topup' : 'spend';
+    const source = String(req.body?.source ?? (isIn ? '转入' : '刷卡')).slice(0, 60);
     const note = req.body?.note ? String(req.body.note).slice(0, 300) : null;
     const smsId = req.body?.sms_id ? String(req.body.sms_id).slice(0, 120) : null;
 
-    const out = addEntry({ kind: 'spend', amountCents: -amountCents, source, note, smsId });
+    const out = addEntry({
+      kind,
+      amountCents: isIn ? amountCents : -amountCents,
+      source,
+      note,
+      smsId,
+      bankBalanceCents,
+      direction: dir.direction,
+    });
 
     // 已经发生的花销，账本不能拒绝。余额不够就记成负的，页面和唤醒提示都看得到。
     const overdrawn = out.balanceCents < 0;
 
     if (!out.duplicate && MOMENT_ON_SPEND) {
       try {
+        const headline = isIn
+          ? `${AI_NAME}的钱包进了 ¥${yuan(amountCents)}（${source}），现在有 ¥${yuan(out.balanceCents)}`
+          : `${AI_NAME}的钱包扣了 ¥${yuan(amountCents)}（${source}），还剩 ¥${yuan(out.balanceCents)}`;
         addActivityMoment(
-          `${AI_NAME}的钱包扣了 ¥${yuan(amountCents)}（${source}），还剩 ¥${yuan(out.balanceCents)}`,
-          [note ? `备注：${note}` : '', `余额：¥${yuan(out.balanceCents)}`].filter(Boolean).join('\n\n')
+          headline,
+          [
+            note ? `备注：${note}` : '',
+            `余额：¥${yuan(out.balanceCents)}`,
+            bankBalanceCents != null ? `卡里可用：¥${yuan(bankBalanceCents)}` : '',
+          ]
+            .filter(Boolean)
+            .join('\n\n')
         );
       } catch (err) {
         console.error('wallet: 记动态卡片失败（不影响记账）', err.message);
       }
     }
 
+    const rec = reconcile();
+    if (rec && !rec.ok) {
+      console.error(
+        `wallet: 对不上账——银行说 ¥${yuan(rec.bankCents)}，账本算出 ¥${yuan(
+          rec.ledgerCents
+        )}，差 ¥${yuan(rec.diffCents)}`
+      );
+    }
+
     console.log(
-      `wallet: ${out.duplicate ? '重复的扣款通知，没记' : `扣款 ¥${yuan(amountCents)}（${source}）`}，余额 ¥${yuan(out.balanceCents)}`
+      `wallet: ${
+        out.duplicate
+          ? '重复的银行通知，没记'
+          : `${isIn ? '转入' : '扣款'} ¥${yuan(amountCents)}（${source}，方向按${
+              dir.how === 'sms' ? '短信' : '参数'
+            }认）`
+      }，余额 ¥${yuan(out.balanceCents)}${
+        bankBalanceCents != null ? `，卡里 ¥${yuan(bankBalanceCents)}` : ''
+      }`
     );
+
     res.json({
       ok: true,
       duplicate: out.duplicate,
-      amount: yuan(amountCents),
+      direction: dir.direction,
+      amount: yuan(isIn ? amountCents : -amountCents),
       balance: yuan(out.balanceCents),
+      bank_balance: bankBalanceCents != null ? yuan(bankBalanceCents) : null,
+      reconciled: rec ? rec.ok : null,
       overdrawn,
     });
   });
@@ -390,7 +591,9 @@ export function registerWalletRoutes(app, { requireBasicAuth, requireApiKey }) {
     const kind = req.body?.kind === 'adjust' ? 'adjust' : 'earn';
     const amountCents = parseYuan(req.body?.amount, { allowNegative: kind === 'adjust' });
     if (amountCents === null) {
-      return res.status(400).json({ ok: false, error: `amount must be a non-zero number within ±${MAX_SINGLE_YUAN}` });
+      return res
+        .status(400)
+        .json({ ok: false, error: `amount must be a non-zero number within ±${MAX_SINGLE_YUAN}` });
     }
     const source = String(req.body?.source ?? (kind === 'adjust' ? '对账' : '工单')).slice(0, 60);
     const note = req.body?.note ? String(req.body.note).slice(0, 300) : null;
