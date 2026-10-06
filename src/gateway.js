@@ -171,11 +171,16 @@ function makeAssistantCapture(onComplete) {
   let sawSSE = false;
   let sawToolCalls = false;
   let sawReasoning = false;
+  // 思考内容也攒着：正文为空时拿它兜底，见下面的 flush。
+  let reasoning = '';
 
   const inspectMessage = (m) => {
     if (!m) return;
     if (typeof m.content === 'string') text += m.content;
     if (Array.isArray(m.tool_calls) && m.tool_calls.length) sawToolCalls = true;
+    // reasoning_content 以前只用来打一行警告，内容本身丢掉了。
+    // DeepSeek 这类的思考是普通文本，不带签名、不需要原样回传给上游，存下来是安全的。
+    if (typeof m.reasoning_content === 'string') reasoning += m.reasoning_content;
     if (m.reasoning_content) sawReasoning = true;
   };
 
@@ -219,16 +224,23 @@ function makeAssistantCapture(onComplete) {
         }
       }
 
-      // 没捞到正文时区分原因。
-      // 工具调用轮本来就没有正文，是正常情况，不出声。
+      // 断片的根就在这里：原来正文为空就 onComplete('')，下游那句 if (!trimmed) return
+      // 直接跳过，这一轮说过的话压根没进 conversation_log —— 下次组装上下文时断一截，
+      // 表现出来就是"中间像读别人的字"（2026-09-28、10-05 的日志里有这几次）。
+      // 现在有思考就拿思考兜底：至少读得到自己上次在想什么，不再凭空消失。
+      // 工具调用轮本来就没有正文，是正常情况，不兜底也不出声。
+      let out = text;
       if (!text.trim() && !sawToolCalls) {
-        if (sawReasoning) {
-          console.warn('gateway: assistant reply had reasoning but no content — nothing to record');
+        if (reasoning.trim()) {
+          out = `（这一轮只留下了思考，没说出口）\n${reasoning.trim()}`;
+          console.warn('gateway: 正文为空，已用思考内容兜底记录');
+        } else if (sawReasoning) {
+          console.warn('gateway: 有思考但取不到正文，这轮没记');
         } else {
           console.warn('gateway: assistant capture got empty text — upstream may not be standard SSE');
         }
       }
-      onComplete(text);
+      onComplete(out);
       cb();
     },
   });
