@@ -434,6 +434,10 @@ function escapeHtml(value) {
 
 // 配色和心绪页、动态页一致（粉、暖黄）。进账用深绿，出账用梅红——
 // 两个颜色在米白底上都读得清，也没跳出这套脸。
+//
+// 夜里那几处写死的浅底要单独翻面：底色暗下来之后文字跟着 --muted 变浅，
+// 浅底配浅字就糊成一片。跟着 sun-time.js 那套 html[data-dark] 走（动态页的白卡片、
+// 浅黄批注底都是这么处理的），别在这儿自己又写死一套深色。
 const STYLE = `
   :root { --ink: #2b2233; --muted: #665a70; --accent: #7a3e5d; --gold: #b7792f; --card: #fffdfb; --line: #eadfe6;
     --in: #2f7d5a; --out: #a8445c; }
@@ -506,8 +510,16 @@ const STYLE = `
   .row-a.out { color: var(--out); }
   .row-n { grid-column: 1 / -1; font-size: 12px; color: var(--muted); }
   .row-b { grid-column: 1 / -1; font-size: 11px; color: var(--muted); opacity: 0.85; }
-  /* 批注：左边一道细线，谁写的标在前面 */
-  .notes { grid-column: 1 / -1; margin: 6px 0 0; padding: 0 0 0 10px; list-style: none; border-left: 2px solid var(--line); }
+  /* 批注：平时收起来只占一行，点开才展开。一笔账旁边攒了好几句之后，
+     全摊开会把账单顶得很长，想找某一天的账得划很久 */
+  .notes-box { grid-column: 1 / -1; margin: 5px 0 0; }
+  .notes-box > summary { font-size: 12px; color: var(--accent); cursor: pointer; list-style: none; padding: 3px 0; }
+  .notes-box > summary::-webkit-details-marker { display: none; }
+  .notes-box > summary::marker { content: ''; }
+  .notes-box > summary:hover { text-decoration: underline; }
+  .notes-box .caret { display: inline-block; margin-right: 5px; font-size: 10px; transition: transform 0.2s ease; }
+  .notes-box[open] .caret { transform: rotate(90deg); }
+  .notes { margin: 4px 0 0; padding: 0 0 0 10px; list-style: none; border-left: 2px solid var(--line); }
   .notes li { font-size: 13px; line-height: 1.6; padding: 3px 0; color: var(--ink); }
   .notes .by { font-size: 11px; color: var(--accent); margin-right: 5px; }
   .notes .by.ta { color: var(--gold); }
@@ -526,6 +538,24 @@ const STYLE = `
   .add button:hover { background: #8d4a6b; }
   .empty { font-size: 14px; line-height: 1.6; color: var(--muted); }
   .empty code { font-size: 12px; background: #f6eef3; padding: 1px 5px; border-radius: 4px; }
+
+  /* ── 底色暗下来的时候 ──────────────────────────────────────────
+     上面那些写死的浅底（#f6eef3 浅紫、#fff6e3 浅黄、输入框的白）在夜里会变成
+     浅底浅字，糊得看不清。这整段排得比它们晚、而且多一层 html[data-dark]，盖得住。
+     颜色全走 sun-time.js 那套变量，不自己再编一组。 */
+  html[data-dark] .bank { background: var(--card-soft, #44355c); color: var(--muted); }
+  html[data-dark] .bank b { color: var(--ink); }
+  html[data-dark] .bank code { background: rgba(255, 255, 255, 0.12); }
+  html[data-dark] .bank.off { background: var(--detail-bg, #483860); color: var(--gold); border-color: var(--line); }
+  html[data-dark] .row-k { background: var(--card-soft, #44355c); color: var(--accent); }
+  html[data-dark] .row-k.k-earn, html[data-dark] .row-k.k-topup {
+    background: var(--card-soft, #44355c); color: var(--in); }
+  html[data-dark] .row-k.k-adjust { background: var(--detail-bg, #483860); color: var(--gold); }
+  html[data-dark] .add textarea { background: var(--card-soft, #44355c); color: var(--ink); border-color: var(--line); }
+  html[data-dark] .empty code { background: var(--card-soft, #44355c); }
+  /* 深紫底上那两个深绿深红太暗（对比度只有 2 点几），各提亮一档 */
+  html[data-dark] { --in: #7fd4a8; --out: #f2a0b6; }
+
   @media (max-width: 380px) {
     .bal { font-size: 38px; }
     .row { grid-template-columns: auto auto 1fr auto; gap: 4px 8px; }
@@ -568,6 +598,9 @@ function dayHeading(dateStr) {
   return `${d.m}月${String(d.d).padStart(2, '0')}日<span class="wd">${wd}</span>`;
 }
 
+// 批注收在一行里，点开才展开。摘要上只写有几条、谁写的，
+// 内容本身留给点开之后——和摇星星罐那张卡片一个路子。
+// <details> 本身就能展开收起，没有 JavaScript 也能用。
 function renderNotes(notes) {
   if (!notes.length) return '';
   const items = notes
@@ -579,7 +612,14 @@ function renderNotes(notes) {
       )}</span></li>`
     )
     .join('');
-  return `<ul class="notes">${items}</ul>`;
+  // 摘要里带上写过的人，不点开也知道这笔账旁边是谁留了话
+  const who = [...new Set(notes.map((n) => noteAuthor(n.author)))].join('、');
+  return `<details class="notes-box">
+        <summary><span class="caret" aria-hidden="true">▶</span>${notes.length} 条批注<span class="when">${escapeHtml(
+          who
+        )}</span></summary>
+        <ul class="notes">${items}</ul>
+      </details>`;
 }
 
 function renderRow(r, notes) {
