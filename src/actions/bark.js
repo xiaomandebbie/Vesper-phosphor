@@ -7,13 +7,16 @@
 // 发出去了才写进共享时间线（见 timeline.js）。delivered 表示正文有没有落进对话。
 import { isWakeBridgeEnabled, submitWakeEvent } from './wake-bridge.js';
 
-const BARK_TITLE = (process.env.BARK_TITLE ?? '').trim();
+// 通知的标题要留着：手机上靠它一眼认出来是谁发的。
+// 用 || 而不是 ??：.env 里写成空值时也回退到默认，免得标题悄悄没了。
+const BARK_TITLE = (process.env.BARK_TITLE || '允朔').trim();
 const BARK_BODY = (process.env.BARK_BODY || '一条新消息送达～').trim();
 const BARK_ICON = (process.env.BARK_ICON || '').trim();
 
 // 模型习惯在正文开头署名（"允朔｜……"，以前还有"来自AI｜……"）。
 // 这段话现在会变成对话里的一条消息，署名就成了多余的一截，统一在这里剥掉。
 // 只认竖线分隔，不动"老婆，……"这种正常开头。
+// 注意：剥的是投进对话的正文，通知上的标题是另一回事，不受影响。
 function stripNamePrefix(text) {
   return String(text ?? '')
     .replace(/^\s*[^\n｜|]{1,12}[｜|]\s*/, '')
@@ -37,8 +40,7 @@ export default async function bark(detail) {
     return { ok: false, reason: 'BARK_KEY not set' };
   }
 
-  // 正文已经落进对话了，通知就只报个信；没落进去时还是把正文带上，不然她什么都看不到。
-  // BARK_TITLE 留空 = 只发正文那一段，通知上就没有标题了。
+  // 正文已经落进对话了，通知就只报个信；没落进去时还是把正文带上，不然她什么都看不到
   let segments = delivered.ok ? [BARK_TITLE, BARK_BODY].filter(Boolean) : [message];
   if (!segments.length) segments = ['一条新消息送达～'];
   const path = segments.map((s) => encodeURIComponent(s)).join('/');
