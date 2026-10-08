@@ -7,12 +7,21 @@
 // 发出去了才写进共享时间线（见 timeline.js）。delivered 表示正文有没有落进对话。
 import { isWakeBridgeEnabled, submitWakeEvent } from './wake-bridge.js';
 
-const BARK_TITLE = process.env.BARK_TITLE || '允朔';
-const BARK_BODY = process.env.BARK_BODY || '一条新消息送达～';
+const BARK_TITLE = (process.env.BARK_TITLE ?? '').trim();
+const BARK_BODY = (process.env.BARK_BODY || '一条新消息送达～').trim();
 const BARK_ICON = (process.env.BARK_ICON || '').trim();
 
+// 模型习惯在正文开头署名（"允朔｜……"，以前还有"来自AI｜……"）。
+// 这段话现在会变成对话里的一条消息，署名就成了多余的一截，统一在这里剥掉。
+// 只认竖线分隔，不动"老婆，……"这种正常开头。
+function stripNamePrefix(text) {
+  return String(text ?? '')
+    .replace(/^\s*[^\n｜|]{1,12}[｜|]\s*/, '')
+    .trim();
+}
+
 export default async function bark(detail) {
-  const message = detail || '嗨，我醒了';
+  const message = stripNamePrefix(detail) || '嗨，我醒了';
 
   // 先投对话。投失败不影响下面那声通知，两件事各报各的错。
   let delivered = { ok: false, reason: 'WAKE_BUNDLE_FILE not set' };
@@ -28,10 +37,11 @@ export default async function bark(detail) {
     return { ok: false, reason: 'BARK_KEY not set' };
   }
 
-  // 正文已经落进对话了，通知就只报个信；没落进去时还是把正文带上，不然她什么都看不到
-  const path = delivered.ok
-    ? `${encodeURIComponent(BARK_TITLE)}/${encodeURIComponent(BARK_BODY)}`
-    : encodeURIComponent(message);
+  // 正文已经落进对话了，通知就只报个信；没落进去时还是把正文带上，不然她什么都看不到。
+  // BARK_TITLE 留空 = 只发正文那一段，通知上就没有标题了。
+  let segments = delivered.ok ? [BARK_TITLE, BARK_BODY].filter(Boolean) : [message];
+  if (!segments.length) segments = ['一条新消息送达～'];
+  const path = segments.map((s) => encodeURIComponent(s)).join('/');
   const icon = BARK_ICON ? `?icon=${encodeURIComponent(BARK_ICON)}` : '';
   const url = `https://api.day.app/${key}/${path}${icon}`;
   try {
