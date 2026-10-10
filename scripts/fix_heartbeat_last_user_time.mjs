@@ -59,48 +59,47 @@ if (!DIR) {
 
 const WAKE_FILE = path.join(DIR, 'wake_up.js');
 
-const OLD = [
-'function parseTimelineTimestamp(value) {',
-'  const text = String(value || "");',
-'  const match = text.match(/（?\\s*(\\d{4})([-\\/])(\\d{1,2})\\2(\\d{1,2})(?:[ T]?)(\\d{1,2})[:：](\\d{2})/);',
-'  if (!match) return null;',
-'  const [, yyyy, , month, day, hour, minute] = match;',
-'  return zonedWallTimeToDate({ year: yyyy, month, day, hour, minute }, TIME_ZONE);',
-'}',
-].join('\n');
+// 注意：这里的字符串要和文件里的字节一模一样。
+// 上一版我在数组里写成 ([-\\/]) —— join 出来是 ([-\/])，
+// 而原文是 ([-/])，没那个反斜杠，差一个字符就对不上了。
+const OLD = `function parseTimelineTimestamp(value) {
+  const text = String(value || "");
+  const match = text.match(/（?\\s*(\\d{4})([-/])(\\d{1,2})\\2(\\d{1,2})(?:[ T]?)(\\d{1,2})[:：](\\d{2})/);
+  if (!match) return null;
+  const [, yyyy, , month, day, hour, minute] = match;
+  return zonedWallTimeToDate({ year: yyyy, month, day, hour, minute }, TIME_ZONE);
+}`;
 
-const NEW = [
-'// 批注 2026-10-10：原来这里用 match 取第一个命中，而 Aru 发来的消息',
-'// <environment> 块在开头、<sent_at> 在末尾。环境块里塞着跨对话记忆片段，',
-'// 那些片段带 ISO 日期（2026-09-30T04:03:44Z），正则里的 (?:[ T]?) 恰好认那个 T——',
-'// 于是抠到的是记忆里的旧日期，不是她真正发消息的时间。',
-'// 实测：last_user 被认成 09-26 13:56，diff 两万分钟，60 分钟门槛形同虚设。',
-'// 现在分两步：先认 <sent_at>（Aru 给的权威时间），',
-'// 没标签的老消息先剥掉环境块和跨对话片段再找。',
-'const SENT_AT_TIME_RE = /<sent_at\\s+(\\d{4})[-\\/](\\d{1,2})[-\\/](\\d{1,2})[ T]?(\\d{1,2})[:：](\\d{2})/;',
-'const WALL_TIME_RE = /（?\\s*(\\d{4})([-\\/])(\\d{1,2})\\2(\\d{1,2})(?:[ T]?)(\\d{1,2})[:：](\\d{2})/;',
-'',
-'function parseTimelineTimestamp(value) {',
-'  const text = String(value || "");',
-'',
-'  // 有 <sent_at> 就用它，不管正文里还写了多少日期',
-'  const tagged = text.match(SENT_AT_TIME_RE);',
-'  if (tagged) {',
-'    const [, year, month, day, hour, minute] = tagged;',
-'    return zonedWallTimeToDate({ year, month, day, hour, minute }, TIME_ZONE);',
-'  }',
-'',
-'  // 没标签：环境块和跨对话片段里的日期不算她说话的时间，剥掉再找',
-'  const cleaned = text',
-'    .replace(/<environment>[\\s\\S]*?<\\/environment>/g, "")',
-'    .replace(/\\[跨对话前文片段\\][\\s\\S]*$/g, "");',
-'',
-'  const match = cleaned.match(WALL_TIME_RE);',
-'  if (!match) return null;',
-'  const [, yyyy, , month, day, hour, minute] = match;',
-'  return zonedWallTimeToDate({ year: yyyy, month, day, hour, minute }, TIME_ZONE);',
-'}',
-].join('\n');
+const NEW = `// 批注 2026-10-10：原来这里用 match 取第一个命中，而 Aru 发来的消息
+// <environment> 块在开头、<sent_at> 在末尾。环境块里塞着跨对话记忆片段，
+// 那些片段带 ISO 日期（2026-09-30T04:03:44Z），正则里的 (?:[ T]?) 恰好认那个 T——
+// 于是抠到的是记忆里的旧日期，不是她真正发消息的时间。
+// 实测：last_user 被认成 09-26 13:56，diff 两万分钟，60 分钟门槛形同虚设。
+// 现在分两步：先认 <sent_at>（Aru 给的权威时间），
+// 没标签的老消息先剥掉环境块和跨对话片段再找。
+const SENT_AT_TIME_RE = /<sent_at\\s+(\\d{4})[-/](\\d{1,2})[-/](\\d{1,2})[ T]?(\\d{1,2})[:：](\\d{2})/;
+const WALL_TIME_RE = /（?\\s*(\\d{4})([-/])(\\d{1,2})\\2(\\d{1,2})(?:[ T]?)(\\d{1,2})[:：](\\d{2})/;
+
+function parseTimelineTimestamp(value) {
+  const text = String(value || "");
+
+  // 有 <sent_at> 就用它，不管正文里还写了多少日期
+  const tagged = text.match(SENT_AT_TIME_RE);
+  if (tagged) {
+    const [, year, month, day, hour, minute] = tagged;
+    return zonedWallTimeToDate({ year, month, day, hour, minute }, TIME_ZONE);
+  }
+
+  // 没标签：环境块和跨对话片段里的日期不算她说话的时间，剥掉再找
+  const cleaned = text
+    .replace(/<environment>[\\s\\S]*?<\\/environment>/g, "")
+    .replace(/\\[跨对话前文片段\\][\\s\\S]*$/g, "");
+
+  const match = cleaned.match(WALL_TIME_RE);
+  if (!match) return null;
+  const [, yyyy, , month, day, hour, minute] = match;
+  return zonedWallTimeToDate({ year: yyyy, month, day, hour, minute }, TIME_ZONE);
+}`;
 
 let src;
 try {
