@@ -55,6 +55,26 @@ CREATE TABLE IF NOT EXISTS conversation_log (
   content TEXT
 );
 
+-- 对话记录的归档：整理 conversation_log 时先搬到这里再删，原话不会真的消失。
+-- 平时没人读它，只在翻旧账（跨天锚点、按时间回查）时才查。
+CREATE TABLE IF NOT EXISTS conversation_archive (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts INTEGER NOT NULL,
+  speaker TEXT,
+  content TEXT,
+  archived_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_conversation_archive_ts ON conversation_archive (ts);
+
+-- 某一轮回复没能落进 conversation_log（正文和思考都取不到）时记一笔。
+-- 聊天里那种"中间像读别人的字"的断片，就从这张表查。
+CREATE TABLE IF NOT EXISTS capture_warnings (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts INTEGER NOT NULL,
+  reason TEXT NOT NULL,
+  note TEXT
+);
+
 -- 动态：TA 发的，像朋友圈。可以配图、配音。
 CREATE TABLE IF NOT EXISTS moments (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -300,15 +320,76 @@ export function countRecentConversation(windowMs) {
   return stmt('SELECT COUNT(*) AS c FROM conversation_log WHERE ts >= ?').get(Date.now() - windowMs).c;
 }
 
-// ---------- 对话记录清理 ----------
-// conversation_log 只追加不删，时间长了会一直涨。phosphor 隔一段时间清一次旧的（见 phosphor.js 的 cleanupTick）。
-// 上次清理的时间记在 meta 表里，进程重启不会重复清，也不会因为重启把计时清零。
+// ---------- 对话记录的归档 ----------
+// 从"最近的对话"里搬出来的原话。平时不读，翻旧账时才查（跨天锚点、按时间回查）。
+
+export function listArchivedConversation(limit = 50) {
+  return stmt('SELECT ts, speaker, content FROM conversation_archive ORDER BY ts DESC, id DESC LIMIT ?')
+    .all(limit)
+    .reverse();
+}
+
+export function countArchivedConversation() {
+  return stmt('SELECT COUNT(*) AS c FROM conversation_archive').get().c;
+}
+
+// 在归档里按原文找（大小写不敏感的子串，不是语义检索）。
+// 想知道某句话是什么时候说的、当时前后聊了什么，用这个。
+export function searchArchivedConversation(query, limit = 20) {
+  const q = String(query ?? '').trim();
+  if (!q) return [];
+  return stmt(
+    'SELECT ts, speaker, content FROM conversation_archive WHERE content LIKE ? ORDER BY ts DESC, id DESC LIMIT ?'
+  )
+    .all(`%${q}%`, limit)
+    .reverse();
+}
+
+// 窗口之前的"锚点"：每 bucketMs 一个桶，取桶里最后一条。
+// conversation_log 和归档一起查，所以记录被整理过之后，更早的事也还看得见。
+export function getConversationAnchors({ before, since, bucketMs, limit = 8 }) {
+  const bucket = Math.max(Number(bucketMs) || 6 * 60 * 60 * 1000, 60 * 1000);
+  const end = Number.isFinite(before) ? before : Date.now();
+  const start = Number.isFinite(since) ? since : 0;
+  const head = 'SELECT ts, speaker, content FROM';
+  const rows = [
+    ...stmt(`${head} conversation_log WHERE ts < ? AND ts >= ? ORDER BY ts ASC`).all(end, start),
+    ...stmt(`${head} conversation_archive WHERE ts < ? AND ts >= ? ORDER BY ts ASC`).all(end, start),
+  ].sort((a, b) => a.ts - b.ts);
+  const buckets = new Map();
+  for (const r of rows) buckets.set(Math.floor(r.ts / bucket), r);
+  return [...buckets.values()].slice(-limit);
+}
+
+// ---------- 断片记录 ----------
+// gateway 发现某一轮回复既没有正文也没有思考、什么都没落进 conversation_log 时记一笔。
+// 聊天里出现的"断片"（前面还接着，中间像读别人的字）就从这里查。
+
+export function logCaptureWarning({ reason, note = null }) {
+  return stmt('INSERT INTO capture_warnings (ts, reason, note) VALUES (?, ?, ?)').run(
+    Date.now(),
+    String(reason ?? 'unknown'),
+    note ?? null
+  ).lastInsertRowid;
+}
+
+export function getRecentCaptureWarnings(limit = 20) {
+  return stmt('SELECT ts, reason, note FROM capture_warnings ORDER BY ts DESC, id DESC LIMIT ?').all(limit);
+}
+
+// ---------- 对话记录整理 ----------
+// conversation_log 只追加不删，时间长了会一直涨。phosphor 隔一段时间整理一次（见 phosphor.js 的 cleanupTick）。
+// 上次整理的时间记在 meta 表里，进程重启不会重复清，也不会因为重启把计时清零。
+//
+// 整理不是直接删：先把要清的那些搬进 conversation_archive，再删 conversation_log。
+// 这样"最近的对话"窗口变短了，但原话还在，跨天锚点和按时间回查都还能读到。
+// .env 的 CONVERSATION_ARCHIVE=0 可以退回老做法（直接删）。
 const CONVERSATION_CLEANED_KEY = 'conversation_log_cleaned_at';
 
 // 用 IMMEDIATE 事务先拿写锁再判断到没到时间，和旧日记迁移同一个做法。
 // 第一次运行（meta 里还没有记录）只记下现在的时间，从这一刻开始算，不立刻清。
 // 删的是 maxAgeMs 以前的记录，但最新 keep 条无论多旧都留着，免得清完"最近的对话"是空的。
-const pruneConversationLogTx = db.transaction(({ intervalMs, maxAgeMs, keep, now }) => {
+const pruneConversationLogTx = db.transaction(({ intervalMs, maxAgeMs, keep, archive, archiveKeepDays, now }) => {
   const markNow = () =>
     stmt('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)').run(CONVERSATION_CLEANED_KEY, String(now));
   const row = stmt('SELECT value FROM meta WHERE key = ?').get(CONVERSATION_CLEANED_KEY);
@@ -318,18 +399,36 @@ const pruneConversationLogTx = db.transaction(({ intervalMs, maxAgeMs, keep, now
     return null;
   }
   if (now - last < intervalMs) return null;
-  const deleted = stmt(
-    `DELETE FROM conversation_log
+
+  const doomed = stmt(
+    `SELECT id, ts, speaker, content FROM conversation_log
      WHERE ts < ?
        AND id NOT IN (SELECT id FROM conversation_log ORDER BY ts DESC, id DESC LIMIT ?)`
-  ).run(now - maxAgeMs, keep).changes;
+  ).all(now - maxAgeMs, keep);
+
+  let archived = 0;
+  if (doomed.length) {
+    if (archive) {
+      const insert = stmt(
+        'INSERT INTO conversation_archive (ts, speaker, content, archived_at) VALUES (?, ?, ?, ?)'
+      );
+      for (const r of doomed) insert.run(r.ts, r.speaker, r.content, now);
+      archived = doomed.length;
+      // 归档也不是无底洞：超过保留天数的丢掉（0 = 永久保留）
+      if (archiveKeepDays > 0) {
+        stmt('DELETE FROM conversation_archive WHERE ts < ?').run(now - archiveKeepDays * 24 * 60 * 60 * 1000);
+      }
+    }
+    const ids = doomed.map((r) => r.id);
+    stmt(`DELETE FROM conversation_log WHERE id IN (${ids.map(() => '?').join(',')})`).run(...ids);
+  }
   markNow();
-  return deleted;
+  return { deleted: doomed.length, archived };
 });
 
-// 到时间了就清理，返回删了几条（可能是 0）；还没到时间返回 null。
-export function pruneConversationLogIfDue({ intervalMs, maxAgeMs, keep }) {
-  return pruneConversationLogTx.immediate({ intervalMs, maxAgeMs, keep, now: Date.now() });
+// 到时间了就整理，返回 { deleted, archived }（可能是 0）；还没到时间返回 null。
+export function pruneConversationLogIfDue({ intervalMs, maxAgeMs, keep, archive = true, archiveKeepDays = 180 }) {
+  return pruneConversationLogTx.immediate({ intervalMs, maxAgeMs, keep, archive, archiveKeepDays, now: Date.now() });
 }
 
 // 关库。重复调用安全：已关就跳过。
