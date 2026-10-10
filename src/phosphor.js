@@ -52,19 +52,30 @@ const MAX_WAKE_MINUTES = (() => {
   const n = Number(process.env.PHOSPHOR_MAX_WAKE_MINUTES);
   return Number.isFinite(n) && n >= MIN_WAKE_MINUTES ? Math.round(n) : 24 * 60;
 })();
-// conversation_log 多久清一次、清掉多久以前的（小时）。.env 的 CONVERSATION_LOG_CLEAN_HOURS 可改，
-// 不填是 24，填 0 不清理。注意 Number('') 是 0，所以空值要单独当作"没填"。
+// conversation_log 多久整理一次、清掉多久以前的（小时）。.env 的 CONVERSATION_LOG_CLEAN_HOURS 可改，
+// 不填是 24，填 0 不整理。注意 Number('') 是 0，所以空值要单独当作"没填"。
 const CLEAN_HOURS = (() => {
   const raw = String(process.env.CONVERSATION_LOG_CLEAN_HOURS ?? '').trim();
   const n = Number(raw);
   return raw && Number.isFinite(n) && n >= 0 ? n : 24;
 })();
-// 清理时无论多旧都保留最新多少条。不填是 30（heartbeat-wake 默认也带 30 条），
+// 整理时无论多旧都保留最新多少条。不填是 30（heartbeat-wake 默认也带 30 条），
 // 最少不低于 DECIDE_CONTEXT_LIMIT，保证清完之后做决定还有"最近的对话"可看。
 const CONVERSATION_LOG_KEEP = (() => {
   const n = Number(process.env.CONVERSATION_LOG_KEEP);
   const keep = Number.isInteger(n) && n >= 0 && String(process.env.CONVERSATION_LOG_KEEP).trim() ? n : 30;
   return Math.max(keep, DECIDE_CONTEXT_LIMIT);
+})();
+// 整理时先把要清的搬进 conversation_archive 再删（见 state.js），原话不会真的消失。
+// .env 的 CONVERSATION_ARCHIVE=0 可以退回老做法：直接删，不留归档。
+const CONVERSATION_ARCHIVE = !/^(0|off|false|no)$/i.test(
+  String(process.env.CONVERSATION_ARCHIVE ?? '').trim()
+);
+// 归档保留多少天。不填是 180，填 0 = 永久保留。
+const CONVERSATION_ARCHIVE_KEEP_DAYS = (() => {
+  const raw = String(process.env.CONVERSATION_ARCHIVE_KEEP_DAYS ?? '').trim();
+  const n = Number(raw);
+  return raw && Number.isFinite(n) && n >= 0 ? n : 180;
 })();
 
 // 论坛："看"的命令做完可以接着走；"写"的命令做完这次就结束
@@ -576,23 +587,37 @@ async function preciseTick() {
   }
 }
 
-// 定时清理 conversation_log。到没到时间由 state.js 按 meta 表里的上次清理时间判断，
+// 定时整理 conversation_log。到没到时间由 state.js 按 meta 表里的上次整理时间判断，
 // 这里每分钟问一次，不调模型、不花钱。
-// 真删掉了东西就马上醒一次（kind = after_cleanup）：照常拉 breath / feel，并告诉 TA 旧聊天刚清掉，
+//
+// 整理不等于删：旧记录先搬进 conversation_archive，原话还在（见 state.js）。
+// 这样做是为了让"最近的对话"窗口保持短，同时不会真的丢掉过去——
+// 翻旧账时还能按原文或按时间回查，跨天锚点也从归档里取。
+// 真动了东西就马上醒一次（kind = after_cleanup）：照常拉 breath / feel，并告诉 TA 旧聊天刚整理过，
 // 想留住的自己 hold 进长期记忆。这一次和精确唤醒一样，不改自然唤醒的排期。
-// 一条都没删、或者 silent 模式下，不醒。
+// 一条都没动、或者 silent 模式下，不醒。
 async function cleanupTick() {
   if (CLEAN_HOURS <= 0) return;
   const ms = CLEAN_HOURS * 60 * 60 * 1000;
-  const deleted = pruneConversationLogIfDue({ intervalMs: ms, maxAgeMs: ms, keep: CONVERSATION_LOG_KEEP });
-  if (deleted === null) return;
-  console.log(`phosphor: 清理对话记录，删掉 ${deleted} 条 ${CLEAN_HOURS} 小时以前的（最新 ${CONVERSATION_LOG_KEEP} 条保留）`);
+  const out = pruneConversationLogIfDue({
+    intervalMs: ms,
+    maxAgeMs: ms,
+    keep: CONVERSATION_LOG_KEEP,
+    archive: CONVERSATION_ARCHIVE,
+    archiveKeepDays: CONVERSATION_ARCHIVE_KEEP_DAYS,
+  });
+  if (out === null) return;
+  const { deleted, archived } = out;
+  console.log(
+    `phosphor: 整理对话记录，从"最近的对话"里移出 ${deleted} 条 ${CLEAN_HOURS} 小时以前的（最新 ${CONVERSATION_LOG_KEEP} 条保留）` +
+      (CONVERSATION_ARCHIVE ? `，其中 ${archived} 条已归档，原话还在` : '，未归档，直接删掉了')
+  );
   if (deleted === 0) return;
   if (getWakeState().mode === 'silent') {
-    console.log('phosphor: silent 模式，清理对话记录后不唤醒');
+    console.log('phosphor: silent 模式，整理对话记录后不唤醒');
     return;
   }
-  await runDecisionCycle({ kind: 'after_cleanup', cleanup: { deleted, hours: CLEAN_HOURS } });
+  await runDecisionCycle({ kind: 'after_cleanup', cleanup: { deleted, archived, hours: CLEAN_HOURS } });
 }
 
 // decide() 加上重试、再加上逛论坛的续步，可能跑超过一分钟；上一轮没跑完就跳过这一轮，
@@ -640,7 +665,15 @@ async function main() {
   process.on('SIGINT', () => shutdown('SIGINT'));
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   console.log(
-    `phosphor: 最长唤醒间隔 ${MAX_WAKE_MINUTES} 分钟；决策带最近对话 ${DECIDE_CONTEXT_LIMIT} 条；对话记录清理：${CLEAN_HOURS > 0 ? `每 ${CLEAN_HOURS} 小时，保留最新 ${CONVERSATION_LOG_KEEP} 条` : '关闭'}；论坛一次最多再走 ${FORUM_MAX_STEPS} 步；听歌一次最多再走 ${MUSIC_MAX_STEPS} 步；共享时间线：${isSharedTimelineEnabled() ? '已开启' : '未开启'}；动态配图：${isImageEnabled() ? '已开启' : '未配置'}；动态语音：${isVoiceEnabled() ? '已开启' : '未配置'}；情绪（Drivesoid）：${isDrivesEnabled() ? '已接入' : '未接入'}；星星罐：一天一颗，提示窗 ${starWindowLabel()}；她放的星和她发的动态：醒来会带上，回应不占动作`
+    `phosphor: 最长唤醒间隔 ${MAX_WAKE_MINUTES} 分钟；决策带最近对话 ${DECIDE_CONTEXT_LIMIT} 条；对话记录整理：${
+      CLEAN_HOURS > 0
+        ? `每 ${CLEAN_HOURS} 小时，保留最新 ${CONVERSATION_LOG_KEEP} 条，${
+            CONVERSATION_ARCHIVE
+              ? `归档保留 ${CONVERSATION_ARCHIVE_KEEP_DAYS > 0 ? `${CONVERSATION_ARCHIVE_KEEP_DAYS} 天` : '永久'}`
+              : '不归档'
+          }`
+        : '关闭'
+    }；论坛一次最多再走 ${FORUM_MAX_STEPS} 步；听歌一次最多再走 ${MUSIC_MAX_STEPS} 步；共享时间线：${isSharedTimelineEnabled() ? '已开启' : '未开启'}；动态配图：${isImageEnabled() ? '已开启' : '未配置'}；动态语音：${isVoiceEnabled() ? '已开启' : '未配置'}；情绪（Drivesoid）：${isDrivesEnabled() ? '已接入' : '未接入'}；星星罐：一天一颗，提示窗 ${starWindowLabel()}；她放的星和她发的动态：醒来会带上，回应不占动作`
   );
   await connectAll();
   await tick();
