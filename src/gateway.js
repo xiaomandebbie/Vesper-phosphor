@@ -2,7 +2,7 @@ import 'dotenv/config';
 import express from 'express';
 import { Readable, Transform } from 'stream';
 import { StringDecoder } from 'string_decoder';
-import { addConversationMessage, getRecentConversation } from './state.js';
+import { addConversationMessage, getRecentConversation, logCaptureWarning } from './state.js';
 import { getSharedContext, formatContextText } from './context.js';
 import { isDrivesEnabled, reportUserMessage, reportAssistantMessage } from './drives.js';
 
@@ -173,6 +173,7 @@ function makeAssistantCapture(onComplete) {
   let sawReasoning = false;
   // 思考内容也攒着：正文为空时拿它兜底，见下面的 flush。
   let reasoning = '';
+  let finishReason = null;
 
   const inspectMessage = (m) => {
     if (!m) return;
@@ -196,7 +197,9 @@ function makeAssistantCapture(onComplete) {
     } catch {
       return;
     }
-    inspectMessage(parsed?.choices?.[0]?.delta);
+    const choice = parsed?.choices?.[0];
+    if (choice?.finish_reason) finishReason = choice.finish_reason;
+    inspectMessage(choice?.delta);
   };
 
   return new Transform({
@@ -218,7 +221,10 @@ function makeAssistantCapture(onComplete) {
       // 不是流式：整段 body 就是一个 JSON（可能跨多行，所以用 raw 而不是最后一行）
       if (!sawSSE) {
         try {
-          inspectMessage(JSON.parse(raw || '{}')?.choices?.[0]?.message);
+          const message = JSON.parse(raw || '{}')?.choices?.[0]?.message;
+          const fr = JSON.parse(raw || '{}')?.choices?.[0]?.finish_reason;
+          if (fr) finishReason = fr;
+          inspectMessage(message);
         } catch {
           // 不是 JSON 就算了，不记
         }
@@ -236,14 +242,26 @@ function makeAssistantCapture(onComplete) {
           console.warn('gateway: 正文为空，已用思考内容兜底记录');
         } else if (sawReasoning) {
           console.warn('gateway: 有思考但取不到正文，这轮没记');
+          // 兜底都兜不住，这一轮就是空档。落一笔，以后能查"哪几次断的、断在什么原因"。
+          warnCapture('reasoning_without_text', finishReason);
         } else {
           console.warn('gateway: assistant capture got empty text — upstream may not be standard SSE');
+          warnCapture('empty_capture', finishReason);
         }
       }
       onComplete(out);
       cb();
     },
   });
+}
+
+// 记一笔断片。写库失败不能连累这一轮的回复，所以单独包一层。
+function warnCapture(reason, finishReason) {
+  try {
+    logCaptureWarning({ reason, note: finishReason ? `finish_reason=${finishReason}` : null });
+  } catch (err) {
+    console.error('gateway: 记录断片失败:', err.message);
+  }
 }
 
 app.get('/v1/models', requireGatewayAuth, (req, res) => {
