@@ -11,6 +11,7 @@ import {
   addConversationMessage,
   getRecentConversation,
 } from './state.js';
+import { registerHomeRoutes } from './home-page.js';
 import { registerMomentRoutes } from './moments-page.js';
 import { registerFavoriteRoutes } from './favorites.js';
 import { registerStarJarRoutes } from './star-jar.js';
@@ -78,7 +79,7 @@ function pruneOldMedia() {
 pruneOldMedia();
 setInterval(pruneOldMedia, 24 * 60 * 60 * 1000);
 
-// 给网页浏览的路由（/moments、/drives、/diary、/memory、/music、/app、/health、/media）加 Basic Auth。
+// 给网页浏览的路由（/home、/moments、/drives、/diary、/memory、/music、/app、/health、/media）加 Basic Auth。
 // 函数声明会提升，上面挂记忆库、音乐时就能用；它读的那几个常量要到请求进来时才用到，那时已经有值了。
 // 没登录时返回的那一页见 login-page.js：跟着早晚两张脸走，不带菜单、不引要认证的资源。
 // 图片、语音这些非页面请求就不必返回整页 HTML 了，给一行纯文字。
@@ -185,11 +186,14 @@ app.get('/wake/conversation', requireApiKey, (req, res) => {
   res.json(getRecentConversation(limit));
 });
 
+// 主页 /home（见 home-page.js）：导览里「回到主页」就是这里，内容先空着
+registerHomeRoutes(app, { requireBasicAuth });
 // 日记页 /diary（heartbeat 写的日记），见 diary-page.js。
 // 要挂在动态页之前：动态页里留着一个 /diary → /moments 的旧跳转，日记页没配时才轮到它
 const diaryPage = registerDiaryRoutes(app, { requireBasicAuth });
 // 收藏（见 favorites.js）和星星罐（见 star-jar.js）：要挂在动态页之前。
-// /moments/favorites、/moments/star-jar 得比 /moments/:id 先匹配到，不然会被当成一个 id
+// /moments/favorites、/moments/star-jar 得比 /moments/:id 先匹配到，不然会被当成一个 id。
+// 这两页还在，只是不在菜单里了，从动态页进去
 registerFavoriteRoutes(app, { requireBasicAuth });
 registerStarJarRoutes(app, { requireBasicAuth });
 // 动态页 /moments（标题、日历、按天看动态、留言、自定义）以及对应接口，见 moments-page.js
@@ -199,11 +203,11 @@ registerDrivesRoutes(app, { requireBasicAuth });
 
 app.get('/health', requireBasicAuth, (req, res) => res.json({ ok: true, service: 'vesper' }));
 
-// 根路径：配了音乐就进外壳（换页不断歌），没配就直接去动态页
-app.get('/', (req, res) => res.redirect(302, musicProxy ? '/app' : '/moments'));
+// 根路径：配了音乐就进外壳（换页不断歌），没配就直接去主页
+app.get('/', (req, res) => res.redirect(302, musicProxy ? '/app' : '/home'));
 
 app.listen(PORT, () =>
   console.log(
-    `vesper listening on ${PORT}；日记页：${diaryPage ? '已开启' : '未配置'}；记忆库：${memoryProxy ? `转发 ${memoryProxy}` : '未配置'}；音乐：${musicProxy ? `转发 ${musicProxy}，外壳 /app` : '未配置'}；星星罐：/moments/star-jar`
+    `vesper listening on ${PORT}；主页：/home；日记页：${diaryPage ? '已开启' : '未配置'}；记忆库：${memoryProxy ? `转发 ${memoryProxy}` : '未配置'}；音乐：${musicProxy ? `转发 ${musicProxy}，外壳 /app` : '未配置'}；星星罐：/moments/star-jar`
   )
 );
