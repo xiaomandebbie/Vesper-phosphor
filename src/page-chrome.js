@@ -1,5 +1,5 @@
 // 几个页面共用的外框：右上角的三条杠菜单，换页、换日期时的星星转场，早晚两张脸，以及那几处活起来的细节。
-// 主页、动态页、自定义页、心绪页、日记页、梦境页、收藏页、星星罐，以及转发过来的记忆库（Ombre Brain 管理页）都从这里拿，
+// 主页、动态页、自定义页、心绪页、日记页、梦境页、小钱包、收藏页、星星罐，以及转发过来的记忆库（Ombre Brain 管理页）都从这里拿，
 // 改一处几个页面一起变。
 //
 // 菜单分三段：最上面「回到主页」、最下面「自定义」钉住不动，中间那些路径可以滑（一眼看三项）。
@@ -61,10 +61,11 @@ export function ombreDashboardBase() {
 }
 
 // 菜单入口，分三段：top 钉在最上面，scroll 可以滑，bottom 钉在最下面。
+// 动态、梦境、心绪、小钱包都是 vesper 自己的页面，直接写路径，不用配。
 // 日记、记忆库优先用站内页面；没配站内页面时可以用 NAV_DIARY_URL / NAV_MEMORY_URL 跳外部地址，
 // 都没配就显示成灰色「没配置」。
 // 论坛是给人看的网页（比如 Lutopia 社区首页），填 NAV_FORUM_URL 才能点；和 TA 自己连论坛用的 LUTOPIA_MCP_URL 无关。
-// 音乐、小钱包是另外的程序的页面，填 NAV_MUSIC_URL / NAV_WALLET_URL：同域名下的路径（/music）或完整地址都行
+// 音乐是另一个程序的页面，填 NAV_MUSIC_URL：同域名下的路径（/music）或完整地址都行
 function navGroups() {
   const diary = diaryDir()
     ? { href: '/diary', label: '日记' }
@@ -81,7 +82,7 @@ function navGroups() {
       { href: externalUrl('NAV_MUSIC_URL', { allowPath: true }), label: '音乐', external: true, note: '没配置' },
       { href: '/drives', label: '心绪' },
       memory,
-      { href: externalUrl('NAV_WALLET_URL', { allowPath: true }), label: '小钱包', external: true, note: '没配置' },
+      { href: '/wallet', label: '小钱包' },
       { href: externalUrl('NAV_FORUM_URL'), label: '论坛', external: true, note: '没配置' },
     ],
     bottom: [{ href: '/moments/profile', label: '自定义' }],
