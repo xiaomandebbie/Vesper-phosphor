@@ -1,16 +1,19 @@
 #!/usr/bin/env node
 // 把动态页顶上那块换成和日记、梦境、心绪一样的标题：跳星星 + 晨暮星 + 「Moments ✦ 动态」。
 //
-// 为什么是脚本而不是直接改文件：moments-page.js 有 51KB，整个读进改再写回容易在路上断，
+// 为什么是脚本而不是直接改文件：moments-page.js 有 46KB、一千多行，整个读进改再写回容易在路上断，
 // 所以改成只按锟点换两处。跟 wire_dreams.mjs 那几个是一个路子。
 //
 // 改两处：
 //   1. <header class="hero">…</header> → renderPageTitle('Moments', '动态')
 //      原来里面的 Vesper✨Phosphor、「TA此刻」、唤醒时间已经搬到主页（home-page.js）了，这边不再留一份。
-//   2. layout 里 <style>${STYLE}${CHROME_CSS}</style> → 中间插进 PAGE_TITLE_CSS（星星那一行和副标的排版）。
+//   2. 把 PAGE_TITLE_CSS 插进 <style>（星星那一行和副标的排版）。
+//      注意：动态页是 ${STYLE}${MY_MOMENTS_CSS}${CHROME_CSS}，中间多一段，和日记、梦境那两页不同。
+//      所以锟点只认 ${CHROME_CSS}</style>，插在它前面 —— 这样不管中间多几段都能对上，
+//      而且 PAGE_TITLE_CSS 排在 CHROME_CSS 前面，让早晚四张脸那层仍然盖在最后。
 //      不动 STYLE 里的原文，它里面写死的 .title 留着当没 JavaScript 时的底。
 //
-// 用法（在仓库目录里）：
+// 用法（在仓库根目录里）：
 //   node scripts/unify_moments_title.mjs --check   只看要改哪几处，不写
 //   node scripts/unify_moments_title.mjs           真改，先存一份 .bak
 //
@@ -26,9 +29,12 @@ const IMPORT_LINE = "import { renderPageTitle, PAGE_TITLE_CSS } from './page-tit
 // 挂在 page-chrome 那行 import 后面
 const CHROME_IMPORT_RE = /^import \{[^}]*\} from '\.\/page-chrome\.js';$/m;
 const HERO_RE = /<header class="hero">[\s\S]*?<\/header>/;
-const STYLE_SLOT = '${STYLE}${CHROME_CSS}';
-const STYLE_SLOT_NEW = '${STYLE}${PAGE_TITLE_CSS}${CHROME_CSS}';
+// 只认最后这一段，不管前面拼了几段 CSS
+const STYLE_ANCHOR = '${CHROME_CSS}</style>';
+const STYLE_ANCHOR_NEW = '${PAGE_TITLE_CSS}${CHROME_CSS}</style>';
 const HERO_NEW = "${renderPageTitle('Moments', '\u52a8\u6001')}";
+
+const countOf = (s, needle) => s.split(needle).length - 1;
 
 let src;
 try {
@@ -64,29 +70,27 @@ if (out.includes(IMPORT_LINE)) {
 if (out.includes(HERO_NEW)) {
   steps.push(['skip', '\u6807\u9898\u5df2\u7ecf\u662f\u5171\u7528\u7684\u90a3\u5957']);
 } else {
+  const n = countOf(out, '<header class="hero">');
+  if (n !== 1) {
+    console.error(`<header class="hero"> \u627e\u5230 ${n} \u5904\uff08\u6307\u671b 1 \u5904\uff09\uff0c\u505c\u4e86\u3002`);
+    process.exit(2);
+  }
   const m = HERO_RE.exec(out);
-  if (!m) {
-    console.error('\u627e\u4e0d\u5230 <header class="hero"> \u90a3\u4e00\u5757\uff0c\u4e0d\u6562\u6539\u3002');
-    process.exit(2);
-  }
-  const n = (out.match(new RegExp('<header class="hero">', 'g')) || []).length;
-  if (n > 1) {
-    console.error(`<header class="hero"> \u6709 ${n} \u5904\uff0c\u4e0d\u77e5\u9053\u8be5\u6539\u54ea\u4e00\u5904\uff0c\u505c\u4e86\u3002`);
-    process.exit(2);
-  }
   out = out.slice(0, m.index) + HERO_NEW + out.slice(m.index + m[0].length);
   steps.push(['edit', `\u6807\u9898\u5757\u6362\u6210 renderPageTitle\uff08\u539f\u6765 ${m[0].length} \u5b57\uff09`]);
 }
 
 // 3. style
-if (out.includes(STYLE_SLOT_NEW)) {
+if (out.includes('PAGE_TITLE_CSS}')) {
   steps.push(['skip', 'PAGE_TITLE_CSS \u5df2\u7ecf\u63d2\u8fc7\u4e86']);
-} else if (out.includes(STYLE_SLOT)) {
-  out = out.replace(STYLE_SLOT, STYLE_SLOT_NEW);
-  steps.push(['edit', 'layout \u91cc\u63d2\u8fdb PAGE_TITLE_CSS']);
 } else {
-  console.error('\u627e\u4e0d\u5230 <style> \u91cc ${STYLE}${CHROME_CSS} \u90a3\u4e00\u6bb5\uff0c\u4e0d\u6562\u6539\u3002');
-  process.exit(2);
+  const n = countOf(out, STYLE_ANCHOR);
+  if (n !== 1) {
+    console.error(`\u951f\u70b9 ${STYLE_ANCHOR} \u627e\u5230 ${n} \u5904\uff08\u6307\u671b 1 \u5904\uff09\uff0c\u4e0d\u6562\u6539\u3002`);
+    process.exit(2);
+  }
+  out = out.replace(STYLE_ANCHOR, STYLE_ANCHOR_NEW);
+  steps.push(['edit', 'PAGE_TITLE_CSS \u63d2\u5728 CHROME_CSS \u524d\u9762']);
 }
 
 for (const [kind, text] of steps) {
