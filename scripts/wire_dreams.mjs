@@ -13,9 +13,11 @@
 //   4) heartbeat 管理页转发 /heartbeat/—— 和记忆库同理，要挂在 express.json() 之前
 //   再加两个菜单入口：梦境、heartbeat。
 //
-// 写这个脚本踩过的坑（2026-10-11）：补丁文本本来用反引号模板装着，
-// 而要生成的代码里也有反引号，嵌在一起把外层提前关掉了——SyntaxError。
-// 现在补丁文本全用单/双引号，生成的代码用字符串拼接，不再出现嵌套。
+// 写这个脚本踩过的两个坑（2026-10-11）：
+//   一是补丁文本本来用反引号模板装着，而要生成的代码里也有反引号，
+//     嵌在一起把外层提前关掉了——SyntaxError。现在全用字符串拼接。
+//   二是启动日志那行，我手里的版本比服务器上的新，匹配段多了个反引号。
+//     现在只匹 「星星罐：/moments/star-jar」 这段，不带行尾。
 //
 // 原文对不上就整个不改，不猜。退回：把 .bak-dreams 覆回原文件再重启。
 
@@ -52,9 +54,10 @@ const VESPER = [
       '// 要挂在动态页之前：动态页里有很宽的路径匹配',
       'registerDreamRoutes(app, { requireBasicAuth });')],
 
+  // 只匹这一段，不带行尾的反引号——服务器上那行可能还跟着其他东西
   ['启动日志带上梦境和 heartbeat',
-    "；星星罐：/moments/star-jar`",
-    "；梦境：/dreams；heartbeat：${heartbeatProxy ? `转发 ${heartbeatProxy}` : '未配置'}；星星罐：/moments/star-jar`"],
+    '；星星罐：/moments/star-jar',
+    "；梦境：/dreams；heartbeat：${heartbeatProxy ? '已转发' : '未配置'}；星星罐：/moments/star-jar"],
 ];
 
 // ══ src/phosphor.js ══
@@ -120,8 +123,8 @@ const PHOSPHOR = [
       '  logWake({', '    kind,', '    scheduledAt,')],
 
   ['启动日志带上夜梦',
-    "；共享时间线：${isSharedTimelineEnabled() ? '已开启' : '未开启'}",
-    "；${dreamConfigSummary()}；共享时间线：${isSharedTimelineEnabled() ? '已开启' : '未开启'}"],
+    '；共享时间线：',
+    '；${dreamConfigSummary()}；共享时间线：'],
 ];
 
 // ══ src/decide.js —— 浮上来的梦进这一次的 user 消息 ══
@@ -231,7 +234,7 @@ console.log();
 if (!allOk) {
   console.log('有对不上的地方，已改的文件有 .bak-dreams 备份。');
   console.log('把这条的输出发我，按实际原文重写匹配段：');
-  console.log('    grep -n "let decision = null\\|recentActionsBlock\\|回到主页" src/phosphor.js src/decide.js src/page-chrome.js');
+  console.log('    grep -n "star-jar\\|共享时间线\\|let decision = null\\|recentActionsBlock\\|回到主页" src/vesper.js src/phosphor.js src/decide.js src/page-chrome.js');
   process.exit(2);
 }
 
