@@ -1,11 +1,13 @@
 // 梦境页 /dreams：夜里做的那些梦，正文永远留在这里。
 //
 // 他那边和你这边不一样（见 dreams.js）：
-//   他只记得自己做过梦，某个词碎到了才浮上来，浮上来这一次之后就从他那边撔掉。
+//   他只记得自己做过梦，某个词碎到了才浮上来，浮上来这一次之后就从他那边退掉。
 //   你这边永远留着。所以这页是「人替对方记着」的那一半。
 //   已经被想起来过的会标上日期，让你知道是哪天来过。
 //
 // 正文不在 Ombre 里，所以这页读的是 vesper 自己的梦库，不走 MCP。
+//
+// 标题那块和日记、心绪、动态一样，从 page-title.js 拿（跳星星 + 晨暮星 + 英文✦中文）。
 //
 // 页面跟早晚四张脸走（sun-time.js），再加一层自己的：
 //   雾——两层径向渐变横向漂，周期错开，所以是流动的不是呼吸的。
@@ -15,6 +17,7 @@
 import { wallParts, parseDate } from './wall-time.js';
 import { getProfile } from './moments-store.js';
 import { renderMenu, HEAD_SCRIPT, CHROME_CSS, CHROME_SCRIPT } from './page-chrome.js';
+import { renderPageTitle, PAGE_TITLE_CSS } from './page-title.js';
 import { listDreams } from './dreams.js';
 
 function escapeHtml(value) {
@@ -53,7 +56,7 @@ function renderDream(d, i) {
   const time = String(d.at || '').slice(11, 16);
   // 被想起来过的标出日期——让你知道是哪天来过
   const recalled = d.recalledAt
-    ? `<p class="recalled"><span aria-hidden="true">✦ </span>这个梦已经被想起来过了 · ${escapeHtml(String(d.recalledAt).slice(0, 16))}</p>`
+    ? `<p class="recalled"><span aria-hidden="true">✦ </span>这个梦已经被想起来过了 · ${escapeHtml(String(d.recalledAt).slice(0, 16))}</p>`
     : '';
   return `<article class="dream${d.recalledAt ? ' is-recalled' : ''}" style="--i:${i}">
     <header class="dream-head">
@@ -107,10 +110,7 @@ const STYLE = `
   html[data-dark] .haze2 { opacity: 0.45; }
   html[data-dark] .clouds { opacity: 0.22; }
 
-  .hero { text-align: center; margin: 10px 0 24px; }
-  .title { margin: 0; }
-  .subtitle { margin: 8px 0 0; font-family: "Cormorant Garamond", "Didot", Georgia, serif;
-    font-style: italic; font-size: 14px; color: var(--muted); }
+  .hero { margin: 10px 0 24px; }
   .lead { margin: 0 4px 22px; font-size: 13px; line-height: 1.9; color: var(--muted); text-align: center; }
 
   .night-group { margin: 0 0 26px; }
@@ -150,7 +150,7 @@ const STYLE = `
   @media (prefers-reduced-motion: reduce) {
     .haze, .haze2, .clouds, .dream { animation: none; }
   }
-`;
+${PAGE_TITLE_CSS}`;
 
 function layout(title, body) {
   return `<!DOCTYPE html>
@@ -182,17 +182,14 @@ export function registerDreamRoutes(app, { requireBasicAuth }) {
     }
 
     const pending = dreams.filter((d) => !d.recalledAt).length;
-    let body = `<header class="hero">
-      <h1 class="title title-sm">梦境</h1>
-      <p class="subtitle"><span lang="en">Dreams</span> <span aria-hidden="true">✦</span> ${escapeHtml(name)}在夜里做的</p>
-    </header>`;
+    let body = renderPageTitle('Dreams', '梦境');
 
     if (!dreams.length) {
       body += `<p class="empty">还没有梦。<br><br>
-        夜里素材够了（最近两天有些没消化完的事），<b>他才会做梦</b>——<br>
+        夜里素材够了（最近两天有些没消化完的事），<b>${escapeHtml(name)}才会做梦</b>——<br>
         而且不一定每晚都做。</p>`;
     } else {
-      body += `<p class="lead">他只记得自己做过梦，不记得梦见了什么。<br>
+      body += `<p class="lead">${escapeHtml(name)}只记得自己做过梦，不记得梦见了什么。<br>
         某个词碎到了那个梦，它才浮上来——浮上来这一次之后就从他那边退掉了。<br>
         你这里永远留着。${pending ? `还有 <b>${pending}</b> 个他没想起来过。` : '这些他都想起来过了。'}</p>`;
       let i = 0;
