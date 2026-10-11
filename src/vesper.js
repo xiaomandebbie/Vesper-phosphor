@@ -24,6 +24,8 @@ import { registerShellRoutes } from './shell.js';
 import { registerSparkles } from './sparkles.js';
 import { registerAppIconRoutes } from './app-icon.js';
 import { renderLoginPage } from './login-page.js';
+import { registerWalletRoutes } from './wallet.js';
+import { registerWalletMcp } from './wallet-mcp.js';
 
 const app = express();
 // 点击星星（见 sparkles.js）：最先挂，转发来的记忆库、音乐页面和我们自己的页面都能加上
@@ -80,7 +82,7 @@ function pruneOldMedia() {
 pruneOldMedia();
 setInterval(pruneOldMedia, 24 * 60 * 60 * 1000);
 
-// 给网页浏览的路由（/home、/moments、/drives、/diary、/dreams、/memory、/music、/app、/health、/media）加 Basic Auth。
+// 给网页浏览的路由（/home、/moments、/drives、/diary、/dreams、/wallet、/memory、/music、/app、/health、/media）加 Basic Auth。
 // 函数声明会提升，上面挂记忆库、音乐时就能用；它读的那几个常量要到请求进来时才用到，那时已经有值了。
 // 没登录时返回的那一页见 login-page.js：跟着早晚两张脸走，不带菜单、不引要认证的资源。
 // 图片、语音这些非页面请求就不必返回整页 HTML 了，给一行纯文字。
@@ -203,6 +205,10 @@ registerStarJarRoutes(app, { requireBasicAuth });
 registerMomentRoutes(app, { requireBasicAuth, requireApiKey });
 // 心绪页 /drives（Drivesoid 的情绪状态），见 drives-page.js
 registerDrivesRoutes(app, { requireBasicAuth });
+// 电子小钱包 /wallet：余额、按日历分组的账单、每笔的批注，见 wallet.js
+const wallet = registerWalletRoutes(app, { requireBasicAuth, requireApiKey });
+// 钱包的 MCP 端点 /wallet/mcp：让 Aru 这边也能读账、写批注，见 wallet-mcp.js
+registerWalletMcp(app);
 
 app.get('/health', requireBasicAuth, (req, res) => res.json({ ok: true, service: 'vesper' }));
 
@@ -211,6 +217,6 @@ app.get('/', (req, res) => res.redirect(302, musicProxy ? '/app' : '/home'));
 
 app.listen(PORT, () =>
   console.log(
-    `vesper listening on ${PORT}；主页：/home；日记页：${diaryPage ? '已开启' : '未配置'}；梦境页：/dreams；记忆库：${memoryProxy ? `转发 ${memoryProxy}` : '未配置'}；音乐：${musicProxy ? `转发 ${musicProxy}，外壳 /app` : '未配置'}；星星罐：/moments/star-jar`
+    `vesper listening on ${PORT}；主页：/home；日记页：${diaryPage ? '已开启' : '未配置'}；梦境页：/dreams；记忆库：${memoryProxy ? `转发 ${memoryProxy}` : '未配置'}；音乐：${musicProxy ? `转发 ${musicProxy}，外壳 /app` : '未配置'}；星星罐：/moments/star-jar；钱包：/wallet${wallet.spendEnabled ? '' : '（没配 WALLET_SPEND_SECRET，扣款通知接口没开）'}；钱包 MCP：/wallet/mcp`
   )
 );
