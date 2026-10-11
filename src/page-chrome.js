@@ -1,6 +1,9 @@
 // 几个页面共用的外框：右上角的三条杠菜单，换页、换日期时的星星转场，早晚两张脸，以及那几处活起来的细节。
-// 动态页、自定义页、心绪页、日记页、收藏页、星星罐，以及转发过来的记忆库（Ombre Brain 管理页）都从这里拿，
+// 主页、动态页、自定义页、心绪页、日记页、梦境页、收藏页、星星罐，以及转发过来的记忆库（Ombre Brain 管理页）都从这里拿，
 // 改一处几个页面一起变。
+//
+// 菜单分三段：最上面「回到主页」、最下面「自定义」钉住不动，中间那些路径可以滑（一眼看三项）。
+// 收藏和星星罐不在菜单里了 —— 从动态页进去就够，菜单里再放一遍只是占地方。
 //
 // 星星转场：点站内链接时先盖上一层粉色雾面，星星一颗颗闪出来，再跳过去；
 // 新页面打开时先盖着，星星再闪几下后淡出。系统开了「减弱动态效果」就只淡入淡出。
@@ -57,47 +60,51 @@ export function ombreDashboardBase() {
   }
 }
 
-// 菜单入口。日记、记忆库优先用站内页面；没配站内页面时可以用 NAV_DIARY_URL / NAV_MEMORY_URL 跳外部地址，
+// 菜单入口，分三段：top 钉在最上面，scroll 可以滑，bottom 钉在最下面。
+// 日记、记忆库优先用站内页面；没配站内页面时可以用 NAV_DIARY_URL / NAV_MEMORY_URL 跳外部地址，
 // 都没配就显示成灰色「没配置」。
 // 论坛是给人看的网页（比如 Lutopia 社区首页），填 NAV_FORUM_URL 才能点；和 TA 自己连论坛用的 LUTOPIA_MCP_URL 无关。
-// 音乐是另一个程序的页面，填 NAV_MUSIC_URL：同域名下的路径（/music）或完整地址都行
-function navItems() {
+// 音乐、小钱包是另外的程序的页面，填 NAV_MUSIC_URL / NAV_WALLET_URL：同域名下的路径（/music）或完整地址都行
+function navGroups() {
   const diary = diaryDir()
     ? { href: '/diary', label: '日记' }
     : { href: externalUrl('NAV_DIARY_URL'), label: '日记', external: true, note: '没配置' };
   const memory = ombreDashboardBase()
     ? { href: '/memory/', label: '记忆库' }
     : { href: externalUrl('NAV_MEMORY_URL'), label: '记忆库', external: true, note: '没配置' };
-  return [
-    { href: '/moments', label: '回到主页' },
-    diary,
-    { href: '/moments/favorites', label: '我的收藏' },
-    { href: '/moments/star-jar', label: '星星罐' },
-    { href: '/drives', label: '心绪' },
-    { href: externalUrl('NAV_MUSIC_URL', { allowPath: true }), label: '音乐', external: true, note: '没配置' },
-    { href: externalUrl('NAV_FORUM_URL'), label: '论坛', external: true, note: '没配置' },
-    memory,
-    { href: '/moments/profile', label: '自定义' },
-  ];
+  return {
+    top: [{ href: '/home', label: '回到主页' }],
+    scroll: [
+      { href: '/moments', label: '动态' },
+      diary,
+      { href: '/dreams', label: '梦境' },
+      { href: externalUrl('NAV_MUSIC_URL', { allowPath: true }), label: '音乐', external: true, note: '没配置' },
+      { href: '/drives', label: '心绪' },
+      memory,
+      { href: externalUrl('NAV_WALLET_URL', { allowPath: true }), label: '小钱包', external: true, note: '没配置' },
+      { href: externalUrl('NAV_FORUM_URL'), label: '论坛', external: true, note: '没配置' },
+    ],
+    bottom: [{ href: '/moments/profile', label: '自定义' }],
+  };
 }
 
 // 右上角三条杠。<details> 本身就能展开收起，没有 JavaScript 也能用。
 // fixed：固定在屏幕上、可以拖动，给记忆库那种不是我们自己排版的页面用
 export function renderMenu(current, { fixed = false } = {}) {
-  const items = navItems()
-    .map((item) => {
-      if (!item.href) {
-        return `<li><span class="vp-menu-soon" aria-disabled="true">${item.label}<small>${item.note || '还没做'}</small></span></li>`;
-      }
-      const here = !item.external && item.href === current;
-      const attrs = item.external ? ' data-stars rel="noopener"' : here ? ' aria-current="page"' : '';
-      return `<li><a href="${escapeAttr(item.href)}"${attrs}>${item.label}</a></li>`;
-    })
-    .join('');
+  const renderItem = (item) => {
+    if (!item.href) {
+      return `<li><span class="vp-menu-soon" aria-disabled="true">${item.label}<small>${item.note || '还没做'}</small></span></li>`;
+    }
+    const here = !item.external && item.href === current;
+    const attrs = item.external ? ' data-stars rel="noopener"' : here ? ' aria-current="page"' : '';
+    return `<li><a href="${escapeAttr(item.href)}"${attrs}>${item.label}</a></li>`;
+  };
+  const g = navGroups();
+  const list = (items, cls) => `<ul class="${cls}">${items.map(renderItem).join('')}</ul>`;
   const hint = fixed ? ' title="点开是菜单，按住可以拖到别处"' : '';
   return `<details class="vp-menu${fixed ? ' vp-menu-fixed' : ''}" data-menu>
     <summary class="vp-menu-btn" aria-label="菜单"${hint}><span class="vp-bars" aria-hidden="true"><i></i><i></i><i></i></span></summary>
-    <nav class="vp-menu-panel" aria-label="页面"><ul>${items}</ul></nav>
+    <nav class="vp-menu-panel" aria-label="页面">${list(g.top, 'vp-menu-pin')}${list(g.scroll, 'vp-menu-scroll')}${list(g.bottom, 'vp-menu-pin')}</nav>
   </details>`;
 }
 
@@ -114,7 +121,7 @@ const FACE_PATCH_CSS = `
   /* 标题：苹方超细 + 大字距。
      之前是宋体 700 + 0.35em，粗、紧、端正、居中四个规整叠在一起，所以死沉。
      苹方是系统字体，一定在；行楷、魏碑这些本机没装就会退回宋体，所以没用。
-     字重、字距、行高得一起改 —— 只换字体名还是那个骶架。
+     字重、字距、行高得一起改 —— 只换字体名还是那个骨架。
      字距给最后一个字也加了右边距，用 padding-left 把居中找回来。 */
   .title { font-family: -apple-system, "PingFang SC", "Helvetica Neue", sans-serif;
     font-weight: 200; font-size: 34px; letter-spacing: 0.62em; padding-left: 0.62em; line-height: 1.3; }
@@ -171,6 +178,11 @@ export const CHROME_CSS = `
   .vp-menu.vp-menu-up.vp-menu-left .vp-menu-panel { transform-origin: bottom left; }
   .vp-menu-panel ul { list-style: none; margin: 0; padding: 0; }
   .vp-menu-panel li { margin: 0; padding: 0; list-style: none; }
+  /* 中间那段只露三项，剩下的滑着看。两条细线把钉住的头尾分开 */
+  .vp-menu-scroll { max-height: 132px; overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch;
+    margin: 4px 0; padding: 4px 0; border-top: 1px solid #f0e6ed; border-bottom: 1px solid #f0e6ed; }
+  .vp-menu-scroll::-webkit-scrollbar { width: 3px; }
+  .vp-menu-scroll::-webkit-scrollbar-thumb { background: #e3d2de; border-radius: 3px; }
   .vp-menu-panel a, .vp-menu-soon { display: flex; align-items: center; min-height: 44px; padding: 0 14px; border-radius: 10px;
     font-size: 15px; font-weight: 400; white-space: nowrap; }
   .vp-menu-panel a { color: #2b2233; text-decoration: none; background: none; }
