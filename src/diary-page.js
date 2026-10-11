@@ -1,13 +1,14 @@
 // 日记页 /diary：heartbeat 自动写的日记，换成晨暮星的样子。只读，不改 heartbeat 的任何东西。
 // heartbeat 把日记存成一天一个 .md 文件（YYYY-MM-DD.md），每篇是「## YYYY-MM-DD HH:mm」开头的一段。
 // 目录在 .env 的 HEARTBEAT_DIARY_DIR 里配（绝对路径）；没配就不挂这个页面，/diary 还是跳回动态页。
+// 标题那块和梦境、心绪、动态一样，从 page-title.js 拿（跳星星 + 晨暮星 + 英文✦中文）。
 // 顶上那张卡片是 heartbeat 的运行状态（Gateway 运行了多久、Auto Wakeup 上次心跳），从 heartbeat 管理页读过来。
 // vesper.js 里挂载：registerDiaryRoutes(app, { requireBasicAuth })，要挂在动态页路由之前。
 import fs from 'fs';
 import path from 'path';
 import { pad, wallParts, parseDate, parseMonth, daysInMonth, firstWeekday } from './wall-time.js';
-import { getProfile } from './moments-store.js';
 import { renderMenu, HEAD_SCRIPT, CHROME_CSS, CHROME_SCRIPT, diaryDir } from './page-chrome.js';
+import { renderPageTitle, PAGE_TITLE_CSS } from './page-title.js';
 
 const FILE_RE = /^(\d{4})-(\d{2})-(\d{2})\.md$/;
 // 每篇的开头：heartbeat 写的「## 2026-10-01 07:34」。正文里 TA 自己写的「## 小标题」不算新的一篇
@@ -210,15 +211,7 @@ const STYLE = `
   body { margin: 0; min-height: 100vh; color: var(--ink); font-family: -apple-system, "PingFang SC", "Helvetica Neue", sans-serif;
     background: linear-gradient(180deg, #efe7f4 0%, #f9f0ee 55%, #fdf8f2 100%); }
   main { max-width: 600px; margin: 0 auto; padding: 28px 16px 48px; }
-  .hero { text-align: center; margin: 10px 0 20px; }
-  .title { margin: 0; font-family: "Songti SC", "STSong", "Noto Serif SC", "Source Han Serif SC", serif; font-size: 28px;
-    font-weight: 700; letter-spacing: 0.3em; padding-left: 0.3em; color: #5b2e52; }
-  @supports ((-webkit-background-clip: text) or (background-clip: text)) {
-    .title { background: linear-gradient(100deg, #463a7c 0%, #9b4a7a 52%, #c4832f 100%);
-      -webkit-background-clip: text; background-clip: text; color: transparent; }
-  }
-  .subtitle { margin: 6px 0 0; font-family: "Cormorant Garamond", "Didot", "Bodoni 72", Georgia, serif; font-style: italic;
-    font-size: 14px; letter-spacing: 0.2em; color: var(--muted); }
+  .hero { margin: 10px 0 20px; }
   .card { background: var(--card); border-radius: 16px; padding: 16px; margin-bottom: 14px; box-shadow: 0 1px 3px rgba(60, 30, 60, 0.08); }
   .notice { font-size: 14px; line-height: 1.6; border-left: 4px solid var(--gold); }
   .notice code { font-size: 12px; background: #f6eef3; padding: 1px 4px; border-radius: 4px; word-break: break-all; }
@@ -278,7 +271,7 @@ const STYLE = `
     .cal-fold[open] .cal-body, .entry[open] .entry-body { animation: none; }
     .cal-caret, .entry-caret { transition: none; }
   }
-`;
+${PAGE_TITLE_CSS}`;
 
 function layout(title, body) {
   return `<!DOCTYPE html>
@@ -294,13 +287,7 @@ function layout(title, body) {
 </html>`;
 }
 
-function hero() {
-  const name = getProfile('assistant').name;
-  return `<header class="hero">
-    <h1 class="title">日记</h1>
-    <p class="subtitle"><span lang="en">Diary</span> <span aria-hidden="true">✦</span> ${escapeHtml(name)}写的</p>
-  </header>`;
-}
+const hero = () => renderPageTitle('Diary', '日记');
 
 export function registerDiaryRoutes(app, { requireBasicAuth }) {
   const configured = diaryDir();
