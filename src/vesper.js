@@ -18,6 +18,7 @@ import { registerStarJarRoutes } from './star-jar.js';
 import { registerDrivesRoutes } from './drives-page.js';
 import { registerDiaryRoutes } from './diary-page.js';
 import { registerDreamRoutes } from './dreams-page.js';
+import { registerBarRoutes } from './bar-page.js';
 import { registerMemoryProxy } from './memory-proxy.js';
 import { registerMusicProxy } from './music-proxy.js';
 import { registerShellRoutes } from './shell.js';
@@ -82,7 +83,7 @@ function pruneOldMedia() {
 pruneOldMedia();
 setInterval(pruneOldMedia, 24 * 60 * 60 * 1000);
 
-// 给网页浏览的路由（/home、/moments、/drives、/diary、/dreams、/wallet、/memory、/music、/app、/health、/media）加 Basic Auth。
+// 给网页浏览的路由（/home、/moments、/drives、/diary、/dreams、/bar、/wallet、/memory、/music、/app、/health、/media）加 Basic Auth。
 // 函数声明会提升，上面挂记忆库、音乐时就能用；它读的那几个常量要到请求进来时才用到，那时已经有值了。
 // 没登录时返回的那一页见 login-page.js：跟着早晚两张脸走，不带菜单、不引要认证的资源。
 // 图片、语音这些非页面请求就不必返回整页 HTML 了，给一行纯文字。
@@ -196,6 +197,9 @@ registerHomeRoutes(app, { requireBasicAuth });
 const diaryPage = registerDiaryRoutes(app, { requireBasicAuth });
 // 梦境页 /dreams（夜里做的那些梦，正文永远留在这边），见 dreams-page.js
 registerDreamRoutes(app, { requireBasicAuth });
+// 小酒馆 /bar（递一杯给他、看他喝过什么），见 bar-page.js。
+// 没配 PROOF_AGENT_TOKEN_FILE 时整页不挂，菜单里那一项显示灰色「没配置」
+const barPage = registerBarRoutes(app, { requireBasicAuth });
 // 收藏（见 favorites.js）和星星罐（见 star-jar.js）：要挂在动态页之前。
 // /moments/favorites、/moments/star-jar 得比 /moments/:id 先匹配到，不然会被当成一个 id。
 // 这两页还在，只是不在菜单里了，从动态页进去
@@ -217,6 +221,6 @@ app.get('/', (req, res) => res.redirect(302, musicProxy ? '/app' : '/home'));
 
 app.listen(PORT, () =>
   console.log(
-    `vesper listening on ${PORT}；主页：/home；日记页：${diaryPage ? '已开启' : '未配置'}；梦境页：/dreams；记忆库：${memoryProxy ? `转发 ${memoryProxy}` : '未配置'}；音乐：${musicProxy ? `转发 ${musicProxy}，外壳 /app` : '未配置'}；星星罐：/moments/star-jar；钱包：/wallet${wallet.spendEnabled ? '' : '（没配 WALLET_SPEND_SECRET，扣款通知接口没开）'}；钱包 MCP：/wallet/mcp`
+    `vesper listening on ${PORT}；主页：/home；日记页：${diaryPage ? '已开启' : '未配置'}；梦境页：/dreams；小酒馆：${barPage ? '/bar' : '未配置'}；记忆库：${memoryProxy ? `转发 ${memoryProxy}` : '未配置'}；音乐：${musicProxy ? `转发 ${musicProxy}，外壳 /app` : '未配置'}；星星罐：/moments/star-jar；钱包：/wallet${wallet.spendEnabled ? '' : '（没配 WALLET_SPEND_SECRET，扣款通知接口没开）'}；钱包 MCP：/wallet/mcp`
   )
 );
