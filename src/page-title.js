@@ -3,6 +3,9 @@
 // 心绪页先长成这样，后来日记、梦境、动态都跟它对齐，所以抽到这里。
 // 主页 /home 不用这个：它留着原来动态页那套 Vesper✨Phosphor，是整个站的门面。
 //
+// 大小就是心绪页那个：不加 title-sm，跟 FACE_PATCH_CSS 里 .title 的 34px 走。
+// 之前日记、梦境默认加了 title-sm（24px），几页摆在一起大小不一样 —— 现在默认都是大的。
+//
 // 大标题本身的字体、渐变、字距在 page-chrome.js 的 FACE_PATCH_CSS 里（.title），跟早晚四张脸走；
 // 这里只管星星那一行和副标的排版。颜色用 var(--gold) 这些，所以天黑了也跟着变。
 //
@@ -20,8 +23,8 @@ function escapeHtml(value) {
 // en：副标里的英文（Dreams、Diary、Moments……）
 // zh：星星后面的中文（梦境、日记、动态……）
 // note：再往下挂一行小字，比如「TA 此刻：……」。已经是 HTML，谁给谁转义自己负责
-// small：大标题用小一号（title-sm）。子页面都用小的，主页那个才是大的
-export function renderPageTitle(en, zh, { note = '', small = true } = {}) {
+// small：真要用小一号时才传 true。平常不要传 —— 几页标题要一样大
+export function renderPageTitle(en, zh, { note = '', small = false } = {}) {
   return `<header class="hero">
     <p class="sparkles" aria-hidden="true"><span>✦</span><span>✧</span><span>⋆</span></p>
     <h1 class="title${small ? ' title-sm' : ''}">晨暮星</h1>
