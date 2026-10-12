@@ -1,0 +1,4 @@
+recordOfferSent 现在多收一个 link（见 proof.js）。
+bar-page.js 里那一行改成：
+recordOfferSent(offerId, name, intro, out.link);
+这个文件只是备忘，合并前删掉。

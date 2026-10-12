@@ -1,7 +1,7 @@
 // 小酒馆：晨暮星这一侧接 Proof（https://github.com/lumingye/Proof）的那部分代码。
 //
 // Proof 自己负责配方、六轴、代谢、断片判定和账本；这里只做三件事：
-//   1. 替你递一杯过去（/human/offers），替他喝下去（/agent/offers/:id/drink、/agent/menu/:id/drink）
+//   1. 替你递一杯过去（/human/offers），替他喝下去（/agent/menu/:id/drink、/agent/offers/:id/drink）
 //   2. 把他每次喝酒记进我们自己的时间轴，给 /bar 页面看
 //   3. 数「连续几夜自斟」，到第三夜提醒、第四夜不给这个动作
 //
@@ -43,7 +43,7 @@ const NIGHT_WINDOW = (() => {
 
 // 连续几夜自斟之后开始提醒 / 开始阻止。
 // 默认：前两夜都喝过 → 今晚是第三夜，给动作但附一句提醒；
-//       前三夜都喝过 → 今晚是第四夜，这个动作不出现在列表里。
+//       前三夜都喝过 → 今晚是第四夜，这杯不倒了。
 const WARN_AFTER_NIGHTS = num('PROOF_WARN_AFTER_NIGHTS', 2);
 const BLOCK_AFTER_NIGHTS = num('PROOF_BLOCK_AFTER_NIGHTS', 3);
 
@@ -101,6 +101,14 @@ export function listPours() {
   return load().pours.slice().sort((a, b) => String(b.at || '').localeCompare(String(a.at || '')));
 }
 
+// 还在吧台上放着、他还没动的那几杯。
+// 带着 link：他通过 MCP 喝递来的杯子走 proof_drink_link，需要这个地址
+export function pendingOffers() {
+  return load()
+    .pours.filter((p) => p.pending && p.offerId)
+    .map((p) => ({ offerId: p.offerId, name: p.name || '无名的一杯', intro: p.intro || '', link: p.link || '' }));
+}
+
 // 记一杯。by: 'her'（你递的）| 'self'（他自己倒的）
 function record(entry) {
   const db = load();
@@ -142,7 +150,7 @@ export function selfPourGate(parts = wallParts()) {
   const tonight = drankTonight(night);
   const window = inNightWindow(parts);
   if (!window) {
-    return { allowed: false, streak, reason: 'window', note: `现在不在小酒馆的营业时段（${nightWindowLabel()}）` };
+    return { allowed: false, streak, reason: 'window', note: `现在不在小酒馆的营业时段（${nightWindowLabel()}），这杯等到夜里再说。`};
   }
   if (tonight) {
     return { allowed: false, streak, reason: 'tonight', note: '今晚已经给自己倒过一杯了，一夜一杯。' };
@@ -207,7 +215,7 @@ async function request(pathname, { method = 'GET', body, auth = 'agent' } = {}) 
 // 他的吧台：身份、可见酒单、有没有待喝的杯子
 export const agentHome = () => request('/agent/home');
 
-// 这一轮的状态投影。网关每轮都读它（见 gateway.js）
+// 这一轮的状态投影。网关每轮都读它（见 proof-gateway.js）
 export const turnContext = () => request('/agent/turn-context');
 
 // 喝菜单上的一杯（自斟）
@@ -263,9 +271,10 @@ export function recordOfferRejected(offerId, name) {
   record({ by: 'her', offerId, name: name || '无名的一杯', rejected: true });
 }
 
-// 你刚递出去，还没喝。页面上先显示「等他来喝」
-export function recordOfferSent(offerId, name, intro) {
-  record({ by: 'her', offerId, name: name || '无名的一杯', intro: intro || '', pending: true });
+// 你刚递出去，还没喝。页面上先显示「等他来喝」；
+// link 存着不给页面显示，是为了让他醒来时能领走这杯
+export function recordOfferSent(offerId, name, intro, link) {
+  record({ by: 'her', offerId, name: name || '无名的一杯', intro: intro || '', link: link || '', pending: true });
 }
 
 // 他喝了之后，把先前那条「等他来喝」改成已喝
@@ -275,6 +284,7 @@ export function markOfferDrunk(offerId, result, mood) {
   if (!row) return recordOfferDrunk(offerId, result, mood);
   const v = readProjection(result);
   delete row.pending;
+  delete row.link;
   row.drunkAt = formatDateTime();
   row.flavor = v.flavor;
   row.effect = v.effect;
@@ -285,6 +295,21 @@ export function markOfferDrunk(offerId, result, mood) {
     console.error('proof: 账本写不下来', err.message);
   }
   return v;
+}
+
+// 他通过 link 领走了某一杯：按 link 找回是哪条，没找到就当一杯新的记
+export function markLinkDrunk(link, result, mood) {
+  const token = String(link || '').split('#').pop();
+  const db = load();
+  const row = token
+    ? db.pours.find((x) => x.pending && String(x.link || '').endsWith(token))
+    : null;
+  if (!row) {
+    const v = readProjection(result);
+    record({ by: 'her', mood: mood || '', ...v });
+    return v;
+  }
+  return markOfferDrunk(row.offerId, result, mood);
 }
 
 export function configSummary() {
