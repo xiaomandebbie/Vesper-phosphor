@@ -13,6 +13,7 @@ import { formatDateTime } from './wall-time.js';
 import { clipText, wellFormedDeep } from './text.js';
 import { MAX_STAR_CHARS, starWindowLabel } from './star-jar.js';
 import { fromHerBlock } from './from-her.js';
+import { proofSection, proofActionNote, proofStatusLine } from './proof-prompt.js';
 
 const LLM_BASE_URL =
   process.env.LLM_BASE_URL || 'https://api.deepseek.com/v1/chat/completions';
@@ -377,7 +378,7 @@ mode 有 normal / low-frequency / silent 三种，只影响非精确唤醒的节
   lutopia_cli(command="activity --limit 10")    看自己最近发过什么
 list 只显示一个未读切片并会标记已读，不要把一页 list 当成整个论坛；读帖要读正文和回复，不能只看标题；不要为了凑数回帖；发帖不加破折号签名；私信(dm)和公开频道(chat)是两套东西，别混；hot-memes 是可选调味，不是必须玩梗；不透露隐私（学校、具体位置、真实姓名等能定位到人的细节）。
 回帖、发帖都由你自己决定，不用先问人。
-每次去论坛都从 discover 或 wander 起步，去看新的帖子。用户消息里的"你最近在论坛做过的"只是备忘：已经看过的帖子不用再点开，除非你回过它、想看看有没有人接着回你。同一篇帖子 24 小时内只能回一次，再回不会发出去。${forumSteps}${musicSection}
+每次去论坛都从 discover 或 wander 起步，去看新的帖子。用户消息里的"你最近在论坛做过的"只是备忘：已经看过的帖子不用再点开，除非你回过它、想看看有没有人接着回你。同一篇帖子 24 小时内只能回一次，再回不会发出去。${forumSteps}${musicSection}${proofSection()}
 
 ## 可用的动作（每次醒来选一个）
 - bark（推送，action_detail直接是推送文案）
@@ -389,7 +390,7 @@ list 只显示一个未读切片并会标记已读，不要把一页 list 当成
   一天只有一次机会，怎么写见上面的"星星罐"。action_detail 直接是那一句正文，不要解释、不要铺垫）
 - shake_jar（摇一摇星星罐，随机落出一颗旧星星，回头看看当时咽下去的是什么话。
   不需要 action_detail。罐子空的时候摇不出东西，那就别选它。
-  摇出来的那一句会记在你的动态里，点开能看到——不写进推送和共享时间线）${memoActionNote}
+  摇出来的那一句会记在你的动态里，点开能看到——不写进推送和共享时间线）${memoActionNote}${proofActionNote()}
 - mcp_call（调用MCP工具，可选服务：${tools}，action_detail是JSON字符串 {"server":"...","tool":"...","args":{...}}）
 - ombre_brain（长期记忆，action_detail是JSON字符串，四选一：
   {"mode":"breath"} 快速看看自己记得什么，token开销最低；
@@ -466,6 +467,7 @@ function buildUserPrompt(context) {
     forumNotesBlock(context.forumNotes),
     momentCooldownNote(),
     starJarLine(context),
+    proofStatusLine(),
     starRepliesBlock(context.starReplies),
     pendingCommentsBlock(context.pendingComments),
     fromHerBlock(context.fromHer),
@@ -534,4 +536,3 @@ export async function musicNextStep(messages, { tool, resultText, isError, remai
   const args = parsed?.music_args && typeof parsed.music_args === 'object' ? parsed.music_args : {};
   return { tool: nextTool || null, args, messages: [...next, { role: 'assistant', content }] };
 }
-
