@@ -140,8 +140,7 @@ export function listPours() {
 // 这一条递出去多久了（毫秒）。拿不准就返回 null，别瞎猜。
 //
 // sentAt 是毫秒戳，新记录都带；老记录只有 at（「2026-10-13 13:09」这种墙上时间），
-// 退回字符串解析。2026-10-13：原来只靠 Date.parse，服务器时区下解析失败时
-// 我那个保守分支会当成「没过期」放行，结果他 16:12 还在试上午那杯。
+// 退回字符串解析。
 function offerAgeMs(row, now = Date.now()) {
   const sent = Number(row?.sentAt);
   if (Number.isFinite(sent) && sent > 0) return now - sent;
@@ -467,13 +466,33 @@ export function markOfferRejected(offerId) {
   }
 }
 
+// 这杯已经不在 Proof 上了（伸手拿空：not_found / gone / 已结算）。
+// 把账本里那条划掉，不让下次醒来再撞一遍。
+// 2026-10-13：他 16:40 就是这样连撞了三次，还按「看见的」写了篇动态。
+export function markOfferGone(offerId, why) {
+  const db = load();
+  const row = db.pours.find((x) => x.offerId === offerId && x.pending);
+  if (!row) return false;
+  delete row.pending;
+  row.expired = true;
+  row.expiredAt = formatDateTime();
+  if (why) row.goneReason = String(why).slice(0, 200);
+  try {
+    save(db);
+    return true;
+  } catch (err) {
+    console.error('proof: 账本写不下来', err.message);
+    return false;
+  }
+}
+
 // ══ 对账 ══
 // 他也可能在别的客户端里喝（比如直接跑 agent-cli），那边晨暮星收不到通知。
 // 所以每次打开 /bar 时跟 Proof 对一次账：哪几杯已经喝了、哪几杯被拒了、哪几杯凉了。
-// 对不上（Proof 连不上、字段不认识）就保持原样，不瞎改账本。
 //
-// 2026-10-13：原来只认 consumed 和 rejected，漏了 expired——
-// 所以小满递的两杯已经凉了，页面还写着「还在吧台上放着」，骗了一整天。
+// **Proof 说什么就是什么。** 本地超时只在问不到 Proof 时兜底——
+// 2026-10-13 我写成了「本地算超时就标凉」，结果本地 TTL 还是 30 分钟时
+// 把一杯 36 分钟前递的酒强行标成凉了，而 Proof 那边本来还有效。
 const DRUNK = /consumed|drunk|drank/i;
 const REJECTED = /reject|declin/i;
 const EXPIRED = /expire|stale|timeout/i;
@@ -503,34 +522,48 @@ export async function reconcileOffers() {
     const remote = byId?.get(String(row.offerId));
     const status = String(remote?.status || '');
 
-    if (remote && DRUNK.test(status)) {
-      const v = readProjection(remote);
-      delete row.pending;
-      row.drunkAt = formatDateTime();
-      row.flavor = v.flavor;
-      row.effect = v.effect;
-      if (!row.intro && v.intro) row.intro = v.intro;
-      if (!row.recipe && v.recipe) row.recipe = v.recipe;
-      drunk++;
+    // Proof 认识这杯：它说什么算什么
+    if (remote) {
+      if (DRUNK.test(status)) {
+        const v = readProjection(remote);
+        delete row.pending;
+        row.drunkAt = formatDateTime();
+        row.flavor = v.flavor;
+        row.effect = v.effect;
+        if (!row.intro && v.intro) row.intro = v.intro;
+        if (!row.recipe && v.recipe) row.recipe = v.recipe;
+        drunk++;
+      } else if (REJECTED.test(status)) {
+        delete row.pending;
+        row.rejected = true;
+        rejected++;
+      } else if (EXPIRED.test(status)) {
+        delete row.pending;
+        row.expired = true;
+        row.expiredAt = formatDateTime();
+        expired++;
+      }
+      // 还是 pending：别动。本地觉得凉了也不算——Proof 才是权威
       continue;
     }
-    if (remote && REJECTED.test(status)) {
+
+    // Proof 里没这杯了（读到了列表但找不到它）→ 已经被清掉，按凉了算
+    if (offers) {
       delete row.pending;
-      row.rejected = true;
-      rejected++;
+      row.expired = true;
+      row.expiredAt = formatDateTime();
+      expired++;
       continue;
     }
-    // 凉了。不是他拒的，也不是他喝了——是没来得及。
-    // Proof 明说 expired，或者本地时间已经超过 TTL（Proof 连不上时的兜底）
+
+    // 根本没读到 Proof（连不上）→ 本地超时才兜底
     const age = offerAgeMs(row, now);
-    const staleLocally = age == null || age >= OFFER_TTL_MS;
-    if ((remote && EXPIRED.test(status)) || (!remote && staleLocally) || staleLocally) {
+    if (age != null && age >= OFFER_TTL_MS) {
       delete row.pending;
       row.expired = true;
       row.expiredAt = formatDateTime();
       expired++;
     }
-    // 其余情况：Proof 还没结算，还在有效期内，别动
   }
 
   if (drunk || rejected || expired) {
