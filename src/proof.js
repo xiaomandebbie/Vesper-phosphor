@@ -24,8 +24,13 @@ import path from 'path';
 import { wallParts, formatDate, formatDateTime } from './wall-time.js';
 
 const env = (k) => String(process.env[k] ?? '').trim();
+// 注意：Number('') 是 0，不是 NaN。所以要先看原值空不空——
+// 不然 .env 里没写这个变量时，超时会被算成 0，AbortSignal.timeout(0) 当场把请求掉掉。
+// 2026-10-13 就是这个 bug：日志里写「等了 0.0s，上限 0s」，表现成整页超时。
 const num = (k, dflt) => {
-  const v = Number(env(k));
+  const raw = env(k);
+  if (!raw) return dflt;
+  const v = Number(raw);
   return Number.isFinite(v) ? v : dflt;
 };
 
@@ -38,7 +43,6 @@ const ADMIN_TOKEN = env('PROOF_ADMIN_TOKEN');
 // 超时分两档。「读吧台」比别的都重很多：
 // Proof 的 /agent/home 要把整份酒单每一杯都过一遍引擎（风味、效果、装饰全算出来），
 // 再加上待喝的杯子和转场状态；/agent/turn-context 只读状态。
-// 2026-10-13：允朔那边 proof_bar 连四次超时、proof_turn_context 次次通，就是这个差别。
 const TIMEOUT_MS = num('PROOF_TIMEOUT_MS', 20000);
 const HOME_TIMEOUT_MS = num('PROOF_HOME_TIMEOUT_MS', 90000);
 // 读吧台超过这个秒数就在日志里吐一行，方便看到底多慢
@@ -232,7 +236,6 @@ async function request(pathname, { method = 'GET', body, auth = 'agent', timeout
 
 // 他的吧台：身份、可见酒单、有没有待喝的杯子。
 // 这是整套里最重的一个请求，单独给了更长的超时。
-// 页面那边不想让人干等，可以自己传一个短一点的。
 export const agentHome = ({ timeoutMs = HOME_TIMEOUT_MS } = {}) =>
   request('/agent/home', { timeoutMs });
 
@@ -301,16 +304,41 @@ export async function barSnapshot({ timeoutMs } = {}) {
 
 // ══ 记账的几个入口 ══
 
+// 配方洗成统一形状：[{ id, volume }]。
+// 来源两边不一样——我们自己递酒时是 {id,volume}，Proof 返回的可能是字符串、
+// 也可能字段叫 name/ml/amount。挨个兜，按不出来就丢掉这一项。
+function normalizeRecipe(raw) {
+  if (!Array.isArray(raw)) return null;
+  const out = [];
+  for (const it of raw) {
+    if (typeof it === 'string') {
+      const s = it.trim();
+      if (s) out.push({ id: s });
+      continue;
+    }
+    if (!it || typeof it !== 'object') continue;
+    const id = String(it.id ?? it.name ?? it.ingredient ?? it.label ?? '').trim();
+    if (!id) continue;
+    const vol = Number(it.volume ?? it.ml ?? it.amount ?? it.volumeMl);
+    out.push(Number.isFinite(vol) && vol > 0 ? { id, volume: Math.round(vol) } : { id });
+  }
+  return out.length ? out : null;
+}
+
 // 从 Proof 的返回里挑出给人看的那几样。字段名各版本可能不一样，挨个兜一下
 function readProjection(result) {
   const p = result?.projection || result?.view?.projection || {};
   const flavor = [p.flavorDescription, p.finish].filter(Boolean).join(' · ');
-  return {
+  const v = {
     name: p.claimedName || result?.name || '无名的一杯',
     flavor: flavor || '',
     intro: p.intro || '',
     effect: p.actualEffectDescription?.text || '',
   };
+  // 菜单酒的配方由 Proof 给（我们不知道它怎么调的）；你递的那杯配方在表单里，单独存
+  const recipe = normalizeRecipe(p.recipe ?? result?.recipe);
+  if (recipe) v.recipe = recipe;
+  return v;
 }
 
 // 深夜醒来自己倒的一杯。只有这个计进连续夜数
@@ -327,9 +355,18 @@ export function recordChatPour(drinkId, result) {
   return v;
 }
 
-// 你刚递出去，还没喝。页面上先显示「等他来喝」
-export function recordOfferSent(offerId, name, intro) {
-  record({ by: 'her', offerId, name: name || '无名的一杯', intro: intro || '', pending: true });
+// 你刚递出去，还没喝。页面上先显示「等他来喝」。
+// parts 就是表单里那些原料，存下来让时间轴上点开能看见配方
+export function recordOfferSent(offerId, name, intro, parts) {
+  const recipe = normalizeRecipe(parts);
+  record({
+    by: 'her',
+    offerId,
+    name: name || '无名的一杯',
+    intro: intro || '',
+    ...(recipe ? { recipe } : {}),
+    pending: true,
+  });
 }
 
 // 他在聊天里喝了你递的那杯：把那条「等他来喝」改成已喝。
@@ -347,6 +384,8 @@ export function markOfferDrunk(offerId, result) {
   row.flavor = v.flavor;
   row.effect = v.effect;
   if (!row.intro && v.intro) row.intro = v.intro;
+  // 配方以我们自己记的为准（那是你当时真填的），没记上才用 Proof 回的
+  if (!row.recipe && v.recipe) row.recipe = v.recipe;
   try {
     save(db);
   } catch (err) {
@@ -409,6 +448,7 @@ export async function reconcileOffers() {
       row.flavor = v.flavor;
       row.effect = v.effect;
       if (!row.intro && v.intro) row.intro = v.intro;
+      if (!row.recipe && v.recipe) row.recipe = v.recipe;
       drunk++;
     } else if (REJECTED.test(status)) {
       delete row.pending;
