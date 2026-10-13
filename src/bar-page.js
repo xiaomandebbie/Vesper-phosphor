@@ -6,6 +6,12 @@
 //   酒架——原料清单和经典配方，点一下直接填进表单
 //   时间轴——按夜分组，谁递的、什么味道、当时什么心情；点开看配方
 //
+// 那杯酒有四种下场，页面要分得清：
+//   喝了——带风味、效果、当时心情
+//   拒了——点线边框，「拒绝也是答案」
+//   凉了——没来得及喝，不是不想喝。这两种不能混
+//   还在等——虚线边框
+//
 // 调酒和酒架都是 <details>，默认收着（小满 2026-10-13 定：版面太长，
 // 历史记录要翻好久才看到）。和批注、日历、星星罐那几处一个做法。
 // 递完或者出错时自动张开（open），不然看不到那句回执。
@@ -19,7 +25,7 @@ import { renderMenu, HEAD_SCRIPT, CHROME_CSS, CHROME_SCRIPT } from './page-chrom
 import { renderPageTitle, PAGE_TITLE_CSS } from './page-title.js';
 import {
   isProofEnabled, listPours, agentHome, offerDrink, recordOfferSent,
-  selfPourGate, nightWindowLabel, reconcileOffers, PROOF_AGENT_ID,
+  selfPourGate, nightWindowLabel, offerTtlLabel, reconcileOffers, PROOF_AGENT_ID,
 } from './proof.js';
 
 const USER_NAME = process.env.USER_DISPLAY_NAME || '她';
@@ -162,18 +168,38 @@ function renderRecipe(recipe) {
   </details>`;
 }
 
+// 一杯酒在时间轴上长什么样。
+// 四种下场各有自己的边框和说法，别让「凉了」看着像「他不要」
 function renderPour(p, i) {
   const time = String(p.drunkAt || p.at || '').slice(11, 16);
   const who = p.by === 'self' ? '自己倒的' : p.by === 'chat' ? '聊天里自己点的' : `${USER_NAME}递的`;
-  const cls = p.rejected ? ' is-rejected' : p.pending ? ' is-pending' : '';
+  const cls = p.rejected
+    ? ' is-rejected'
+    : p.expired
+      ? ' is-expired'
+      : p.pending
+        ? ' is-pending'
+        : '';
   const lines = [];
   if (p.intro) lines.push(`<p class="pour-intro">${esc(p.intro)}</p>`);
   if (p.flavor) lines.push(`<p class="pour-flavor">${esc(p.flavor)}</p>`);
   if (p.effect) lines.push(`<p class="pour-effect">${esc(p.effect)}</p>`);
   lines.push(renderRecipe(p.recipe));
   if (p.mood) lines.push(`<p class="pour-mood">当时的心情：${esc(p.mood)}</p>`);
-  if (p.rejected) lines.push('<p class="pour-note">这杯他没喝。拒绝也是答案。</p>');
-  if (p.pending) lines.push('<p class="pour-note">还在吧台上放着，等他下次醒来。</p>');
+  if (p.rejected) {
+    lines.push('<p class="pour-note">这杯他没喝。拒绝也是答案。</p>');
+  } else if (p.expired) {
+    // 凉了和拒了是两回事。这里说清，免得看成他不要
+    lines.push(
+      `<p class="pour-note">这杯凉了——递过去 ${esc(offerTtlLabel())}内没人动，就自动作废了。` +
+      `<br>不是他不想喝，是没赶上${esc(p.expiredAt ? `（${String(p.expiredAt).slice(5, 16)} 发现）` : '')}。</p>`
+    );
+  } else if (p.pending) {
+    lines.push(
+      `<p class="pour-note">还在吧台上放着，等他下次醒来。` +
+      `<br><small>递过去 ${esc(offerTtlLabel())}内没动就会凉。</small></p>`
+    );
+  }
   return `<article class="pour${cls}" style="--i:${i}">
     <header class="pour-head">
       <h3 class="pour-name">${esc(p.name || '无名的一杯')}</h3>
@@ -297,7 +323,8 @@ function renderForm(flash) {
       </fieldset>
       <button type="submit" class="go">递过去</button>
     </form>
-    <p class="mix-note">递过去不等于他喝了。他可以拒绝；喝下去之后 Proof 才结算。</p>
+    <p class="mix-note">递过去不等于他喝了。他可以拒绝；喝下去之后 Proof 才结算。
+      <br>递过去 ${esc(offerTtlLabel())}内没人动就会凉——他不一定那么快醒来。</p>
   </details>`;
 }
 
@@ -499,9 +526,13 @@ const STYLE = `
   @keyframes pour-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
   .pour.is-pending { border-style: dashed; }
   .pour.is-rejected { opacity: 0.74; border-style: dotted; }
+  /* 凉了：比拒绝更淡，左边一条灰条——像被放在那里没人动 */
+  .pour.is-expired { opacity: 0.6; border-style: dotted;
+    border-left: 3px solid color-mix(in srgb, var(--muted) 40%, transparent); }
   .pour-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
   .pour-name { margin: 0; font-family: "Songti SC", "STSong", "Noto Serif SC", Georgia, serif;
     font-size: 18px; font-weight: 600; letter-spacing: 0.08em; color: var(--accent); }
+  .pour.is-expired .pour-name { color: var(--muted); }
   .pour-time { font-size: 12px; color: var(--gold); white-space: nowrap; }
   .pour-who { margin: 4px 0 0; font-size: 11.5px; letter-spacing: 0.1em; color: var(--muted); }
   .pour p { word-break: break-word; }
@@ -512,6 +543,7 @@ const STYLE = `
   .pour-mood { margin: 10px 0 0; padding-top: 9px; font-size: 12px; line-height: 1.7; color: var(--muted);
     border-top: 1px solid color-mix(in srgb, var(--line) 60%, transparent); }
   .pour-note { margin: 8px 0 0; font-size: 12px; line-height: 1.7; color: var(--muted); }
+  .pour-note small { font-size: 11px; opacity: 0.8; }
 
   /* 那杯酒的配方：默认收着，点开是一张小单子 */
   .ri { margin: 10px 0 0; }
@@ -575,7 +607,10 @@ export function registerBarRoutes(app, { requireBasicAuth }) {
     // 他喝不喝是在聊天里定的，晨暮星收不到通知。所以每次打开先跟 Proof 对一次账。
     // 对不上就保持原样，不影响这一页渲染
     try {
-      await reconcileOffers();
+      const rec = await reconcileOffers();
+      if (rec.drunk || rec.rejected || rec.expired) {
+        console.log(`bar page: 对账——${rec.drunk} 杯已喝，${rec.rejected} 杯被拒，${rec.expired} 杯凉了`);
+      }
     } catch (err) {
       console.error('bar page: 对账失败（账本保持原样）', err.message);
     }
