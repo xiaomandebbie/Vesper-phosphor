@@ -137,6 +137,20 @@ export function listPours() {
   return load().pours.slice().sort((a, b) => String(b.at || '').localeCompare(String(a.at || '')));
 }
 
+// 这一条递出去多久了（毫秒）。拿不准就返回 null，别瞎猜。
+//
+// sentAt 是毫秒戳，新记录都带；老记录只有 at（「2026-10-13 13:09」这种墙上时间），
+// 退回字符串解析。2026-10-13：原来只靠 Date.parse，服务器时区下解析失败时
+// 我那个保守分支会当成「没过期」放行，结果他 16:12 还在试上午那杯。
+function offerAgeMs(row, now = Date.now()) {
+  const sent = Number(row?.sentAt);
+  if (Number.isFinite(sent) && sent > 0) return now - sent;
+  const raw = String(row?.at || '').trim();
+  if (!raw) return null;
+  const t = Date.parse(raw.includes('T') ? raw : raw.replace(' ', 'T'));
+  return Number.isFinite(t) ? now - t : null;
+}
+
 // 还在吧台上、没过期的那几杯。
 // 这是我们自己记的，不需要 Proof 在线。菜单没有兜底——那只有 Proof 知道。
 //
@@ -148,11 +162,22 @@ export function localPendingOffers({ includeStale = false } = {}) {
     .pours.filter((p) => {
       if (!p.pending || !p.offerId) return false;
       if (includeStale) return true;
-      const at = Date.parse(String(p.at || '').replace(' ', 'T'));
-      if (!Number.isFinite(at)) return true; // 时间读不出来就别挤掉它
-      return now - at < OFFER_TTL_MS;
+      const age = offerAgeMs(p, now);
+      if (age == null) return false; // 连多久都算不出来，就别端给他
+      return age < OFFER_TTL_MS;
     })
     .map((p) => ({ offerId: p.offerId, name: p.name || '无名的一杯', intro: p.intro || '' }));
+}
+
+// 本地判断已经凉了、但账本里还挂着 pending 的那几杯。
+// 对不上 Proof（连不上、字段不认）时用它兜底，别让页面一直写「还在吧台上放着」。
+export function localStaleOffers() {
+  const now = Date.now();
+  return load().pours.filter((p) => {
+    if (!p.pending || !p.offerId) return false;
+    const age = offerAgeMs(p, now);
+    return age == null || age >= OFFER_TTL_MS;
+  });
 }
 
 // 记一杯。只有 by==='self'（深夜醒来自斟）计进连续夜数
@@ -385,12 +410,14 @@ export function recordChatPour(drinkId, result) {
 }
 
 // 你刚递出去，还没喝。页面上先显示「等他来喝」。
-// parts 就是表单里那些原料，存下来让时间轴上点开能看见配方
+// parts 就是表单里那些原料，存下来让时间轴上点开能看见配方。
+// sentAt 是毫秒戳，判断有没有凉的时候用它，比解析墙上时间稳
 export function recordOfferSent(offerId, name, intro, parts) {
   const recipe = normalizeRecipe(parts);
   record({
     by: 'her',
     offerId,
+    sentAt: Date.now(),
     name: name || '无名的一杯',
     intro: intro || '',
     ...(recipe ? { recipe } : {}),
@@ -461,21 +488,22 @@ export async function reconcileOffers() {
     out = await humanOffers();
   } catch (err) {
     console.error('proof: 对账失败（账本保持原样）', err.message);
-    return { checked: pending.length, drunk: 0, rejected: 0, expired: 0, error: err.message };
-  }
-  if (!out || out.ok === false || !Array.isArray(out.offers)) {
-    return { checked: pending.length, drunk: 0, rejected: 0, expired: 0, error: out?.error || 'no_offers' };
+    out = null;
   }
 
-  const byId = new Map(out.offers.map((o) => [String(o.id), o]));
+  const offers = out && out.ok !== false && Array.isArray(out.offers) ? out.offers : null;
+  const byId = offers ? new Map(offers.map((o) => [String(o.id), o])) : null;
+
   let drunk = 0;
   let rejected = 0;
   let expired = 0;
+  const now = Date.now();
+
   for (const row of pending) {
-    const remote = byId.get(String(row.offerId));
-    if (!remote) continue; // Proof 还没结算或已经清掉了，别动
-    const status = String(remote.status || '');
-    if (DRUNK.test(status)) {
+    const remote = byId?.get(String(row.offerId));
+    const status = String(remote?.status || '');
+
+    if (remote && DRUNK.test(status)) {
       const v = readProjection(remote);
       delete row.pending;
       row.drunkAt = formatDateTime();
@@ -484,18 +512,27 @@ export async function reconcileOffers() {
       if (!row.intro && v.intro) row.intro = v.intro;
       if (!row.recipe && v.recipe) row.recipe = v.recipe;
       drunk++;
-    } else if (REJECTED.test(status)) {
+      continue;
+    }
+    if (remote && REJECTED.test(status)) {
       delete row.pending;
       row.rejected = true;
       rejected++;
-    } else if (EXPIRED.test(status)) {
-      // 凉了。不是他拒的，也不是他喝了——是没来得及
+      continue;
+    }
+    // 凉了。不是他拒的，也不是他喝了——是没来得及。
+    // Proof 明说 expired，或者本地时间已经超过 TTL（Proof 连不上时的兜底）
+    const age = offerAgeMs(row, now);
+    const staleLocally = age == null || age >= OFFER_TTL_MS;
+    if ((remote && EXPIRED.test(status)) || (!remote && staleLocally) || staleLocally) {
       delete row.pending;
       row.expired = true;
       row.expiredAt = formatDateTime();
       expired++;
     }
+    // 其余情况：Proof 还没结算，还在有效期内，别动
   }
+
   if (drunk || rejected || expired) {
     try {
       save(db);
@@ -504,7 +541,7 @@ export async function reconcileOffers() {
       console.error('proof: 对账后写不下来', err.message);
     }
   }
-  return { checked: pending.length, drunk, rejected, expired };
+  return { checked: pending.length, drunk, rejected, expired, offline: !offers };
 }
 
 export function configSummary() {
