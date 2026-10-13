@@ -5,6 +5,7 @@ import { StringDecoder } from 'string_decoder';
 import { addConversationMessage, getRecentConversation, logCaptureWarning } from './state.js';
 import { getSharedContext, formatContextText } from './context.js';
 import { isDrivesEnabled, reportUserMessage, reportAssistantMessage } from './drives.js';
+import { applyProof } from './proof-gateway.js';
 
 const app = express();
 app.use(express.json({ limit: '10mb' }));
@@ -38,7 +39,7 @@ const routingTable = {
   chat: clientUpstream,
   'vesper-decide': { source: 'decide.js', ...decideUpstream },
   // 另一个唤醒项目（heartbeat）自己醒来时用这条（它的 .env 里 MODEL_NAME=heartbeat-wake）。
-  // 上游和 vesper-decide 一样，区别是会把请求里的"最近记录"换成跨窗口的共享上下文，
+  // 上游和 vesper-decide 一样，区别是会把请求里的"最近记录"换成跳窗口的共享上下文，
   // 这样两边看到的是同一份，换了聊天窗口也不会丢。
   'heartbeat-wake': { source: 'heartbeat', injectSharedContext: true, ...decideUpstream },
 };
@@ -118,7 +119,7 @@ function recordUserMessage(messages) {
 }
 
 // heartbeat 醒来时发的 user 消息里有一段"最近记录："，后面是它从自己时间线文件里拼的聊天。
-// 那个文件只有当前窗口的内容，换窗口就丢。这里把标记后面的内容换成跨窗口的共享上下文，
+// 那个文件只有当前窗口的内容，换窗口就丢。这里把标记后面的内容换成跳窗口的共享上下文，
 // 和 phosphor 做决定时读的是同一份。找不到标记或共享上下文是空的，就原样转发。
 const HISTORY_MARKER = '最近记录：';
 const HEARTBEAT_CONTEXT_LIMIT = Number(process.env.HEARTBEAT_CONTEXT_LIMIT) || 30;
@@ -288,9 +289,21 @@ app.post('/v1/chat/completions', requireGatewayAuth, async (req, res) => {
   const recordConversation = route.source === 'client';
   if (recordConversation) recordUserMessage(req.body.messages);
 
-  const messages = route.injectSharedContext
+  let messages = route.injectSharedContext
     ? injectSharedContext(req.body.messages)
     : req.body.messages;
+
+  // 小酒馆（见 proof-gateway.js）：只管聊天这条线路。
+  // 每轮读一次 Proof 状态追在输入末尾；断片期间把那段从模型可见输入里摘掉。
+  // 读不到 Proof 就原样转发，只打一行警告——不能把「读不到状态」假装成「没喝酒」。
+  if (recordConversation) {
+    try {
+      messages = await applyProof(messages);
+    } catch (err) {
+      console.error('gateway: 小酒馆这轮没生效，原样转发:', err.message);
+    }
+  }
+
   const upstreamBody = { ...req.body, messages, model: route.upstreamModel };
 
   try {

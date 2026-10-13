@@ -1,5 +1,5 @@
 // 几个页面共用的外框：右上角的三条杠菜单，换页、换日期时的星星转场，早晚两张脸，以及那几处活起来的细节。
-// 主页、动态页、自定义页、心绪页、日记页、梦境页、小钱包、收藏页、星星罐，以及转发过来的记忆库（Ombre Brain 管理页）都从这里拿，
+// 主页、动态页、自定义页、心绪页、日记页、梦境页、小酒馆、小钱包、收藏页、星星罐，以及转发过来的记忆库（Ombre Brain 管理页）都从这里拿，
 // 改一处几个页面一起变。
 //
 // 菜单分三段：最上面「回到主页」、最下面「自定义」钉住不动，中间那些路径可以滑（一眼看三项）。
@@ -44,6 +44,11 @@ export function diaryDir() {
   return env('HEARTBEAT_DIARY_DIR');
 }
 
+// 小酒馆（Proof）配好了没有。填了 token 文件才有站内页 /bar；判断口径和 proof.js 一致
+export function barEnabled() {
+  return Boolean(env('PROOF_AGENT_TOKEN_FILE'));
+}
+
 // Ombre Brain 管理页在本机的地址，vesper 把它转发到 /memory/。
 // 没填 OMBRE_DASHBOARD_URL 就用 OMBRE_BRAIN_URL 的地址（只取协议、主机和端口，去掉 /mcp）；填 off 不转发
 export function ombreDashboardBase() {
@@ -65,7 +70,8 @@ export function ombreDashboardBase() {
 // 日记、记忆库优先用站内页面；没配站内页面时可以用 NAV_DIARY_URL / NAV_MEMORY_URL 跳外部地址，
 // 都没配就显示成灰色「没配置」。
 // 论坛是给人看的网页（比如 Lutopia 社区首页），填 NAV_FORUM_URL 才能点；和 TA 自己连论坛用的 LUTOPIA_MCP_URL 无关。
-// 音乐是另一个程序的页面，填 NAV_MUSIC_URL：同域名下的路径（/music）或完整地址都行
+// 音乐是另一个程序的页面，填 NAV_MUSIC_URL：同域名下的路径（/music）或完整地址都行。
+// 小酒馆排在音乐下面（小满定的位置）：配了 Proof 才能点，没配是灰色「没配置」
 function navGroups() {
   const diary = diaryDir()
     ? { href: '/diary', label: '日记' }
@@ -73,6 +79,9 @@ function navGroups() {
   const memory = ombreDashboardBase()
     ? { href: '/memory/', label: '记忆库' }
     : { href: externalUrl('NAV_MEMORY_URL'), label: '记忆库', external: true, note: '没配置' };
+  const bar = barEnabled()
+    ? { href: '/bar', label: '小酒馆' }
+    : { href: '', label: '小酒馆', note: '没配置' };
   return {
     top: [{ href: '/home', label: '回到主页' }],
     scroll: [
@@ -80,6 +89,7 @@ function navGroups() {
       diary,
       { href: '/dreams', label: '梦境' },
       { href: externalUrl('NAV_MUSIC_URL', { allowPath: true }), label: '音乐', external: true, note: '没配置' },
+      bar,
       { href: '/drives', label: '心绪' },
       memory,
       { href: '/wallet', label: '小钱包' },
