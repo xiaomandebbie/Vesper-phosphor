@@ -4,7 +4,11 @@
 //
 // **递的杯子要「领」（claim），不是「喝 offerId」。**
 // Proof 的约定：归属在饮用时确定，只有经过 /agent/offers/claim 才进他的引擎。
-// 2026-10-13 整天那个 not_found 就是因为我让他走 /agent/offers/:id/drink——那个必然 404。
+//
+// 拒绝和凉了是两回事，账本里必须分开：
+//   他说不喝 → rejected。就算那一瞬 Proof 那边杯子已经没了，他的选择也是真的。
+//   没人动过 → expired。
+// 2026-10-13 踩过坑：拒绝失败时我把它标成了凉了，看起来像他根本没表态。
 import {
   claimOffer,
   rejectCapability,
@@ -70,41 +74,45 @@ export async function handleBarOffers(decision) {
       skipped++;
       continue;
     }
-    if (!row.token) {
-      // 老记录没存 token（那时还在走错的接口）——领不了，划掉
-      console.log(`bar-offers: 「${row.name}」没存领取凭证（老记录），划掉`);
-      markOfferGone(offerId, '没存 capability token，领不了');
-      skipped++;
-      continue;
-    }
 
+    // 不喝。他的选择就是事实——哪怕 Proof 那边杯子已经没了，也记 rejected，不记凉了
     if (action === 'reject') {
+      if (!row.token) {
+        markOfferRejected(offerId, '他说不喝（这杯没存领取凭证，没能告诉 Proof）');
+        rejected++;
+        console.log(`bar-offers: ${AI_NAME}没喝「${row.name}」（本地记下）`);
+        continue;
+      }
       let out;
       try {
         out = await rejectCapability(row.token);
       } catch (err) {
-        console.error(`bar-offers: 退不掉「${row.name}」`, err.message);
-        skipped++;
+        console.error(`bar-offers: 退的时候出错「${row.name}」`, err.message);
+        markOfferRejected(offerId, `他说不喝（告诉 Proof 时出错：${err.message}）`);
+        rejected++;
         continue;
       }
       if (!out || out.ok === false) {
         const why = out?.detail || out?.error || `HTTP ${out?.status ?? '?'}`;
-        console.error(`bar-offers: 退不掉「${row.name}」：${why}`);
-        if (isGone(out)) markOfferGone(offerId, `退的时候 Proof 回：${why}`);
-        skipped++;
+        // 杯子已经不在了也算拒——别把他的表态显示成「没来得及」
+        markOfferRejected(offerId, `他说不喝${isGone(out) ? `（那时这杯已经不在了：${why}）` : `（Proof 回：${why}）`}`);
+        rejected++;
+        console.log(`bar-offers: ${AI_NAME}没喝「${row.name}」（${why}）`);
         continue;
       }
-      try {
-        markOfferRejected(offerId);
-      } catch (err) {
-        console.error('bar-offers: 账本没记上', err.message);
-      }
+      markOfferRejected(offerId);
       rejected++;
       console.log(`bar-offers: ${AI_NAME}没喝「${row.name}」，放回去了`);
       continue;
     }
 
-    // 领走并喝下。这是唯一正确的入口
+    // 喝。这边不能宽容：没真喝到就不能记成喝了
+    if (!row.token) {
+      console.log(`bar-offers: 「${row.name}」没存领取凭证（老记录），划掉`);
+      markOfferGone(offerId, '没存 capability token，领不了');
+      skipped++;
+      continue;
+    }
     let out;
     try {
       out = await claimOffer(row.token);
