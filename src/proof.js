@@ -13,6 +13,11 @@
 //   「连续几夜自斟」是晨暮星的规矩，不是 Proof 的生理事实，所以记在自己这边。
 //   页面上的时间轴也一样：Proof 的 history 不保证长期保留，我们自己留一份。
 //
+// 三种杯子（账本里的 by 字段）：
+//   self —— 深夜醒来自己倒的。只有这种算进连续夜数。
+//   her  —— 你在 /bar 递过去的。
+//   chat —— 聊天里通过 MCP 自己点的。你在旁边陪着，不吃节制规则。
+//
 // 存 JSON 不建表：一晚最多几杯，这点量用不着动 state.db 的 schema。
 import fs from 'fs';
 import path from 'path';
@@ -101,7 +106,7 @@ export function listPours() {
   return load().pours.slice().sort((a, b) => String(b.at || '').localeCompare(String(a.at || '')));
 }
 
-// 记一杯。by: 'her'（你递的）| 'self'（他自己倒的）
+// 记一杯。只有 by==='self'（深夜醒来自斟）计进连续夜数
 function record(entry) {
   const db = load();
   const night = entry.night || nightKey();
@@ -135,7 +140,7 @@ export function drankTonight(today = nightKey()) {
 }
 
 // 这一夜他能不能自己倒酒，以及要不要带一句提醒。
-// 只管自斟：你递过来的杯子不受这个限制——那是你的事，不是他的节制。
+// 只管深夜醒来那杯：你递的、聊天里陪你喝的，都不走这条路。
 export function selfPourGate(parts = wallParts()) {
   const night = nightKey(parts);
   const streak = selfStreakBefore(night);
@@ -208,11 +213,19 @@ export const agentHome = () => request('/agent/home');
 // 这一轮的状态投影。网关每轮都读它（见 proof-gateway.js）
 export const turnContext = () => request('/agent/turn-context');
 
-// 喝菜单上的一杯（自斟）
+// 喝菜单上的一杯
 export const drinkMenu = (drinkId) =>
   request(`/agent/menu/${encodeURIComponent(drinkId)}/drink`, { method: 'POST', body: {} });
 
-// 收拾干净，能接着喝。不删历史
+// 喝 / 拒绝递到吧台上的那杯
+export const drinkOffer = (offerId) =>
+  request(`/agent/offers/${encodeURIComponent(offerId)}/drink`, { method: 'POST', body: {} });
+export const rejectOffer = (offerId) =>
+  request(`/agent/offers/${encodeURIComponent(offerId)}/reject`, { method: 'POST', body: {} });
+
+// 收拾干净，能接着喝。不删历史。
+// 注意：聊天的 MCP 里没有这个工具（见 bar-mcp.js）——随手能解酒的话，节制和断片就都没意义了。
+// 要清就你在页面上清。
 export const reset = () => request('/agent/reset', { method: 'POST', body: {} });
 
 // 你递出去的那些杯子现在是什么状态（human 侧的历史列表）
@@ -239,10 +252,17 @@ function readProjection(result) {
   };
 }
 
-// 他自己倒的一杯
+// 深夜醒来自己倒的一杯。只有这个计进连续夜数
 export function recordSelfPour(drinkId, result, mood) {
   const v = readProjection(result);
   record({ by: 'self', drinkId, mood: mood || '', ...v });
+  return v;
+}
+
+// 聊天里自己点的一杯（走 /bar/mcp）。你在旁边陪着，所以不计进连续夜数
+export function recordChatPour(drinkId, result) {
+  const v = readProjection(result);
+  record({ by: 'chat', drinkId, ...v });
   return v;
 }
 
@@ -251,8 +271,48 @@ export function recordOfferSent(offerId, name, intro) {
   record({ by: 'her', offerId, name: name || '无名的一杯', intro: intro || '', pending: true });
 }
 
+// 他在聊天里喝了你递的那杯：把那条「等他来喝」改成已喝。
+// 找不到就当一杯新的记（比如你在 Proof 自己的页面上递的，我们这边没有底稿）
+export function markOfferDrunk(offerId, result) {
+  const db = load();
+  const row = db.pours.find((x) => x.offerId === offerId && x.pending);
+  const v = readProjection(result);
+  if (!row) {
+    record({ by: 'her', offerId, ...v });
+    return v;
+  }
+  delete row.pending;
+  row.drunkAt = formatDateTime();
+  row.flavor = v.flavor;
+  row.effect = v.effect;
+  if (!row.intro && v.intro) row.intro = v.intro;
+  try {
+    save(db);
+  } catch (err) {
+    console.error('proof: 账本写不下来', err.message);
+  }
+  return v;
+}
+
+// 他拒了你递的那杯
+export function markOfferRejected(offerId) {
+  const db = load();
+  const row = db.pours.find((x) => x.offerId === offerId && x.pending);
+  if (!row) {
+    record({ by: 'her', offerId, rejected: true });
+    return;
+  }
+  delete row.pending;
+  row.rejected = true;
+  try {
+    save(db);
+  } catch (err) {
+    console.error('proof: 账本写不下来', err.message);
+  }
+}
+
 // ══ 对账 ══
-// 他喝不喝是在聊天里通过 MCP 决定的，晨暮星这边收不到通知。
+// 他也可能在别的客户端里喝（比如直接跑 agent-cli），那边晨暮星收不到通知。
 // 所以每次打开 /bar 时跟 Proof 对一次账：哪几杯已经喝了、哪几杯被拒了。
 // 对不上（Proof 连不上、字段不认识）就保持原样，不瞎改账本。
 const DRUNK = /consumed|drunk|drank/i;
