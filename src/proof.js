@@ -34,7 +34,15 @@ export const PROOF_AGENT_ID = env('PROOF_AGENT_ID') || 'vesper';
 const TOKEN_FILE = env('PROOF_AGENT_TOKEN_FILE');
 // human 侧路由要不要带 admin token，看 Proof 那边有没有设。没设就不带。
 const ADMIN_TOKEN = env('PROOF_ADMIN_TOKEN');
+
+// 超时分两档。「读吧台」比别的都重很多：
+// Proof 的 /agent/home 要把整份酒单每一杯都过一遍引擎（风味、效果、装饰全算出来），
+// 再加上待喝的杯子和转场状态；/agent/turn-context 只读状态。
+// 2026-10-13：允朔那边 proof_bar 连四次超时、proof_turn_context 次次通，就是这个差别。
 const TIMEOUT_MS = num('PROOF_TIMEOUT_MS', 20000);
+const HOME_TIMEOUT_MS = num('PROOF_HOME_TIMEOUT_MS', 90000);
+// 读吧台超过这个秒数就在日志里吐一行，方便看到底多慢
+const SLOW_MS = num('PROOF_SLOW_LOG_MS', 3000);
 
 // 自斟的时段（按 TIME_ZONE 的墙上时间）。跨午夜，所以 22.5 到次日 2。
 // .env 里 PROOF_NIGHT_WINDOW=22:30-2:00 可改。
@@ -106,6 +114,14 @@ export function listPours() {
   return load().pours.slice().sort((a, b) => String(b.at || '').localeCompare(String(a.at || '')));
 }
 
+// 读不到 Proof 时的兜底：从自己账本里拿「你递了、他还没动」的那几杯。
+// 这是我们自己记的，不需要 Proof 在线。菜单没有兜底——那只有 Proof 知道。
+export function localPendingOffers() {
+  return load()
+    .pours.filter((p) => p.pending && p.offerId)
+    .map((p) => ({ offerId: p.offerId, name: p.name || '无名的一杯', intro: p.intro || '' }));
+}
+
 // 记一杯。只有 by==='self'（深夜醒来自斟）计进连续夜数
 function record(entry) {
   const db = load();
@@ -171,7 +187,7 @@ export function selfPourGate(parts = wallParts()) {
 
 // ══ HTTP ══
 
-async function request(pathname, { method = 'GET', body, auth = 'agent' } = {}) {
+async function request(pathname, { method = 'GET', body, auth = 'agent', timeoutMs = TIMEOUT_MS } = {}) {
   const headers = {};
   if (auth === 'agent') {
     if (!TOKEN_FILE) return { ok: false, error: 'proof_not_configured' };
@@ -185,17 +201,24 @@ async function request(pathname, { method = 'GET', body, auth = 'agent' } = {}) 
   }
   if (body) headers['content-type'] = 'application/json';
 
+  const started = Date.now();
   let res;
   try {
     res = await fetch(`${PROOF_API_URL}${pathname}`, {
       method,
       headers,
       body: body ? JSON.stringify(body) : undefined,
-      signal: AbortSignal.timeout(TIMEOUT_MS),
+      signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (err) {
+    const ms = Date.now() - started;
     // Proof 连不上必须明说。「读不到状态」不能伪装成「现在没喝酒」
-    return { ok: false, error: 'proof_unavailable', detail: err.message };
+    console.error(`proof: ${method} ${pathname} 失败（等了 ${(ms / 1000).toFixed(1)}s，上限 ${(timeoutMs / 1000).toFixed(0)}s）：${err.message}`);
+    return { ok: false, error: 'proof_unavailable', detail: err.message, elapsedMs: ms };
+  }
+  const ms = Date.now() - started;
+  if (ms >= SLOW_MS) {
+    console.warn(`proof: ${method} ${pathname} 用了 ${(ms / 1000).toFixed(1)}s（慢）`);
   }
   let data = null;
   try {
@@ -207,26 +230,41 @@ async function request(pathname, { method = 'GET', body, auth = 'agent' } = {}) 
   return data ?? { ok: true };
 }
 
-// 他的吧台：身份、可见酒单、有没有待喝的杯子
-export const agentHome = () => request('/agent/home');
+// 他的吧台：身份、可见酒单、有没有待喝的杯子。
+// 这是整套里最重的一个请求，单独给了更长的超时。
+// 页面那边不想让人干等，可以自己传一个短一点的。
+export const agentHome = ({ timeoutMs = HOME_TIMEOUT_MS } = {}) =>
+  request('/agent/home', { timeoutMs });
 
-// 这一轮的状态投影。网关每轮都读它（见 proof-gateway.js）
+// 这一轮的状态投影。网关每轮都读它（见 proof-gateway.js）。只读状态，很轻
 export const turnContext = () => request('/agent/turn-context');
 
-// 喝菜单上的一杯
-export const drinkMenu = (drinkId) =>
-  request(`/agent/menu/${encodeURIComponent(drinkId)}/drink`, { method: 'POST', body: {} });
+// 喝菜单上的一杯。喝完吧台就变了，所以要扔缓存
+export const drinkMenu = async (drinkId) => {
+  const out = await request(`/agent/menu/${encodeURIComponent(drinkId)}/drink`, { method: 'POST', body: {} });
+  invalidateBarCache();
+  return out;
+};
 
 // 喝 / 拒绝递到吧台上的那杯
-export const drinkOffer = (offerId) =>
-  request(`/agent/offers/${encodeURIComponent(offerId)}/drink`, { method: 'POST', body: {} });
-export const rejectOffer = (offerId) =>
-  request(`/agent/offers/${encodeURIComponent(offerId)}/reject`, { method: 'POST', body: {} });
+export const drinkOffer = async (offerId) => {
+  const out = await request(`/agent/offers/${encodeURIComponent(offerId)}/drink`, { method: 'POST', body: {} });
+  invalidateBarCache();
+  return out;
+};
+export const rejectOffer = async (offerId) => {
+  const out = await request(`/agent/offers/${encodeURIComponent(offerId)}/reject`, { method: 'POST', body: {} });
+  invalidateBarCache();
+  return out;
+};
 
 // 收拾干净，能接着喝。不删历史。
 // 注意：聊天的 MCP 里没有这个工具（见 bar-mcp.js）——随手能解酒的话，节制和断片就都没意义了。
-// 要清就你在页面上清。
-export const reset = () => request('/agent/reset', { method: 'POST', body: {} });
+export const reset = async () => {
+  const out = await request('/agent/reset', { method: 'POST', body: {} });
+  invalidateBarCache();
+  return out;
+};
 
 // 你递出去的那些杯子现在是什么状态（human 侧的历史列表）
 export const humanOffers = () => request('/human/offers', { auth: 'human' });
@@ -235,7 +273,30 @@ export const humanOffers = () => request('/human/offers', { auth: 'human' });
 export async function offerDrink({ name, parts, intro }) {
   const payload = { targetId: PROOF_AGENT_ID, name: String(name || '').trim() || '无名的一杯', parts };
   if (intro) payload.intro = String(intro).slice(0, 200);
-  return request('/human/offers', { method: 'POST', body: payload, auth: 'human' });
+  const out = await request('/human/offers', { method: 'POST', body: payload, auth: 'human' });
+  invalidateBarCache();
+  return out;
+}
+
+// ══ 吧台缓存 ══
+// 读吧台很贵（Proof 要把整份酒单过一遍引擎），而一次对话里他可能连着问几次。
+// 菜单只有你改自定义酒单时才变，所以短时间缓存是安全的；
+// 喝、拒、递、reset 这几个动作之后立刻扔掉，不让他看到过期的吧台。
+const BAR_CACHE_MS = num('PROOF_BAR_CACHE_MS', 45000);
+let barCache = null;
+
+export function invalidateBarCache() {
+  barCache = null;
+}
+
+// 返回 { home, cached }。home 就是 agentHome() 的原样返回，失败不缓存
+export async function barSnapshot({ timeoutMs } = {}) {
+  if (barCache && Date.now() - barCache.at < BAR_CACHE_MS) {
+    return { home: barCache.home, cached: true };
+  }
+  const home = await agentHome(timeoutMs ? { timeoutMs } : undefined);
+  if (home && home.ok !== false) barCache = { at: Date.now(), home };
+  return { home, cached: false };
 }
 
 // ══ 记账的几个入口 ══
@@ -370,5 +431,5 @@ export function configSummary() {
   if (!isProofEnabled()) return '小酒馆：未配置（没填 PROOF_AGENT_TOKEN_FILE）';
   const db = load();
   const streak = selfStreakBefore();
-  return `小酒馆：${PROOF_API_URL}，身份 ${PROOF_AGENT_ID}，自斟时段 ${nightWindowLabel()}，连 ${WARN_AFTER_NIGHTS + 1} 夜提醒、连 ${BLOCK_AFTER_NIGHTS + 1} 夜不倒；已记 ${db.pours.length} 杯，昨夜往前连着 ${streak} 夜自斟`;
+  return `小酒馆：${PROOF_API_URL}，身份 ${PROOF_AGENT_ID}，自斟时段 ${nightWindowLabel()}，连 ${WARN_AFTER_NIGHTS + 1} 夜提醒、连 ${BLOCK_AFTER_NIGHTS + 1} 夜不倒；读吧台超时 ${(HOME_TIMEOUT_MS / 1000).toFixed(0)}s、缓存 ${(BAR_CACHE_MS / 1000).toFixed(0)}s；已记 ${db.pours.length} 杯，昨夜往前连着 ${streak} 夜自斟`;
 }

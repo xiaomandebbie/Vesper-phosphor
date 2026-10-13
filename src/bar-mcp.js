@@ -13,6 +13,11 @@
 //
 // 还有一件：聊天里喝的那杯不吃「连续几夜」节制规则。
 // 那条规则管的是深夜他一个人醒来倒的那杯；聊天里小满在旁边，是两回事。
+//
+// 2026-10-13：读吧台曾连着超时四次。原因是 Proof 的 /agent/home 要把整份酒单
+// 每一杯都过一遍引擎，比 /agent/turn-context 重很多。现在：更长的超时（见 proof.js）、
+// 短时间缓存、以及读不到时降级成「菜单没读到，但你递的杯子还在」——
+// 而不是整个工具失败。他至少还能喝你递的那杯。
 
 import crypto from 'crypto';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
@@ -20,7 +25,7 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import {
   isProofEnabled,
-  agentHome,
+  barSnapshot,
   turnContext,
   drinkMenu,
   drinkOffer,
@@ -28,6 +33,7 @@ import {
   recordChatPour,
   markOfferDrunk,
   markOfferRejected,
+  localPendingOffers,
   nightWindowLabel,
 } from './proof.js';
 
@@ -49,7 +55,8 @@ const TOOLS = [
     name: 'proof_bar',
     description:
       `看一眼吧台：现在能点的酒（每款带一个 drinkId，点酒要用它）、` +
-      `${USER_NAME}递过来还没动的杯子（带 offerId）。只读，不喝东西。不需要参数。`,
+      `${USER_NAME}递过来还没动的杯子（带 offerId）。只读，不喝东西。不需要参数。` +
+      `读吧台要把整份酒单算一遍，慢的时候要等十几秒，这是正常的。`,
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
   {
@@ -109,8 +116,28 @@ async function callBarTool(name, args) {
   const a = args && typeof args === 'object' ? args : {};
 
   if (name === 'proof_bar') {
-    const home = await agentHome();
-    if (!home || home.ok === false) return fail(`吧台读不到：${errOf(home)}`);
+    const { home, cached } = await barSnapshot();
+    // 读不到菜单不等于什么都做不了：你递的杯子在我们自己账本里有底稿。
+    // 所以这里降级而不是失败——他至少还能喝你递的那杯。
+    if (!home || home.ok === false) {
+      const local = localPendingOffers();
+      if (!local.length) {
+        return fail(
+          `吧台读不到：${errOf(home)}。` +
+          `菜单这次没拿到，${USER_NAME}也没有递过来等着的杯子。过一会儿再试。`
+        );
+      }
+      return json({
+        degraded: true,
+        reason: errOf(home),
+        menu: null,
+        pendingOffers: local,
+        note:
+          `菜单这次没读到（Proof 那边没响应），但${USER_NAME}递过来的杯子还在：` +
+          `用 proof_offer_drink 喝、proof_offer_reject 拒。` +
+          `想点菜单上的酒，过一会儿再试 proof_bar。`,
+      });
+    }
     const menu = Array.isArray(home.menu) ? home.menu : [];
     const offers = Array.isArray(home.offers) ? home.offers.filter((o) => o.status === 'pending') : [];
     return json({
@@ -121,6 +148,7 @@ async function callBarTool(name, args) {
         name: o.projection?.claimedName || o.name || '无名的一杯',
         intro: o.projection?.intro ?? null,
       })),
+      ...(cached ? { fromCache: true } : {}),
       note:
         `菜单上的酒用 proof_drink 点；${USER_NAME}递的杯子用 proof_offer_drink 喝、` +
         `proof_offer_reject 拒。深夜 ${nightWindowLabel()} 你自己醒来时还能再倒一杯，那是别的路。`,
@@ -215,8 +243,12 @@ function newServer() {
   server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS }));
   server.setRequestHandler(CallToolRequestSchema, async (req) => {
     const { name, arguments: args } = req.params;
+    const started = Date.now();
     try {
-      return await callBarTool(name, args);
+      const out = await callBarTool(name, args);
+      const ms = Date.now() - started;
+      if (ms >= 3000) console.warn(`bar-mcp: ${name} 用了 ${(ms / 1000).toFixed(1)}s`);
+      return out;
     } catch (err) {
       // 一个工具出错不该把整个 MCP 连接弄挂
       console.error(`bar-mcp: ${name} 出错`, err.message);
@@ -246,6 +278,12 @@ export function registerBarMcp(app) {
         id: null,
       });
     }
+
+    // 读吧台最多要等 90 秒（见 proof.js 的 HOME_TIMEOUT_MS），
+    // Node 默认的响应超时会在那之前把连接切掉。这里把它关掉，
+      // 由 Proof 谁先超时谁说话。
+    req.setTimeout?.(0);
+    res.setTimeout?.(0);
 
     const server = newServer();
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
