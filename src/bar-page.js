@@ -6,6 +6,10 @@
 //   酒架——原料清单和经典配方，点一下直接填进表单
 //   时间轴——按夜分组，谁递的、什么味道、当时什么心情
 //
+// 调酒和酒架都是 <details>，默认收着（小满 2026-10-13 定：版面太长，
+// 历史记录要翻好久才看到）。和批注、日历、星星罐那几处一个做法。
+// 递完或者出错时自动张开（open），不然看不到那句回执。
+//
 // 原料表和配方是从 Proof 内容包（docs/content/原料表.md）抄过来的一份快捷清单，
 // 只为了不用记名字。**真正的判定在 Proof 那边**：它换了内容包，这里就可能对不上，
 // 填错了它会把错误原文回给我们，页面原样显示。所以这份清单是「提示」，不是「校验」。
@@ -223,7 +227,7 @@ function renderShelf() {
   }).join('');
 
   return `<section class="shelf">
-    <details class="sh">
+    <details class="sh" id="shRecipes">
       <summary>🍸 经典配方（点一下直接填好）</summary>
       <div class="recipes">${recipes}</div>
       <p class="hint">名字不会自动填——起个只有你们懂的名字比照搬好。</p>
@@ -245,10 +249,12 @@ function renderShelf() {
   </section>`;
 }
 
+// 调酒台。整块收进 <details>：平时只一行，往下就是时间轴。
+// 刚递完或者出错时自动张开，不然看不到回执
 function renderForm(flash) {
   const msg = flash ? `<p class="flash${flash.ok ? '' : ' bad'}">${esc(flash.text)}</p>` : '';
-  return `<section class="mix">
-    <h2 class="mix-title">调一杯递给他</h2>
+  return `<details class="mix sh" id="mixBox"${flash ? ' open' : ''}>
+    <summary>🍹 调一杯递给他</summary>
     ${msg}
     <form method="post" action="/bar/pour" class="mix-form" id="mixForm">
       <label class="f"><span>叫什么</span>
@@ -267,7 +273,7 @@ function renderForm(flash) {
       <button type="submit" class="go">递过去</button>
     </form>
     <p class="mix-note">递过去不等于他喝了。他可以拒绝；喝下去之后 Proof 才结算。</p>
-  </section>`;
+  </details>`;
 }
 
 // 点原料片、点经典配方、加行、清空。没有 JavaScript 时表单照样能手填
@@ -275,6 +281,7 @@ const FORM_SCRIPT = `(function () {
   var form = document.getElementById('mixForm');
   if (!form) return;
   var rows = Array.prototype.slice.call(document.querySelectorAll('#rows .r'));
+  var mixBox = document.getElementById('mixBox');
 
   function idInput(row) { return row.querySelector('input[data-id]'); }
   function volInput(row) { return row.querySelector('input[data-v]'); }
@@ -296,10 +303,16 @@ const FORM_SCRIPT = `(function () {
     }
   }
 
-  // 原料片：加进第一个空行，带上它的常用量
+  // 选了原料或配方就把调酒台张开，不然填进去也看不见
+  function openMix() {
+    if (mixBox && !mixBox.open) mixBox.open = true;
+  }
+
   document.addEventListener('click', function (e) {
+    // 原料片：加进第一个空行，带上它的常用量
     var chip = e.target.closest ? e.target.closest('.chip') : null;
     if (chip) {
+      openMix();
       var row = firstEmpty();
       if (!row) return;
       idInput(row).value = chip.getAttribute('data-ing') || '';
@@ -313,6 +326,7 @@ const FORM_SCRIPT = `(function () {
       var parts;
       try { parts = JSON.parse(rec.getAttribute('data-recipe') || '[]'); }
       catch (err) { return; }
+      openMix();
       for (var i = 0; i < rows.length; i++) {
         idInput(rows[i]).value = '';
         volInput(rows[i]).value = '';
@@ -388,9 +402,10 @@ const STYLE = `
   .counter-line b { color: var(--accent); }
   .counter-sub { margin: 8px 0 0; font-size: 12px; color: var(--gold); line-height: 1.7; }
 
-  .mix { margin-bottom: 14px; }
-  .mix-title { margin: 0 0 12px; font-size: 15px; font-weight: 600; letter-spacing: 0.1em; color: var(--accent); }
-  .mix-form { display: grid; gap: 12px; }
+  /* 调酒台收起时就是一行，所以内边距比其他卡片稍紧 */
+  .mix { padding: 4px 18px; }
+  .mix[open] { padding: 10px 18px 16px; }
+  .mix-form { display: grid; gap: 12px; margin-top: 4px; }
   .f { display: grid; gap: 5px; font-size: 12.5px; color: var(--muted); }
   .f input, .r input { font-family: inherit; font-size: 16px; color: var(--ink);
     background: color-mix(in srgb, #fff 70%, transparent); border: 1px solid var(--line);
@@ -413,15 +428,15 @@ const STYLE = `
     background: var(--accent); border: none; border-radius: 13px; min-height: 46px; cursor: pointer; }
   .go:active { opacity: 0.88; }
   .mix-note { margin: 12px 0 0; font-size: 11.5px; line-height: 1.7; color: var(--muted); }
-  .flash { margin: 0 0 10px; padding: 10px 12px; border-radius: 12px; font-size: 13px; line-height: 1.7;
+  .flash { margin: 6px 0 10px; padding: 10px 12px; border-radius: 12px; font-size: 13px; line-height: 1.7;
     background: color-mix(in srgb, var(--gold) 14%, transparent); color: var(--ink); word-break: break-word; }
   .flash.bad { background: color-mix(in srgb, #c0392b 12%, transparent); }
 
-  /* 酒架 */
+  /* 收起来的那几块：调酒台、配方、原料架、隐藏款 */
   .sh { margin: 0 0 8px; }
-  .sh:last-of-type { margin-bottom: 0; }
+  .shelf .sh:last-of-type { margin-bottom: 0; }
   .sh > summary { list-style: none; cursor: pointer; font-size: 14px; font-weight: 600; color: var(--accent);
-    padding: 9px 2px; display: flex; align-items: center; gap: 6px; -webkit-tap-highlight-color: transparent; }
+    padding: 11px 2px; display: flex; align-items: center; gap: 6px; -webkit-tap-highlight-color: transparent; }
   .sh > summary::-webkit-details-marker { display: none; }
   .sh > summary::after { content: '▸'; margin-left: auto; font-size: 11px; color: var(--gold); transition: transform 0.2s; }
   .sh[open] > summary::after { transform: rotate(90deg); }
@@ -475,7 +490,7 @@ const STYLE = `
 
   .empty { color: var(--muted); font-size: 14px; line-height: 1.9; margin: 0 4px; text-align: center; padding: 34px 0; }
   .empty b { color: var(--accent); font-weight: 600; }
-  a:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  a:focus-visible, button:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   @media (prefers-reduced-motion: reduce) { .warm, .warm2, .pour { animation: none; } }
 ${PAGE_TITLE_CSS}`;
 
