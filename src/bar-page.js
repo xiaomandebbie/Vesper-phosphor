@@ -4,7 +4,7 @@
 //   吧台——他此刻的状态（来自 Proof 的 /agent/home）、有没有在等的杯子
 //   调酒——起个名字、写配方、递过去。他可以拒绝，喝了才算
 //   酒架——原料清单和经典配方，点一下直接填进表单
-//   时间轴——按夜分组，谁递的、什么味道、当时什么心情
+//   时间轴——按夜分组，谁递的、什么味道、当时什么心情；点开看配方
 //
 // 调酒和酒架都是 <details>，默认收着（小满 2026-10-13 定：版面太长，
 // 历史记录要翻好久才看到）。和批注、日历、星星罐那几处一个做法。
@@ -138,6 +138,30 @@ function nightLabel(key, today) {
   return base;
 }
 
+// 配方：按毫升数从多到少排，没写量的排最后。
+// 一眼能看出哪样是主角
+function renderRecipe(recipe) {
+  if (!Array.isArray(recipe) || !recipe.length) return '';
+  const sorted = recipe.slice().sort((a, b) => (Number(b.volume) || 0) - (Number(a.volume) || 0));
+  const rows = sorted
+    .map(
+      (it) =>
+        `<li><span class="ri-name">${esc(it.id)}</span>` +
+        (Number.isFinite(Number(it.volume)) && Number(it.volume) > 0
+          ? `<span class="ri-vol">${Number(it.volume)} ml</span>`
+          : '') +
+        `</li>`
+    )
+    .join('');
+  const total = sorted.reduce((s, it) => s + (Number(it.volume) || 0), 0);
+  const sum = total > 0 ? `<p class="ri-total">共 ${total} ml</p>` : '';
+  return `<details class="ri">
+    <summary>配方（${sorted.length} 样）</summary>
+    <ul class="ri-list">${rows}</ul>
+    ${sum}
+  </details>`;
+}
+
 function renderPour(p, i) {
   const time = String(p.drunkAt || p.at || '').slice(11, 16);
   const who = p.by === 'self' ? '自己倒的' : p.by === 'chat' ? '聊天里自己点的' : `${USER_NAME}递的`;
@@ -146,6 +170,7 @@ function renderPour(p, i) {
   if (p.intro) lines.push(`<p class="pour-intro">${esc(p.intro)}</p>`);
   if (p.flavor) lines.push(`<p class="pour-flavor">${esc(p.flavor)}</p>`);
   if (p.effect) lines.push(`<p class="pour-effect">${esc(p.effect)}</p>`);
+  lines.push(renderRecipe(p.recipe));
   if (p.mood) lines.push(`<p class="pour-mood">当时的心情：${esc(p.mood)}</p>`);
   if (p.rejected) lines.push('<p class="pour-note">这杯他没喝。拒绝也是答案。</p>');
   if (p.pending) lines.push('<p class="pour-note">还在吧台上放着，等他下次醒来。</p>');
@@ -155,7 +180,7 @@ function renderPour(p, i) {
       <span class="pour-time">${esc(time)}</span>
     </header>
     <p class="pour-who">${esc(who)}</p>
-    ${lines.join('')}
+    ${lines.filter(Boolean).join('')}
   </article>`;
 }
 
@@ -488,6 +513,22 @@ const STYLE = `
     border-top: 1px solid color-mix(in srgb, var(--line) 60%, transparent); }
   .pour-note { margin: 8px 0 0; font-size: 12px; line-height: 1.7; color: var(--muted); }
 
+  /* 那杯酒的配方：默认收着，点开是一张小单子 */
+  .ri { margin: 10px 0 0; }
+  .ri > summary { list-style: none; cursor: pointer; font-size: 12px; color: var(--muted);
+    padding: 5px 0; display: inline-flex; align-items: center; gap: 5px;
+    -webkit-tap-highlight-color: transparent; }
+  .ri > summary::-webkit-details-marker { display: none; }
+  .ri > summary::before { content: '▸'; font-size: 9px; color: var(--gold); transition: transform 0.2s; }
+  .ri[open] > summary::before { transform: rotate(90deg); }
+  .ri-list { list-style: none; margin: 4px 0 0; padding: 9px 12px; display: grid; gap: 5px;
+    border-radius: 11px; background: color-mix(in srgb, var(--accent) 5%, transparent);
+    border: 1px solid color-mix(in srgb, var(--line) 60%, transparent); }
+  .ri-list li { display: flex; align-items: baseline; gap: 10px; font-size: 13px; line-height: 1.6; }
+  .ri-name { flex: 1; min-width: 0; word-break: break-word; }
+  .ri-vol { flex: none; font-size: 12px; color: var(--gold); font-variant-numeric: tabular-nums; }
+  .ri-total { margin: 6px 0 0; font-size: 11.5px; color: var(--muted); text-align: right; }
+
   .empty { color: var(--muted); font-size: 14px; line-height: 1.9; margin: 0 4px; text-align: center; padding: 34px 0; }
   .empty b { color: var(--accent); font-weight: 600; }
   a:focus-visible, button:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -604,7 +645,8 @@ export function registerBarRoutes(app, { requireBasicAuth }) {
     }
     const offerId = out.offerId || out.id;
     try {
-      recordOfferSent(offerId, name, intro);
+      // 配方一起记下来，时间轴上点开能看见
+      recordOfferSent(offerId, name, intro, parts);
     } catch (err) {
       console.error('bar: 记不下这杯', err.message);
     }
