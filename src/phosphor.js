@@ -30,6 +30,8 @@ import { getSharedContext, countRecentChat } from './context.js';
 import { getTopDrives, isDrivesEnabled } from './drives.js';
 import { getUnseenStarReplies, markStarRepliesSeen, hasStarToday, starWindowLabel } from './star-jar.js';
 import { collectFromHer, handleFromHer } from './from-her.js';
+import { handleBarOffers } from './actions/bar-offers.js';
+import { configSummary as proofSummary } from './proof.js';
 
 const TICK_MS = 60 * 1000;
 const MISSED_GRACE_MS = 3 * 60 * 1000;
@@ -133,6 +135,7 @@ function normalizeDecision(raw, fallbackMood) {
     : [];
 
   // star_replies / moment_replies 原样透传，洗形状在 from-her.js 里做（normalizeFromHerReplies）
+  // bar_offers 同理，洗形状在 actions/bar-offers.js 里做（normalizeBarOffers）
   return {
     ...d,
     next_wake_minutes: minutes,
@@ -493,6 +496,17 @@ async function runDecisionCycle({ kind, scheduledAt = null, selfNote = null, cle
     } catch (err) {
       console.error(`[${kind}] handleFromHer failed:`, err);
     }
+    // 她递到吧台上的那几杯：想喝就喝，想退就退。同样不占这次的动作。
+    // 提示词告诉他写在 bar_offers 里（见 proof-prompt.js），执行在 actions/bar-offers.js。
+    // 这一步之前一直没人调，所以他写了也落不了地（小满 2026-10-13 发现）
+    try {
+      const bo = await handleBarOffers(decision);
+      if (bo.drunk || bo.rejected) {
+        console.log(`phosphor: 喝了 ${bo.drunk} 杯她递的，退了 ${bo.rejected} 杯`);
+      }
+    } catch (err) {
+      console.error(`[${kind}] handleBarOffers failed:`, err);
+    }
     try {
       result = await executeAction(decision);
       console.log(`[${kind}] action result:`, JSON.stringify(result));
@@ -592,7 +606,7 @@ async function preciseTick() {
 //
 // 整理不等于删：旧记录先搬进 conversation_archive，原话还在（见 state.js）。
 // 这样做是为了让"最近的对话"窗口保持短，同时不会真的丢掉过去——
-// 翻旧账时还能按原文或按时间回查，跨天锚点也从归档里取。
+// 翻旧账时还能按原文或按时间回查，跳天锚点也从归档里取。
 // 真动了东西就马上醒一次（kind = after_cleanup）：照常拉 breath / feel，并告诉 TA 旧聊天刚整理过，
 // 想留住的自己 hold 进长期记忆。这一次和精确唤醒一样，不改自然唤醒的排期。
 // 一条都没动、或者 silent 模式下，不醒。
@@ -673,7 +687,7 @@ async function main() {
               : '不归档'
           }`
         : '关闭'
-    }；论坛一次最多再走 ${FORUM_MAX_STEPS} 步；听歌一次最多再走 ${MUSIC_MAX_STEPS} 步；共享时间线：${isSharedTimelineEnabled() ? '已开启' : '未开启'}；动态配图：${isImageEnabled() ? '已开启' : '未配置'}；动态语音：${isVoiceEnabled() ? '已开启' : '未配置'}；情绪（Drivesoid）：${isDrivesEnabled() ? '已接入' : '未接入'}；星星罐：一天一颗，提示窗 ${starWindowLabel()}；她放的星和她发的动态：醒来会带上，回应不占动作`
+    }；论坛一次最多再走 ${FORUM_MAX_STEPS} 步；听歌一次最多再走 ${MUSIC_MAX_STEPS} 步；共享时间线：${isSharedTimelineEnabled() ? '已开启' : '未开启'}；动态配图：${isImageEnabled() ? '已开启' : '未配置'}；动态语音：${isVoiceEnabled() ? '已开启' : '未配置'}；情绪（Drivesoid）：${isDrivesEnabled() ? '已接入' : '未接入'}；星星罐：一天一颗，提示窗 ${starWindowLabel()}；她放的星和她发的动态：醒来会带上，回应不占动作；${proofSummary()}`
   );
   await connectAll();
   await tick();
