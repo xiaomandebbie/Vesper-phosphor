@@ -1,18 +1,13 @@
 // 他醒来时对「她递到吧台上那几杯」的回应。
 //
-// 不占这次唤醒的动作，和回留言、摘她的星一个规矩（小满 2026-10-13 定）。
-// 所以单独一个文件，不走 executeAction。
+// 不占这次唤醒的动作，和回留言、摘她的星一个规矩。
 //
-// 两道门：
-//   1. offer_id 必须在账本里真挂着（模型编一个不算）。
-//   2. 一次醒来最多处理几杯，免得一口气把积着的全喝了。
-//
-// 真正算数的是 Proof：账本说还在、Proof 说没了，就是没了。
-// 拿空了（not_found / gone / expire）就把账本里那条划掉，下次不再撞。
-// 2026-10-13 就是这个坑：他 16:40 伸手拿空，还按「看见的」写了篇动态。
+// **递的杯子要「领」（claim），不是「喝 offerId」。**
+// Proof 的约定：归属在饮用时确定，只有经过 /agent/offers/claim 才进他的引擎。
+// 2026-10-13 整天那个 not_found 就是因为我让他走 /agent/offers/:id/drink——那个必然 404。
 import {
-  drinkOffer,
-  rejectOffer,
+  claimOffer,
+  rejectCapability,
   markOfferDrunk,
   markOfferRejected,
   markOfferGone,
@@ -20,17 +15,18 @@ import {
 } from '../proof.js';
 
 const AI_NAME = process.env.AI_DISPLAY_NAME || 'TA';
-
-// 一次醒来最多动几杯。积了很多杯的时候，也该一杯一杯来
 const MAX_PER_WAKE = Number(process.env.PROOF_OFFERS_PER_WAKE) || 2;
 
 // Proof 回这些就是「这杯已经不在了」
-const GONE = /not_found|notfound|gone|missing|unknown_offer|expire|consumed|already/i;
+const GONE = /not_found|notfound|gone|missing|unknown|expire|link_expired|already|conflict/i;
 const isGone = (out) =>
-  GONE.test(String(out?.error ?? '')) || GONE.test(String(out?.detail ?? '')) || GONE.test(String(out?.message ?? ''));
+  out?.status === 404 ||
+  out?.status === 409 ||
+  out?.status === 410 ||
+  GONE.test(String(out?.error ?? '')) ||
+  GONE.test(String(out?.detail ?? '')) ||
+  GONE.test(String(out?.message ?? ''));
 
-// 模型返回的 bar_offers 洗成 [{ offerId, action }]。
-// 字段名宽容一点：offer_id / offerId / id 都认；drink|喝 和 reject|拒 都认。
 export function normalizeBarOffers(raw) {
   if (!Array.isArray(raw)) return [];
   const out = [];
@@ -47,8 +43,6 @@ export function normalizeBarOffers(raw) {
   return out;
 }
 
-// 真的去喝 / 退掉。返回 { drunk, rejected, skipped } 给日志用。
-// 任何一杯出错不影响其他杯，也不影响这次唤醒剩下的事。
 export async function handleBarOffers(decision) {
   const asked = normalizeBarOffers(decision?.bar_offers);
   if (!asked.length) return { drunk: 0, rejected: 0, skipped: 0 };
@@ -76,18 +70,25 @@ export async function handleBarOffers(decision) {
       skipped++;
       continue;
     }
+    if (!row.token) {
+      // 老记录没存 token（那时还在走错的接口）——领不了，划掉
+      console.log(`bar-offers: 「${row.name}」没存领取凭证（老记录），划掉`);
+      markOfferGone(offerId, '没存 capability token，领不了');
+      skipped++;
+      continue;
+    }
 
     if (action === 'reject') {
       let out;
       try {
-        out = await rejectOffer(offerId);
+        out = await rejectCapability(row.token);
       } catch (err) {
         console.error(`bar-offers: 退不掉「${row.name}」`, err.message);
         skipped++;
         continue;
       }
       if (!out || out.ok === false) {
-        const why = out?.detail || out?.error || '不知道为什么';
+        const why = out?.detail || out?.error || `HTTP ${out?.status ?? '?'}`;
         console.error(`bar-offers: 退不掉「${row.name}」：${why}`);
         if (isGone(out)) markOfferGone(offerId, `退的时候 Proof 回：${why}`);
         skipped++;
@@ -103,19 +104,19 @@ export async function handleBarOffers(decision) {
       continue;
     }
 
+    // 领走并喝下。这是唯一正确的入口
     let out;
     try {
-      out = await drinkOffer(offerId);
+      out = await claimOffer(row.token);
     } catch (err) {
-      console.error(`bar-offers: 「${row.name}」没喝成`, err.message);
+      console.error(`bar-offers: 「${row.name}」领不走`, err.message);
       skipped++;
       continue;
     }
     if (!out || out.ok === false) {
-      const why = out?.detail || out?.error || '不知道为什么';
-      console.error(`bar-offers: 「${row.name}」没喝成：${why}`);
-      // 拿空了。划掉账本里那条，不让下次醒来再撞一次
-      if (isGone(out)) markOfferGone(offerId, `喝的时候 Proof 回：${why}`);
+      const why = out?.detail || out?.error || `HTTP ${out?.status ?? '?'}`;
+      console.error(`bar-offers: 「${row.name}」领不走：${why}`);
+      if (isGone(out)) markOfferGone(offerId, `领的时候 Proof 回：${why}`);
       skipped++;
       continue;
     }
