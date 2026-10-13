@@ -18,6 +18,10 @@
 //   her  —— 你在 /bar 递过去的。
 //   chat —— 聊天里通过 MCP 自己点的。你在旁边陪着，不吃节制规则。
 //
+// 递过去的杯子有有效期（Proof 的 PROOF_PUBLIC_LINK_TTL_MS，默认只有 30 分钟）。
+// 他自然唤醒的间隔普遍比这长，所以白天递的酒很容易在他醒来前就凉了。
+// 要么把 Proof 那边的 TTL 调长，要么递酒时顺手给他约一次精确唤醒（见 bar-page.js）。
+//
 // 存 JSON 不建表：一晚最多几杯，这点量用不着动 state.db 的 schema。
 import fs from 'fs';
 import path from 'path';
@@ -48,6 +52,11 @@ const HOME_TIMEOUT_MS = num('PROOF_HOME_TIMEOUT_MS', 90000);
 // 读吧台超过这个秒数就在日志里吐一行，方便看到底多慢
 const SLOW_MS = num('PROOF_SLOW_LOG_MS', 3000);
 
+// 递过去的杯子多久会凉。这个数字只用来在页面和提示里说人话，
+// **真正的判定在 Proof 那边**（它的 PROOF_PUBLIC_LINK_TTL_MS）。
+// 两边要对着填；不填就按 Proof 的出厂值 30 分钟算。
+const OFFER_TTL_MS = num('PROOF_OFFER_TTL_MS', 30 * 60 * 1000);
+
 // 自斟的时段（按 TIME_ZONE 的墙上时间）。跨午夜，所以 22.5 到次日 2。
 // .env 里 PROOF_NIGHT_WINDOW=22:30-2:00 可改。
 const NIGHT_WINDOW = (() => {
@@ -67,6 +76,16 @@ const BLOCK_AFTER_NIGHTS = num('PROOF_BLOCK_AFTER_NIGHTS', 3);
 export function isProofEnabled() {
   return Boolean(TOKEN_FILE);
 }
+
+// 递过去的杯子多久凉，给人看的说法
+export function offerTtlLabel() {
+  const min = Math.round(OFFER_TTL_MS / 60000);
+  if (min < 60) return `${min} 分钟`;
+  const h = Math.floor(min / 60);
+  const m = min % 60;
+  return m ? `${h} 小时 ${m} 分钟` : `${h} 小时`;
+}
+export const offerTtlMs = () => OFFER_TTL_MS;
 
 // ══ 时间：按「夜」算，不按自然日 ══
 // 凌晨 1 点那杯算前一晚的。分界点取时段结束时刻（默认 2:00）。
@@ -118,11 +137,21 @@ export function listPours() {
   return load().pours.slice().sort((a, b) => String(b.at || '').localeCompare(String(a.at || '')));
 }
 
-// 读不到 Proof 时的兜底：从自己账本里拿「你递了、他还没动」的那几杯。
+// 还在吧台上、没过期的那几杯。
 // 这是我们自己记的，不需要 Proof 在线。菜单没有兜底——那只有 Proof 知道。
-export function localPendingOffers() {
+//
+// 按本地时间滤一遍过期：不然他醒来会看到一杯已经凉了的酒，试着喝还会失败。
+// Proof 那边才是权威，这里只是尽量不说错话。
+export function localPendingOffers({ includeStale = false } = {}) {
+  const now = Date.now();
   return load()
-    .pours.filter((p) => p.pending && p.offerId)
+    .pours.filter((p) => {
+      if (!p.pending || !p.offerId) return false;
+      if (includeStale) return true;
+      const at = Date.parse(String(p.at || '').replace(' ', 'T'));
+      if (!Number.isFinite(at)) return true; // 时间读不出来就别挤掉它
+      return now - at < OFFER_TTL_MS;
+    })
     .map((p) => ({ offerId: p.offerId, name: p.name || '无名的一杯', intro: p.intro || '' }));
 }
 
@@ -413,30 +442,35 @@ export function markOfferRejected(offerId) {
 
 // ══ 对账 ══
 // 他也可能在别的客户端里喝（比如直接跑 agent-cli），那边晨暮星收不到通知。
-// 所以每次打开 /bar 时跟 Proof 对一次账：哪几杯已经喝了、哪几杯被拒了。
+// 所以每次打开 /bar 时跟 Proof 对一次账：哪几杯已经喝了、哪几杯被拒了、哪几杯凉了。
 // 对不上（Proof 连不上、字段不认识）就保持原样，不瞎改账本。
+//
+// 2026-10-13：原来只认 consumed 和 rejected，漏了 expired——
+// 所以小满递的两杯已经凉了，页面还写着「还在吧台上放着」，骗了一整天。
 const DRUNK = /consumed|drunk|drank/i;
 const REJECTED = /reject|declin/i;
+const EXPIRED = /expire|stale|timeout/i;
 
 export async function reconcileOffers() {
   const db = load();
   const pending = db.pours.filter((p) => p.pending && p.offerId);
-  if (!pending.length) return { checked: 0, drunk: 0, rejected: 0 };
+  if (!pending.length) return { checked: 0, drunk: 0, rejected: 0, expired: 0 };
 
   let out;
   try {
     out = await humanOffers();
   } catch (err) {
     console.error('proof: 对账失败（账本保持原样）', err.message);
-    return { checked: pending.length, drunk: 0, rejected: 0, error: err.message };
+    return { checked: pending.length, drunk: 0, rejected: 0, expired: 0, error: err.message };
   }
   if (!out || out.ok === false || !Array.isArray(out.offers)) {
-    return { checked: pending.length, drunk: 0, rejected: 0, error: out?.error || 'no_offers' };
+    return { checked: pending.length, drunk: 0, rejected: 0, expired: 0, error: out?.error || 'no_offers' };
   }
 
   const byId = new Map(out.offers.map((o) => [String(o.id), o]));
   let drunk = 0;
   let rejected = 0;
+  let expired = 0;
   for (const row of pending) {
     const remote = byId.get(String(row.offerId));
     if (!remote) continue; // Proof 还没结算或已经清掉了，别动
@@ -454,22 +488,28 @@ export async function reconcileOffers() {
       delete row.pending;
       row.rejected = true;
       rejected++;
+    } else if (EXPIRED.test(status)) {
+      // 凉了。不是他拒的，也不是他喝了——是没来得及
+      delete row.pending;
+      row.expired = true;
+      row.expiredAt = formatDateTime();
+      expired++;
     }
   }
-  if (drunk || rejected) {
+  if (drunk || rejected || expired) {
     try {
       save(db);
-      console.log(`proof: 对账——${drunk} 杯已喝，${rejected} 杯被拒`);
+      console.log(`proof: 对账——${drunk} 杯已喝，${rejected} 杯被拒，${expired} 杯凉了`);
     } catch (err) {
       console.error('proof: 对账后写不下来', err.message);
     }
   }
-  return { checked: pending.length, drunk, rejected };
+  return { checked: pending.length, drunk, rejected, expired };
 }
 
 export function configSummary() {
   if (!isProofEnabled()) return '小酒馆：未配置（没填 PROOF_AGENT_TOKEN_FILE）';
   const db = load();
   const streak = selfStreakBefore();
-  return `小酒馆：${PROOF_API_URL}，身份 ${PROOF_AGENT_ID}，自斟时段 ${nightWindowLabel()}，连 ${WARN_AFTER_NIGHTS + 1} 夜提醒、连 ${BLOCK_AFTER_NIGHTS + 1} 夜不倒；读吧台超时 ${(HOME_TIMEOUT_MS / 1000).toFixed(0)}s、缓存 ${(BAR_CACHE_MS / 1000).toFixed(0)}s；已记 ${db.pours.length} 杯，昨夜往前连着 ${streak} 夜自斟`;
+  return `小酒馆：${PROOF_API_URL}，身份 ${PROOF_AGENT_ID}，自斟时段 ${nightWindowLabel()}，连 ${WARN_AFTER_NIGHTS + 1} 夜提醒、连 ${BLOCK_AFTER_NIGHTS + 1} 夜不倒；递的杯子 ${offerTtlLabel()}后凉；读吧台超时 ${(HOME_TIMEOUT_MS / 1000).toFixed(0)}s、缓存 ${(BAR_CACHE_MS / 1000).toFixed(0)}s；已记 ${db.pours.length} 杯，昨夜往前连着 ${streak} 夜自斟`;
 }
