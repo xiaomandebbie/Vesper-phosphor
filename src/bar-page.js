@@ -2,8 +2,8 @@
 //
 // 页面分四层：
 //   吧台——他此刻的状态（来自 Proof 的 /agent/home）、有没有在等的杯子
-//   调酒——起个名字、写配方、递过去。他可以拒绝，喝了才算
-//   酒架——原料清单和经典配方，点一下直接填进表单
+//   调酒——起个名字、写配方、递过去；也可以只存不递
+//   酒架——我的配方、经典配方、原料清单，点一下直接填进表单
 //   时间轴——按夜分组，谁递的、什么味道、当时什么心情；点开看配方
 //
 // 那杯酒有四种下场，页面要分得清：
@@ -12,17 +12,12 @@
 //   凉了——没来得及喝，不是不想喝。这两种不能混
 //   还在等——虚线边框
 //
-// 调酒和酒架都是 <details>，默认收着（小满 2026-10-13 定：版面太长，
-// 历史记录要翻好久才看到）。和批注、日历、星星罐那几处一个做法。
-// 递完或者出错时自动张开（open），不然看不到那句回执。
+// 颜色全走 var(--ink) / var(--muted) 这套（见 sun-time.js 的早晚四张脸）。
+// 2026-10-13 踩过坑：酒架那几张卡片用了 #fff 做底色，天黑了底色跟着变深、
+// 字还是深色，就看不见了。别再写死颜色。
 //
-// **递酒时必须把 Proof 返回的 capability token 存下来**（见 proof.js 文件头）。
-// 存不下来他就永远领不走这杯——targetId 只是记一笔「想给谁」，
-// 真正的入口是 /agent/offers/claim。
-//
-// 原料表和配方是从 Proof 内容包（docs/content/原料表.md）抄过来的一份快捷清单，
-// 只为了不用记名字。**真正的判定在 Proof 那边**：它换了内容包，这里就可能对不上，
-// 填错了它会把错误原文回给我们，页面原样显示。所以这份清单是「提示」，不是「校验」。
+// 原料表和经典配方是从 Proof 内容包抄来的快捷清单，只为了不用记名字。
+// **真正的判定在 Proof 那边**：填错了它会把错误原文回给我们，页面原样显示。
 import { wallParts, parseDate } from './wall-time.js';
 import { getProfile } from './moments-store.js';
 import { renderMenu, HEAD_SCRIPT, CHROME_CSS, CHROME_SCRIPT } from './page-chrome.js';
@@ -32,6 +27,7 @@ import {
   selfPourGate, nightWindowLabel, offerTtlLabel, reconcileOffers,
   tokenFromLink, PROOF_AGENT_ID,
 } from './proof.js';
+import { listRecipes, saveRecipe, deleteRecipe } from './bar-recipes.js';
 
 const USER_NAME = process.env.USER_DISPLAY_NAME || '她';
 
@@ -39,7 +35,6 @@ const USER_NAME = process.env.USER_DISPLAY_NAME || '她';
 const MAX_PARTS = 8;
 
 // ══ 酒架：抄自 Proof 示例内容包的 25 项原料 ══
-// note 写风味，让你知道它大概是什么味；不写的就是它本来没特征
 const SHELF = [
   {
     group: '基酒',
@@ -149,8 +144,7 @@ function nightLabel(key, today) {
   return base;
 }
 
-// 配方：按毫升数从多到少排，没写量的排最后。
-// 一眼能看出哪样是主角
+// 配方：按毫升数从多到少排，没写量的排最后
 function renderRecipe(recipe) {
   if (!Array.isArray(recipe) || !recipe.length) return '';
   const sorted = recipe.slice().sort((a, b) => (Number(b.volume) || 0) - (Number(a.volume) || 0));
@@ -173,8 +167,6 @@ function renderRecipe(recipe) {
   </details>`;
 }
 
-// 一杯酒在时间轴上长什么样。
-// 四种下场各有自己的边框和说法，别让「凉了」看着像「他不要」
 function renderPour(p, i) {
   const time = String(p.drunkAt || p.at || '').slice(11, 16);
   const who = p.by === 'self' ? '自己倒的' : p.by === 'chat' ? '聊天里自己点的' : `${USER_NAME}递的`;
@@ -194,7 +186,6 @@ function renderPour(p, i) {
   if (p.rejected) {
     lines.push('<p class="pour-note">这杯他没喝。拒绝也是答案。</p>');
   } else if (p.expired) {
-    // 凉了和拒了是两回事。这里说清，免得看成他不要
     const why = p.goneReason
       ? `<br><small>${esc(p.goneReason)}</small>`
       : `<br>不是他不想喝，是没赶上${esc(p.expiredAt ? `（${String(p.expiredAt).slice(5, 16)} 发现）` : '')}。`;
@@ -202,7 +193,6 @@ function renderPour(p, i) {
       `<p class="pour-note">这杯凉了——递过去 ${esc(offerTtlLabel())}内没人动，就自动作废了。${why}</p>`
     );
   } else if (p.pending) {
-    // 没存到领取凭证的话，他永远领不走——这里得现在就说，不要等他试了才发现
     if (!p.token) {
       lines.push(
         `<p class="pour-note">这杯领不了——递的时候没存下领取凭证。` +
@@ -225,8 +215,6 @@ function renderPour(p, i) {
   </article>`;
 }
 
-// 吧台：他此刻的状态。读不到就明说读不到——不能把「Proof 连不上」显示成「没喝酒」
-// 注意：未 claim 的杯子不在 Proof 的 /agent/home 里，所以「等着的杯子」读本地账本
 function renderBar(home, gate, name, waiting) {
   if (!home || home.ok === false) {
     const why = home?.error === 'proof_not_configured'
@@ -251,7 +239,6 @@ function renderBar(home, gate, name, waiting) {
   return `<section class="counter">${bits.join('')}</section>`;
 }
 
-// 配方表单。前三行默认露着，剩下的点「再加一样」或者选了经典配方才展开
 function renderRows() {
   const rows = [];
   for (let n = 1; n <= MAX_PARTS; n++) {
@@ -268,8 +255,40 @@ function renderRows() {
   return rows.join('');
 }
 
-// 酒架：原料片 + 经典配方。都是 <details>，默认收着
-function renderShelf() {
+// 我的配方：点一下填进表单，右边一个 × 删掉。
+// 删走表单提交，没 JavaScript 也能用
+function renderMyRecipes(mine) {
+  if (!mine.length) {
+    return `<details class="sh">
+      <summary>⭐️ 我的配方（0）</summary>
+      <p class="hint">还没存过。上面调好一杯，点「存起来」就行——下次点一下直接填好。</p>
+    </details>`;
+  }
+  const items = mine
+    .map((r) => {
+      const parts = r.parts.map((p) => `${p.id} ${p.volume}`).join(' + ');
+      return `<div class="mine-row">
+        <button type="button" class="recipe mine" data-recipe="${esc(JSON.stringify(r.parts.map((p) => [p.id, p.volume])))}"
+          data-name="${esc(r.name)}" data-intro="${esc(r.intro || '')}">
+          <span class="recipe-name">${esc(r.name)}</span>
+          <span class="recipe-parts">${esc(parts)}</span>
+          ${r.intro ? `<span class="recipe-note">“${esc(r.intro)}”</span>` : ''}
+        </button>
+        <form method="post" action="/bar/recipes/delete" class="mine-del">
+          <input type="hidden" name="name" value="${esc(r.name)}">
+          <button type="submit" title="删掉这张" aria-label="删掉 ${esc(r.name)}">×</button>
+        </form>
+      </div>`;
+    })
+    .join('');
+  return `<details class="sh" open>
+    <summary>⭐️ 我的配方（${mine.length}）</summary>
+    <div class="recipes">${items}</div>
+    <p class="hint">点一下填进上面的表单（名字和那句话也一起填）。同名重存就是覆盖。</p>
+  </details>`;
+}
+
+function renderShelf(mine) {
   const groups = SHELF.map((g) => {
     const chips = g.items
       .map(
@@ -293,6 +312,7 @@ function renderShelf() {
   }).join('');
 
   return `<section class="shelf">
+    ${renderMyRecipes(mine)}
     <details class="sh" id="shRecipes">
       <summary>🍸 经典配方（点一下直接填好）</summary>
       <div class="recipes">${recipes}</div>
@@ -315,8 +335,8 @@ function renderShelf() {
   </section>`;
 }
 
-// 调酒台。整块收进 <details>：平时只一行，往下就是时间轴。
-// 刚递完或者出错时自动张开，不然看不到回执
+// 调酒台。两个按钮：递过去 / 只存不递。
+// 都是同一张表单，formaction 改提交到哪里
 function renderForm(flash) {
   const msg = flash ? `<p class="flash${flash.ok ? '' : ' bad'}">${esc(flash.text)}</p>` : '';
   return `<details class="mix sh" id="mixBox"${flash ? ' open' : ''}>
@@ -326,7 +346,7 @@ function renderForm(flash) {
       <label class="f"><span>叫什么</span>
         <input name="name" id="drinkName" maxlength="24" placeholder="晨暮星" required autocomplete="off"></label>
       <label class="f"><span>递过去时说一句（可以不写）</span>
-        <input name="intro" maxlength="80" placeholder="慢点喝。" autocomplete="off"></label>
+        <input name="intro" id="drinkIntro" maxlength="80" placeholder="慢点喝。" autocomplete="off"></label>
       <fieldset class="recipe-box">
         <legend>配方</legend>
         <div id="rows">${renderRows()}</div>
@@ -336,14 +356,17 @@ function renderForm(flash) {
         </div>
         <p class="hint">原料名要和 Proof 内容包里的一致。填错了它会把错误原文回给你，照着改就行。</p>
       </fieldset>
-      <button type="submit" class="go">递过去</button>
+      <div class="go-row">
+        <button type="submit" class="go">递过去</button>
+        <button type="submit" class="go ghost" formaction="/bar/recipes/save" formnovalidate>⭐️ 存起来</button>
+      </div>
     </form>
     <p class="mix-note">递过去不等于他喝了。他可以拒绝；喝下去之后 Proof 才结算。
-      <br>递过去 ${esc(offerTtlLabel())}内没人动就会凉——他不一定那么快醒来。</p>
+      <br>递过去 ${esc(offerTtlLabel())}内没人动就会凉——他不一定那么快醒来。
+      <br>「存起来」只往「我的配方」里记一张，不递出去。</p>
   </details>`;
 }
 
-// 点原料片、点经典配方、加行、清空。没有 JavaScript 时表单照样能手填
 const FORM_SCRIPT = `(function () {
   var form = document.getElementById('mixForm');
   if (!form) return;
@@ -353,7 +376,6 @@ const FORM_SCRIPT = `(function () {
   function idInput(row) { return row.querySelector('input[data-id]'); }
   function volInput(row) { return row.querySelector('input[data-v]'); }
 
-  // 第一个原料名还空着的行；都满了就把下一个隐着的露出来
   function firstEmpty() {
     for (var i = 0; i < rows.length; i++) {
       if (!idInput(rows[i]).value.trim()) {
@@ -370,7 +392,6 @@ const FORM_SCRIPT = `(function () {
     }
   }
 
-  // 选了原料或配方就把调酒台张开，不然填进去也看不见
   function openMix() {
     if (mixBox && !mixBox.open) mixBox.open = true;
   }
@@ -387,7 +408,8 @@ const FORM_SCRIPT = `(function () {
       return;
     }
 
-    // 经典配方：整张表单重填。名字不动——起名字是你的事
+    // 配方卡：整张表单重填。
+    // 自己存的（.mine）连名字和那句话一起填；经典配方只填配方，名字留给你自己起
     var rec = e.target.closest ? e.target.closest('.recipe') : null;
     if (rec) {
       var parts;
@@ -404,8 +426,13 @@ const FORM_SCRIPT = `(function () {
         volInput(rows[j]).value = parts[j][1];
       }
       var nameBox = document.getElementById('drinkName');
-      if (nameBox && !nameBox.value.trim()) nameBox.setAttribute('placeholder', rec.getAttribute('data-name') || '');
-      // 填完滚到表单，不用自己找
+      var introBox = document.getElementById('drinkIntro');
+      if (rec.classList.contains('mine')) {
+        if (nameBox) nameBox.value = rec.getAttribute('data-name') || '';
+        if (introBox) introBox.value = rec.getAttribute('data-intro') || '';
+      } else if (nameBox && !nameBox.value.trim()) {
+        nameBox.setAttribute('placeholder', rec.getAttribute('data-name') || '');
+      }
       form.scrollIntoView({ behavior: 'smooth', block: 'start' });
       return;
     }
@@ -474,9 +501,11 @@ const STYLE = `
   .mix[open] { padding: 10px 18px 16px; }
   .mix-form { display: grid; gap: 12px; margin-top: 4px; }
   .f { display: grid; gap: 5px; font-size: 12.5px; color: var(--muted); }
+  /* 输入框：底色和字色都跟四张脸走，天黑了也读得清 */
   .f input, .r input { font-family: inherit; font-size: 16px; color: var(--ink);
-    background: color-mix(in srgb, #fff 70%, transparent); border: 1px solid var(--line);
+    background: color-mix(in srgb, var(--card) 88%, transparent); border: 1px solid var(--line);
     border-radius: 11px; padding: 10px 12px; min-height: 44px; -webkit-appearance: none; appearance: none; }
+  .f input::placeholder, .r input::placeholder { color: color-mix(in srgb, var(--muted) 70%, transparent); }
   .f input:focus, .r input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
   .recipe-box { margin: 0; border: 1px solid var(--line); border-radius: 14px; padding: 10px 12px 12px; }
   .recipe-box legend { padding: 0 6px; font-size: 12.5px; color: var(--muted); }
@@ -487,19 +516,23 @@ const STYLE = `
   .r span { font-size: 12px; color: var(--muted); }
   .row-ops { display: flex; gap: 8px; margin: 2px 0 0; }
   .row-ops button { font-family: inherit; font-size: 13px; color: var(--accent);
-    background: color-mix(in srgb, var(--accent) 8%, transparent); border: 1px solid color-mix(in srgb, var(--accent) 22%, transparent);
+    background: color-mix(in srgb, var(--accent) 10%, transparent); border: 1px solid color-mix(in srgb, var(--accent) 24%, transparent);
     border-radius: 10px; padding: 7px 12px; min-height: 36px; cursor: pointer; }
   .row-ops button:active { opacity: 0.8; }
   .hint { margin: 6px 0 0; font-size: 11.5px; line-height: 1.7; color: var(--muted); }
-  .go { font-family: inherit; font-size: 15px; font-weight: 600; color: #fffdfb;
+  .go-row { display: flex; gap: 8px; }
+  .go { flex: 1; font-family: inherit; font-size: 15px; font-weight: 600; color: #fffdfb;
     background: var(--accent); border: none; border-radius: 13px; min-height: 46px; cursor: pointer; }
+  .go.ghost { flex: 0 0 auto; padding: 0 16px; color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 10%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent); }
   .go:active { opacity: 0.88; }
   .mix-note { margin: 12px 0 0; font-size: 11.5px; line-height: 1.7; color: var(--muted); }
   .flash { margin: 6px 0 10px; padding: 10px 12px; border-radius: 12px; font-size: 13px; line-height: 1.7;
-    background: color-mix(in srgb, var(--gold) 14%, transparent); color: var(--ink); word-break: break-word; }
-  .flash.bad { background: color-mix(in srgb, #c0392b 12%, transparent); }
+    background: color-mix(in srgb, var(--gold) 18%, transparent); color: var(--ink); word-break: break-word; }
+  .flash.bad { background: color-mix(in srgb, #c0392b 16%, transparent); }
 
-  /* 收起来的那几块：调酒台、配方、原料架、隐藏款 */
+  /* 收起来的那几块：我的配方、经典配方、原料架、隐藏款 */
   .sh { margin: 0 0 8px; }
   .shelf .sh:last-of-type { margin-bottom: 0; }
   .sh > summary { list-style: none; cursor: pointer; font-size: 14px; font-weight: 600; color: var(--accent);
@@ -510,19 +543,30 @@ const STYLE = `
   .shelf-group { margin: 4px 0 12px; }
   .shelf-group h4 { margin: 0 0 7px; font-size: 12px; font-weight: 600; letter-spacing: 0.1em; color: var(--muted); }
   .chips { display: flex; flex-wrap: wrap; gap: 7px; }
+  /* 原料片和配方卡：底色用 --card 调出来，不写死 #fff——
+     不然入夜后底色变深、字还是深色，就看不见了（小满 2026-10-13 反馈） */
   .chip { font-family: inherit; font-size: 13.5px; color: var(--ink); cursor: pointer;
-    background: color-mix(in srgb, #fff 62%, transparent); border: 1px solid var(--line);
+    background: color-mix(in srgb, var(--card) 82%, transparent); border: 1px solid var(--line);
     border-radius: 999px; padding: 7px 13px; min-height: 38px; display: inline-flex; align-items: baseline; gap: 5px; }
-  .chip:active { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+  .chip:active { background: color-mix(in srgb, var(--accent) 14%, transparent); }
   .chip small { font-size: 10.5px; color: var(--gold); }
   .recipes { display: grid; gap: 7px; margin: 4px 0 2px; }
-  .recipe { font-family: inherit; text-align: left; cursor: pointer; display: grid; gap: 3px;
-    background: color-mix(in srgb, #fff 62%, transparent); border: 1px solid var(--line);
-    border-radius: 13px; padding: 11px 13px; }
-  .recipe:active { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+  .recipe { font-family: inherit; text-align: left; cursor: pointer; display: grid; gap: 3px; width: 100%;
+    background: color-mix(in srgb, var(--card) 82%, transparent); border: 1px solid var(--line);
+    border-radius: 13px; padding: 11px 13px; color: var(--ink); }
+  .recipe:active { background: color-mix(in srgb, var(--accent) 12%, transparent); }
   .recipe-name { font-family: "Songti SC", "STSong", Georgia, serif; font-size: 15.5px; font-weight: 600; color: var(--accent); }
   .recipe-parts { font-size: 12px; color: var(--muted); line-height: 1.6; word-break: break-word; }
   .recipe-note { font-size: 11.5px; color: var(--gold); }
+  /* 我的配方：卡片 + 右边一个 × */
+  .mine-row { display: flex; align-items: stretch; gap: 6px; }
+  .mine-row .recipe { flex: 1; min-width: 0; }
+  .mine-row .recipe.mine .recipe-name::before { content: '⭐️ '; font-size: 12px; }
+  .mine-del { display: flex; margin: 0; }
+  .mine-del button { font-family: inherit; font-size: 16px; line-height: 1; cursor: pointer;
+    color: var(--muted); background: color-mix(in srgb, var(--card) 70%, transparent);
+    border: 1px solid var(--line); border-radius: 13px; width: 40px; }
+  .mine-del button:active { color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
   .secret { margin: 0 0 8px; font-size: 12.5px; line-height: 1.8; color: var(--muted); }
   .secret b { color: var(--accent); }
 
@@ -541,7 +585,6 @@ const STYLE = `
   @keyframes pour-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
   .pour.is-pending { border-style: dashed; }
   .pour.is-rejected { opacity: 0.74; border-style: dotted; }
-  /* 凉了：比拒绝更淡，左边一条灰条——像被放在那里没人动 */
   .pour.is-expired { opacity: 0.6; border-style: dotted;
     border-left: 3px solid color-mix(in srgb, var(--muted) 40%, transparent); }
   .pour-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
@@ -569,7 +612,7 @@ const STYLE = `
   .ri > summary::before { content: '▸'; font-size: 9px; color: var(--gold); transition: transform 0.2s; }
   .ri[open] > summary::before { transform: rotate(90deg); }
   .ri-list { list-style: none; margin: 4px 0 0; padding: 9px 12px; display: grid; gap: 5px;
-    border-radius: 11px; background: color-mix(in srgb, var(--accent) 5%, transparent);
+    border-radius: 11px; background: color-mix(in srgb, var(--accent) 7%, transparent);
     border: 1px solid color-mix(in srgb, var(--line) 60%, transparent); }
   .ri-list li { display: flex; align-items: baseline; gap: 10px; font-size: 13px; line-height: 1.6; }
   .ri-name { flex: 1; min-width: 0; word-break: break-word; }
@@ -619,8 +662,7 @@ export function registerBarRoutes(app, { requireBasicAuth }) {
     const today = { y: now.y, m: now.m, d: now.d };
     const name = getProfile('assistant').name;
 
-    // 他喝不喝是在聊天里定的，晨暮星收不到通知。所以每次打开先跟 Proof 对一次账。
-    // 对不上就保持原样，不影响这一页渲染
+    // 他喝不喝是在聊天里定的，晨暮星收不到通知。所以每次打开先跟 Proof 对一次账
     try {
       const rec = await reconcileOffers();
       if (rec.drunk || rec.rejected || rec.expired) {
@@ -643,6 +685,12 @@ export function registerBarRoutes(app, { requireBasicAuth }) {
     } catch (err) {
       console.error('bar page: 读不到账本', err.message);
     }
+    let mine = [];
+    try {
+      mine = listRecipes();
+    } catch (err) {
+      console.error('bar page: 读不到我的配方', err.message);
+    }
 
     // 未 claim 的杯子不在 Proof 的 /agent/home 里，所以「等着的」数自己的账本
     const waiting = pours.filter((p) => p.pending);
@@ -652,14 +700,16 @@ export function registerBarRoutes(app, { requireBasicAuth }) {
       喝下去之后，接下来那几转的回应里就带着这杯酒。<br>
       深夜 ${esc(nightWindowLabel())}，他也可以自己给自己倒一杯。</p>`;
     body += renderBar(home, gate, name, waiting);
-    body += renderForm(
-      req.query.sent
-        ? { ok: true, text: `递过去了。${name}下次醒来会在吧台上看到它。` }
-        : req.query.err
-          ? { ok: false, text: String(req.query.err).slice(0, 300) }
-          : null
-    );
-    body += renderShelf();
+
+    let flash = null;
+    if (req.query.sent) flash = { ok: true, text: `递过去了。${name}下次醒来会在吧台上看到它。` };
+    else if (req.query.saved) {
+      const n = String(req.query.saved);
+      flash = { ok: true, text: req.query.over ? `「${n}」重存了。` : `「${n}」存进我的配方了。` };
+    } else if (req.query.del) flash = { ok: true, text: `「${String(req.query.del)}」删了。` };
+    else if (req.query.err) flash = { ok: false, text: String(req.query.err).slice(0, 300) };
+    body += renderForm(flash);
+    body += renderShelf(mine);
 
     if (!pours.length) {
       body += `<p class="empty">还没有喝过一杯。<br><br>
@@ -697,7 +747,6 @@ export function registerBarRoutes(app, { requireBasicAuth }) {
       return res.redirect(303, '/bar?err=' + encodeURIComponent(`Proof 没接这杯：${detail}`));
     }
     const offerId = out.offerId || out.id;
-    // link 形如 https://…/proof/drink/#<token>，# 后面那段就是领取凭证
     const token = tokenFromLink(out.link || out.capabilityToken || '');
     try {
       recordOfferSent(offerId, name, intro, parts, token);
@@ -708,7 +757,6 @@ export function registerBarRoutes(app, { requireBasicAuth }) {
       `bar: 递了一杯「${name}」给 ${PROOF_AGENT_ID}（offer ${offerId}，${parts.length} 样原料，` +
       `领取凭证${token ? '已存' : '没拿到'}）`
     );
-    // 凭证没拿到就现在说，别等他试了才发现领不了
     if (!token) {
       return res.redirect(
         303,
@@ -716,6 +764,30 @@ export function registerBarRoutes(app, { requireBasicAuth }) {
       );
     }
     res.redirect(303, '/bar?sent=1');
+  });
+
+  // 只存不递。同名覆盖
+emphasis:
+  app.post('/bar/recipes/save', requireBasicAuth, (req, res) => {
+    const parts = partsFrom(req.body || {});
+    const name = String(req.body?.name ?? '').trim().slice(0, 24);
+    const intro = String(req.body?.intro ?? '').trim().slice(0, 80);
+    const out = saveRecipe({ name, parts, intro });
+    if (!out.ok) {
+      return res.redirect(303, '/bar?err=' + encodeURIComponent(out.error));
+    }
+    console.log(`bar: 存了一张配方「${out.name}」（${parts.length} 样，${out.overwrote ? '覆盖' : '新增'}）`);
+    res.redirect(
+      303,
+      `/bar?saved=${encodeURIComponent(out.name)}${out.overwrote ? '&over=1' : ''}`
+    );
+  });
+
+  app.post('/bar/recipes/delete', requireBasicAuth, (req, res) => {
+    const out = deleteRecipe(String(req.body?.name ?? ''));
+    if (!out.ok) return res.redirect(303, '/bar?err=' + encodeURIComponent(out.error));
+    console.log(`bar: 删了配方「${out.name}」`);
+    res.redirect(303, `/bar?del=${encodeURIComponent(out.name)}`);
   });
 
   return true;
