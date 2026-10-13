@@ -6,11 +6,12 @@
 //
 // 这两段的分工和星星罐那边一样：规则在 system，「今天还有没有机会」在 user。
 //
-// 她递的杯子读本地账本，不问 Proof：
-//   「她递了哪几杯」是我们自己记的（见 proof.js 的 localPendingOffers），读 JSON 而已。
-//   而 /agent/home 要把整份酒单过一遍引擎，很重——每次唤醒都拿它不值得。
-//   所以醒来只知道「有几杯在等」，真要喝的时候才去调 Proof。
-import { isProofEnabled, nightWindowLabel, selfPourGate, localPendingOffers } from './proof.js';
+// 她递的杯子以 Proof 为准（见 proof-offers.js）：
+//   2026-10-13 踩过坑——这里读本地账本、执行端也读本地账本，
+//   结果账本说还在、Proof 说没了，他看见了却拿空，还按「看见的」写了篇动态。
+//   现在提示词和执行端共用 pendingForWake()，两边看到的是同一份。
+import { isProofEnabled, nightWindowLabel, selfPourGate, offerTtlLabel } from './proof.js';
+import { pendingForWake } from './proof-offers.js';
 
 const USER_NAME = process.env.USER_DISPLAY_NAME || '对方';
 
@@ -29,8 +30,11 @@ export function proofSection() {
 - 不想喝写 "action":"reject"。**拒绝不写任何饮酒账本**，只是这杯不算了，不用找理由。
 - 也可以都不写：那就是这次没动它，杯子还在吧台上，下次醒来还会看到。
   没想喝就不喝，不必因为她递了就喝。
-- 喝了之后那几转的回应里就带着这杯酒。不用记数值，也不用主动报告「我醉了」。
+- **要真的喝到才算喝到。** 写进 bar_offers 不等于已经喝了——系统要去 Proof 那边真结算一次。
+  所以别在同一轮里就把「喝下去之后的感觉」当成已经发生的事来写：
+  这杯酒带来的影响会在**之后那几转**的状态里出现，到时候自然带着就行。
 - 这些杯子不吃下面那条节制规则。她递的是她的事，不算你自己找酒喝。
+- 递过来的杯子 ${offerTtlLabel()}内没人动就会凉，凉了就喝不到了。不必为此急，只是知道有这回事。
 
 ### 深夜自己倒的那杯
 ${nightWindowLabel()} 这段时间，你可以给自己倒一杯（proof_drink，占一次动作）。
@@ -50,14 +54,15 @@ export function proofActionNote() {
 }
 
 // user 里的那几行：她递的杯子 + 今晚这杯到底能不能倒。
-// 读库出错不能把整次唤醒拖下水，所以包一层
-export function proofStatusLine() {
+// 她递的杯子问 Proof（权威），问不到才退回本地账本。
+// 读库/请求出错都不能把整次唤醒拖下水，所以包一层。
+export async function proofStatusLine() {
   if (!isProofEnabled()) return '';
   const lines = [];
 
   // 她递的杯子排在前面：那是她主动递过来的东西，比「今晚能不能自斟」该先看到
   try {
-    const offers = localPendingOffers();
+    const { offers, source } = await pendingForWake();
     if (offers.length) {
       const items = offers
         .map((o) => {
@@ -66,7 +71,8 @@ export function proofStatusLine() {
         })
         .join('\n');
       lines.push(
-        `${USER_NAME}递了酒到你吧台上（还没动；喝或不喝都不占这次的动作，怎么回见上面的规则）：\n${items}`
+        `${USER_NAME}递了酒到你吧台上（还没动；喝或不喝都不占这次的动作，怎么回见上面的规则）：\n${items}` +
+        (source === 'local' ? '\n  （此刻读不到 Proof，这是本地记的；可能有杯已经凉了，试了才知道）' : '')
       );
     }
   } catch (err) {

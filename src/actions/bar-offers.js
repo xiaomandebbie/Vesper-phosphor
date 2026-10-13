@@ -3,20 +3,14 @@
 // 不占这次唤醒的动作，和回留言、摘她的星一个规矩（小满 2026-10-13 定）。
 // 所以单独一个文件，不走 executeAction。
 //
-// 为什么要有这个文件：
-//   proof-prompt.js 里告诉他「想喝就写在 bar_offers 里」，但之前没人读这个字段——
-//   写了也落不了地。这边负责真的去喝或者退掉。
-//
 // 两道门：
-//   1. offer_id 必须是此刻真在吧台上的（按本地账本校）。模型编一个 id 过来不算。
+//   1. offer_id 必须是此刻真在吧台上的——**以 Proof 为准**，不是我们的账本。
+//      2026-10-13 就是这个坑：账本说还在，Proof 说没了，他伸手拿空还写了篇动态。
 //   2. 一次醒来最多处理几杯，免得一口气把积着的全喝了。
-import {
-  drinkOffer,
-  rejectOffer,
-  markOfferDrunk,
-  markOfferRejected,
-  localPendingOffers,
-} from '../proof.js';
+//
+// 拿空了就把账本里那条划掉（forgetOffer），让它自己愈合，不再反复撞。
+import { drinkOffer, rejectOffer, markOfferDrunk, markOfferRejected } from '../proof.js';
+import { pendingForWake, isGone, forgetOffer } from '../proof-offers.js';
 
 const AI_NAME = process.env.AI_DISPLAY_NAME || 'TA';
 
@@ -47,10 +41,13 @@ export async function handleBarOffers(decision) {
   const asked = normalizeBarOffers(decision?.bar_offers);
   if (!asked.length) return { drunk: 0, rejected: 0, skipped: 0 };
 
-  // 此刻真在吧台上的那几杯。读本地账本，不问 Proof
+  // 此刻真在吧台上的那几杯。能问到 Proof 就以它为准
   let pending;
+  let source = 'local';
   try {
-    pending = new Map(localPendingOffers().map((o) => [String(o.offerId), o]));
+    const got = await pendingForWake();
+    pending = new Map(got.offers.map((o) => [String(o.offerId), o]));
+    source = got.source;
   } catch (err) {
     console.error('bar-offers: 读不到吧台上的杯子，这次不动', err.message);
     return { drunk: 0, rejected: 0, skipped: asked.length };
@@ -67,8 +64,9 @@ export async function handleBarOffers(decision) {
     }
     const row = pending.get(offerId);
     if (!row) {
-      // 编的 id，或者这杯已经被处理过了
-      console.log(`bar-offers: 吧台上没有 ${offerId} 这杯，跳过`);
+      // 编的 id，或者这杯已经不在了。账本里要是还挂着，顺手划掉
+      console.log(`bar-offers: 吧台上没有 ${offerId} 这杯（按 ${source}），跳过`);
+      if (source === 'proof') forgetOffer(offerId, '对账时 Proof 已没有这杯');
       skipped++;
       continue;
     }
@@ -83,7 +81,9 @@ export async function handleBarOffers(decision) {
         continue;
       }
       if (!out || out.ok === false) {
-        console.error(`bar-offers: 退不掉「${row.name}」：${out?.detail || out?.error || '不知道为什么'}`);
+        const why = out?.detail || out?.error || '不知道为什么';
+        console.error(`bar-offers: 退不掉「${row.name}」：${why}`);
+        if (isGone(out)) forgetOffer(offerId, `退的时候 Proof 回：${why}`);
         skipped++;
         continue;
       }
@@ -106,7 +106,10 @@ export async function handleBarOffers(decision) {
       continue;
     }
     if (!out || out.ok === false) {
-      console.error(`bar-offers: 「${row.name}」没喝成：${out?.detail || out?.error || '不知道为什么'}`);
+      const why = out?.detail || out?.error || '不知道为什么';
+      console.error(`bar-offers: 「${row.name}」没喝成：${why}`);
+      // 拿空了。划掉账本里那条，不让下次醒来再撞一次
+      if (isGone(out)) forgetOffer(offerId, `喝的时候 Proof 回：${why}`);
       skipped++;
       continue;
     }
