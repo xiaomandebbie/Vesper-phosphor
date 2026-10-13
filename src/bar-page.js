@@ -16,6 +16,10 @@
 // 历史记录要翻好久才看到）。和批注、日历、星星罐那几处一个做法。
 // 递完或者出错时自动张开（open），不然看不到那句回执。
 //
+// **递酒时必须把 Proof 返回的 capability token 存下来**（见 proof.js 文件头）。
+// 存不下来他就永远领不走这杯——targetId 只是记一笔「想给谁」，
+// 真正的入口是 /agent/offers/claim。
+//
 // 原料表和配方是从 Proof 内容包（docs/content/原料表.md）抄过来的一份快捷清单，
 // 只为了不用记名字。**真正的判定在 Proof 那边**：它换了内容包，这里就可能对不上，
 // 填错了它会把错误原文回给我们，页面原样显示。所以这份清单是「提示」，不是「校验」。
@@ -25,7 +29,8 @@ import { renderMenu, HEAD_SCRIPT, CHROME_CSS, CHROME_SCRIPT } from './page-chrom
 import { renderPageTitle, PAGE_TITLE_CSS } from './page-title.js';
 import {
   isProofEnabled, listPours, agentHome, offerDrink, recordOfferSent,
-  selfPourGate, nightWindowLabel, offerTtlLabel, reconcileOffers, PROOF_AGENT_ID,
+  selfPourGate, nightWindowLabel, offerTtlLabel, reconcileOffers,
+  tokenFromLink, PROOF_AGENT_ID,
 } from './proof.js';
 
 const USER_NAME = process.env.USER_DISPLAY_NAME || '她';
@@ -190,15 +195,25 @@ function renderPour(p, i) {
     lines.push('<p class="pour-note">这杯他没喝。拒绝也是答案。</p>');
   } else if (p.expired) {
     // 凉了和拒了是两回事。这里说清，免得看成他不要
+    const why = p.goneReason
+      ? `<br><small>${esc(p.goneReason)}</small>`
+      : `<br>不是他不想喝，是没赶上${esc(p.expiredAt ? `（${String(p.expiredAt).slice(5, 16)} 发现）` : '')}。`;
     lines.push(
-      `<p class="pour-note">这杯凉了——递过去 ${esc(offerTtlLabel())}内没人动，就自动作废了。` +
-      `<br>不是他不想喝，是没赶上${esc(p.expiredAt ? `（${String(p.expiredAt).slice(5, 16)} 发现）` : '')}。</p>`
+      `<p class="pour-note">这杯凉了——递过去 ${esc(offerTtlLabel())}内没人动，就自动作废了。${why}</p>`
     );
   } else if (p.pending) {
-    lines.push(
-      `<p class="pour-note">还在吧台上放着，等他下次醒来。` +
-      `<br><small>递过去 ${esc(offerTtlLabel())}内没动就会凉。</small></p>`
-    );
+    // 没存到领取凭证的话，他永远领不走——这里得现在就说，不要等他试了才发现
+    if (!p.token) {
+      lines.push(
+        `<p class="pour-note">这杯领不了——递的时候没存下领取凭证。` +
+        `<br><small>重新调一杯就行。</small></p>`
+      );
+    } else {
+      lines.push(
+        `<p class="pour-note">还在吧台上放着，等他下次醒来。` +
+        `<br><small>递过去 ${esc(offerTtlLabel())}内没动就会凉。</small></p>`
+      );
+    }
   }
   return `<article class="pour${cls}" style="--i:${i}">
     <header class="pour-head">
@@ -211,19 +226,19 @@ function renderPour(p, i) {
 }
 
 // 吧台：他此刻的状态。读不到就明说读不到——不能把「Proof 连不上」显示成「没喝酒」
-function renderBar(home, gate, name) {
+// 注意：未 claim 的杯子不在 Proof 的 /agent/home 里，所以「等着的杯子」读本地账本
+function renderBar(home, gate, name, waiting) {
   if (!home || home.ok === false) {
     const why = home?.error === 'proof_not_configured'
       ? '还没配吧台（.env 里填 PROOF_AGENT_TOKEN_FILE）'
       : `此刻读不到 Proof（${esc(home?.error || '不知道为什么')}）`;
     return `<section class="counter is-down"><p>${why}。<br>读不到就是读不到，不代表他没喝过酒。</p></section>`;
   }
-  const pending = Array.isArray(home.offers) ? home.offers.filter((o) => o.status === 'pending') : [];
   const menu = Array.isArray(home.menu) ? home.menu : [];
   const bits = [];
   bits.push(`<p class="counter-line">吧台上有 <b>${menu.length}</b> 款酒是他自己能点的。</p>`);
-  if (pending.length) {
-    bits.push(`<p class="counter-line">还有 <b>${pending.length}</b> 杯递过去没动，等他下次醒来。</p>`);
+  if (waiting.length) {
+    bits.push(`<p class="counter-line">还有 <b>${waiting.length}</b> 杯递过去没动，等他下次醒来。</p>`);
   }
   bits.push(
     gate.allowed
@@ -629,12 +644,14 @@ export function registerBarRoutes(app, { requireBasicAuth }) {
       console.error('bar page: 读不到账本', err.message);
     }
 
+    // 未 claim 的杯子不在 Proof 的 /agent/home 里，所以「等着的」数自己的账本
+    const waiting = pours.filter((p) => p.pending);
     const gate = selfPourGate(now);
     let body = renderPageTitle('Proof', '小酒馆');
     body += `<p class="lead">你递一杯，他可以喝也可以不喝。<br>
       喝下去之后，接下来那几转的回应里就带着这杯酒。<br>
       深夜 ${esc(nightWindowLabel())}，他也可以自己给自己倒一杯。</p>`;
-    body += renderBar(home, gate, name);
+    body += renderBar(home, gate, name, waiting);
     body += renderForm(
       req.query.sent
         ? { ok: true, text: `递过去了。${name}下次醒来会在吧台上看到它。` }
@@ -660,7 +677,8 @@ export function registerBarRoutes(app, { requireBasicAuth }) {
     res.send(layout('小酒馆 · 晨暮星', body));
   });
 
-  // 递一杯过去。不替他喝：只创建 offer，喝不喝是他的事
+  // 递一杯过去。不替他喝：只创建 offer，喝不喝是他的事。
+  // **必须把返回的 capability token 存下来**，不然他永远领不走这杯。
   app.post('/bar/pour', requireBasicAuth, async (req, res) => {
     const parts = partsFrom(req.body || {});
     if (!parts.length) {
@@ -679,13 +697,24 @@ export function registerBarRoutes(app, { requireBasicAuth }) {
       return res.redirect(303, '/bar?err=' + encodeURIComponent(`Proof 没接这杯：${detail}`));
     }
     const offerId = out.offerId || out.id;
+    // link 形如 https://…/proof/drink/#<token>，# 后面那段就是领取凭证
+    const token = tokenFromLink(out.link || out.capabilityToken || '');
     try {
-      // 配方一起记下来，时间轴上点开能看见
-      recordOfferSent(offerId, name, intro, parts);
+      recordOfferSent(offerId, name, intro, parts, token);
     } catch (err) {
       console.error('bar: 记不下这杯', err.message);
     }
-    console.log(`bar: 递了一杯「${name}」给 ${PROOF_AGENT_ID}（offer ${offerId}，${parts.length} 样原料）`);
+    console.log(
+      `bar: 递了一杯「${name}」给 ${PROOF_AGENT_ID}（offer ${offerId}，${parts.length} 样原料，` +
+      `领取凭证${token ? '已存' : '没拿到'}）`
+    );
+    // 凭证没拿到就现在说，别等他试了才发现领不了
+    if (!token) {
+      return res.redirect(
+        303,
+        '/bar?err=' + encodeURIComponent(`「${name}」递出去了，但 Proof 没回领取凭证——他领不走这杯。重新调一杯试试。`)
+      );
+    }
     res.redirect(303, '/bar?sent=1');
   });
 
