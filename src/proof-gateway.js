@@ -27,6 +27,20 @@
 // PROOF_BLACKOUT_RECOVERY_HOURS 调）。所以「他不量了」和「这段变模糊了」
 // 是两个时间点，episode 上分开存：closedAt 和 restoreAt。
 //
+// ╔══ 第二件要紧的事：账本不认识的历史，一条都不登记。
+//
+// 登记靠的是「这条消息第一次出现在 startedAt 之后」。但账本刚建立、或者被人
+// 清空过时，整段历史会在同一轮里被一次性盖上「现在」的章——全部大于
+// startedAt，于是整段过去被当成「断片期间发生的」入表。
+// （小满的账本里三十多条指纹时间戳一模一样，就是这个。）
+//
+// 所以改成只看「本轮才第一次见到」，并且一轮里新面孔超过 NEW_PER_TURN_MAX 就
+// 说明账本根本不认识这段历史，宁可一条都不登。和 Proof transform.mjs 的
+// 「未见过的历史：无法证明在窗口内 → 放行」同一条 fail-open。
+//
+// 由此也得出一条运维规矩：**清账本时不能清 seen。**
+// 老指纹带着老时间戳留着，新断片才能正确地把它们排除在外。要清只清 episodes。
+//
 // 断片的规矩（小满 2026-10-12 定的，和梦境那套对齐）：
 //   留痕——摘掉的那段位置上留一句「这里有一段记不清了」。他知道空了一块，不知道空的是什么。
 //   关键词唤醒——之后谁提到那段里的词，就闪回一个画面（一句），不是整段回来。
@@ -50,6 +64,9 @@ const FLASH_CHARS = 40;
 // 已经模糊掉的那段留多久。不是「多久后恢复」——过了 restoreAt 就永远模糊了，
 // 这个只是账本清理：那么旧的消息早就滴出上下文窗口了，再记着也没用。
 const FADED_KEEP_MS = 30 * 86400000;
+// 一轮里正常能新增几条面孔：小满说一句、他上一条回复，偶尔多两条工具消息。
+// 超过这个数就不是「聊天在往前走」，是「账本第一次看到这段历史」。
+const NEW_PER_TURN_MAX = 4;
 
 const MARKER = '（这里有一段记不清了。）';
 
@@ -187,9 +204,16 @@ function applyBlackout(messages, ctx) {
   // 先经历，之后才记不清。不加这条，小满正在说的话会当轮就消失。
   const tailIndex = messages.length - 1;
 
-  // 先登记这一轮看到的每条消息第一次出现的时间
+  // 登记这一轮看到的每条消息第一次出现的时间，并记下哪几条是本轮才第一次见到的。
+  // freshFps 是唯一可信的「这条是新发生的」信号；db.seen 的时间戳本身不是——
+  // 账本刚建立时它会把整段历史都标成「现在」。
   const fps = messages.map((m) => fingerprint(m));
-  for (const fp of fps) if (!db.seen[fp]) db.seen[fp] = now;
+  const freshFps = new Set();
+  for (const fp of fps) {
+    if (db.seen[fp]) continue;
+    db.seen[fp] = now;
+    freshFps.add(fp);
+  }
 
   let episode = db.episodes.find((e) => e.open);
 
@@ -203,14 +227,23 @@ function applyBlackout(messages, ctx) {
       );
     }
     if (bo.restoreAt) episode.restoreAt = bo.restoreAt;
-    // 断片开始之后才第一次出现的消息，就是这段里的。
-    // 只登记，不摘——他现在还在场，听得见。
-    messages.forEach((m, i) => {
-      const fp = fps[i];
-      if (db.seen[fp] < episode.startedAt) return;
-      if (m.role !== 'user' && m.role !== 'assistant') return;
-      if (!episode.hidden[fp]) episode.hidden[fp] = { at: db.seen[fp], keys: keywords(textOf(m.content)), flashed: false };
-    });
+
+    // 只登记本轮才第一次见到的。而且——这一轮新面孔太多就说明账本根本
+    // 不认识这段历史（刚建、被清、或者换了个窗口），那就一条都不登。
+    // 宁可漏掉一段真断片，不能把整段过去误判成「断片期间发生的」。
+    if (freshFps.size > NEW_PER_TURN_MAX) {
+      console.warn(
+        `proof-gateway: 这轮有 ${freshFps.size} 条消息是第一次见（账本不认识这段历史），`
+        + '一条都不登记。只有往后正常往前走的对话会进这段断片。'
+      );
+    } else {
+      messages.forEach((m, i) => {
+        const fp = fps[i];
+        if (!freshFps.has(fp)) return;
+        if (m.role !== 'user' && m.role !== 'assistant') return;
+        if (!episode.hidden[fp]) episode.hidden[fp] = { at: now, keys: keywords(textOf(m.content)), flashed: false };
+      });
+    }
   } else if (episode) {
     // Proof 说不在断片期了。这条路径只有一种情况：reset——
     // liftBlackouts 把批次全置为可读，那就是「这晚不算」，整段不再模糊。
@@ -250,7 +283,7 @@ function applyBlackout(messages, ctx) {
   }
 
   // 最后一条没被摘掉的 user 消息：它里的词用来判该不该闪回
-let probe = '';
+  let probe = '';
   for (let i = messages.length - 1; i >= 0; i--) {
     if (messages[i]?.role !== 'user') continue;
     if (i !== tailIndex && fadedOf.has(fps[i])) continue;
