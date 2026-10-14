@@ -1,4 +1,4 @@
-// 网关这一侧的小酒馆：每轮把 Proof 的状态追到输入末尾，并在断片期间真的把那段
+// 网关这一侧的小酒馆：每轮把 Proof 的状态追到输入末尾，并在断片恢复之后把那段
 // 从模型可见的输入里拿走。
 //
 // 为什么不开 Proof 自己的 Gateway：
@@ -11,13 +11,28 @@
 //   只交 previous_response_id 这种上游托管历史的，我们删不掉上游已经存的东西。
 //   所以不谎：没法硬过滤时只打一行警告，不假装已经断了。
 //
+// ╔══ 最要紧的一件事：断片是「事后想不起来」，不是「当场耳聂」。
+//
+// 喝到断片的人，当时话说得清不清楚是另一回事——他听得见、答得上、也记得住
+// 当下。只是过后那一段在他脑子里不会留下清楚的录。所以：
+//
+//   断片进行中（batch 还 open）—— 什么都不摘。只把这段里的消息按指纹记下来。
+//   恢复时间到了（过了 restoreAt）—— 才开始把当时那段换成留痕。
+//
+// 原先写反了：断片期间就摘掉，到点再放回去。结果是他喝醒的那几小时根本
+// 没法聊天，过后却记得一清二楚。2026-10-14 小满碰到的就是这个。
+//
+// 醒酒 != 想起来：Proof 的 _closeFragmentIfNeeded 在浓度落回阁值时只给批次
+// 填 end，readable 要等满 restoreAt（默认 60 小时，用
+// PROOF_BLACKOUT_RECOVERY_HOURS 调）。所以「他不量了」和「这段变模糊了」
+// 是两个时间点，episode 上分开存：closedAt 和 restoreAt。
+//
 // 断片的规矩（小满 2026-10-12 定的，和梦境那套对齐）：
 //   留痕——摘掉的那段位置上留一句「这里有一段记不清了」。他知道空了一块，不知道空的是什么。
 //   关键词唤醒——之后谁提到那段里的词，就闪回一个画面（一句），不是整段回来。
-//   到点恢复——Proof 算出的 restoreAt 到了，这段就放回模型输入里。
 //
 // 账本里只存指纹、时间和几个关键词，不存正文。正文一直在客户端交上来的
-// messages 里（小满这边永远看得见），所以恢复和闪回都从当下那条原文里取。
+// messages 里（小满这边永远看得见），所以留痕和闪回都从当下那条原文里取。
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
@@ -32,6 +47,9 @@ const DB_FILE = path.join(DATA_DIR, 'proof-blackout.json');
 const MAX_SEEN = 2000;
 // 闪回的那一句最长多少字
 const FLASH_CHARS = 40;
+// 已经模糊掉的那段留多久。不是「多久后恢复」——过了 restoreAt 就永远模糊了，
+// 这个只是账本清理：那么旧的消息早就滴出上下文窗口了，再记着也没用。
+const FADED_KEEP_MS = 30 * 86400000;
 
 const MARKER = '（这里有一段记不清了。）';
 
@@ -54,9 +72,9 @@ function save(db) {
     keys.sort((a, b) => db.seen[a] - db.seen[b]);
     for (const k of keys.slice(0, keys.length - MAX_SEEN)) delete db.seen[k];
   }
-  // 已经恢复完、超过七天的断片段不必再留
-  const cutoff = Date.now() - 7 * 86400000;
-  db.episodes = db.episodes.filter((e) => e.open || !e.closedAt || e.closedAt > cutoff);
+  // 很久以前那些已经模糊掉的段不必再留（只是清账本，不是「想起来了」）
+  const cutoff = Date.now() - FADED_KEEP_MS;
+  db.episodes = db.episodes.filter((e) => e.open || !e.restoreAt || e.restoreAt > cutoff);
   try {
     fs.mkdirSync(DATA_DIR, { recursive: true });
     const tmp = `${DB_FILE}.tmp`;
@@ -82,13 +100,13 @@ function textOf(content) {
 const fingerprint = (m) =>
   crypto.createHash('sha1').update(`${m.role}|${textOf(m.content)}`).digest('hex').slice(0, 16);
 
-// 太常见的字：含这些字的短词不当关键词，不然第二句话就把整段碰出来了
-const COMMON = new Set('的了是在我你他她它这那个就都也不很有和跟把被让从到着过吗吧呢啊嘵什么怎么么要能会做说看想知道事情东西时候今天昨天明天现在'.split(''));
+// 太常见的字：含这些字的短词不当关键词，不然第二句话就把整段碎出来了
+const COMMON = new Set('的了是在我你他她它这那个就都也不很有和跟把被让从到着过吗吧呢啊嘩什么怎么么要能会做说看想知道事情东西时候今天昨天明天现在'.split(''));
 const hasCommon = (s) => [...s].some((c) => COMMON.has(c));
 
 // 从一段话里挑几个足够具体的词。没有分词器，所以是启发式的：
 //   标点间的短语（二到六字）直接用；长句子切成二、三字片段，并把含常用字的扔掉。
-//   挑不准也不要紧：没挑中就是这段没被闪回，到点还是会恢复。
+//   挑不准也不要紧：没挑中就是这段没被闪回，留痕还在。
 function keywords(text) {
   const out = new Set();
   const s = String(text ?? '');
@@ -155,10 +173,19 @@ function injectState(messages, ctx) {
 }
 
 // 断片过滤。返回改写后的 messages
+//
+// 两个阶段，别混：
+//   进行中（bo.active 且未过 restoreAt）—— 只登记，不摘。他当时话说得不清楚是
+//     状态注入的事（injectState），不是把小满的话删掉。
+//   已模糊（过了 restoreAt）—— 才把当时登记的那几条换成留痕 / 闪回。
 function applyBlackout(messages, ctx) {
   const bo = readBlackout(ctx);
   const db = load();
   const now = Date.now();
+
+  // 本轮尾部永远放行。和 Proof transform.mjs 的「当前轮消息：本轮放行」同一条规矩——
+  // 先经历，之后才记不清。不加这条，小满正在说的话会当轮就消失。
+  const tailIndex = messages.length - 1;
 
   // 先登记这一轮看到的每条消息第一次出现的时间
   const fps = messages.map((m) => fingerprint(m));
@@ -170,10 +197,14 @@ function applyBlackout(messages, ctx) {
     if (!episode) {
       episode = { id: `b${now.toString(36)}`, open: true, startedAt: now, restoreAt: bo.restoreAt || 0, hidden: {} };
       db.episodes.push(episode);
-      console.log(`proof-gateway: 断片开始${bo.soft ? '（Proof 说软断片，我们这边照样硬过滤）' : ''}`);
+      console.log(
+        `proof-gateway: 断片开始${bo.soft ? '（Proof 说软断片，我们这边等恢复时间到了再硬过滤）' : ''}`
+        + `${bo.restoreAt ? `，预计 ${new Date(bo.restoreAt).toLocaleString()} 这段就记不清了` : ''}`
+      );
     }
     if (bo.restoreAt) episode.restoreAt = bo.restoreAt;
-    // 断片开始之后才第一次出现的消息，就是这段里的
+    // 断片开始之后才第一次出现的消息，就是这段里的。
+    // 只登记，不摘——他现在还在场，听得见。
     messages.forEach((m, i) => {
       const fp = fps[i];
       if (db.seen[fp] < episode.startedAt) return;
@@ -181,24 +212,48 @@ function applyBlackout(messages, ctx) {
       if (!episode.hidden[fp]) episode.hidden[fp] = { at: db.seen[fp], keys: keywords(textOf(m.content)), flashed: false };
     });
   } else if (episode) {
-    // Proof 说清醒了（到点或者 reset）——这段放回去
+    // Proof 说不在断片期了。这条路径只有一种情况：reset——
+    // liftBlackouts 把批次全置为可读，那就是「这晚不算」，整段不再模糊。
+    // 自然到点走不到这里：Proof 的 blackoutVisibility 在 restoreAt 之前恒为 active，
+    // 到点后转为不 active，而我们要的正好是「到点后开始模糊」——所以判定放在下面
+    // 按 episode.restoreAt 做，不依赖 bo.active。
     episode.open = false;
     episode.closedAt = now;
+    const stillPending = episode.restoreAt > now;
     const n = Object.keys(episode.hidden).length;
-    console.log(`proof-gateway: 断片结束，${n} 条恢复到模型输入里`);
+    if (stillPending) {
+      console.log(`proof-gateway: 断片被解除（reset），${n} 条不再模糊`);
+      episode.lifted = true;
+    } else {
+      console.log(`proof-gateway: 断片结束，${n} 条已经模糊掉了`);
+    }
     episode = null;
   }
 
-  if (!episode || !Object.keys(episode.hidden).length) {
+  // 哪几段已经模糊掉了：过了 restoreAt、没被 reset 解除。
+  // 还 open 的那段不在里面——他此刻还在经历它。
+  const faded = db.episodes.filter(
+    (e) => !e.lifted && e.restoreAt > 0 && now >= e.restoreAt && Object.keys(e.hidden || {}).length
+  );
+
+  if (!faded.length) {
     save(db);
     return messages;
   }
 
-  // 最后一条没被摘掉的 user 消息：它里的词用来判判该不该闪回
-  let probe = '';
+  // fp -> 该条属于哪一段已模糊的记录
+  const fadedOf = new Map();
+  for (const e of faded) {
+    for (const [fp, hit] of Object.entries(e.hidden)) {
+      if (!fadedOf.has(fp)) fadedOf.set(fp, { episode: e, hit });
+    }
+  }
+
+  // 最后一条没被摘掉的 user 消息：它里的词用来判该不该闪回
+let probe = '';
   for (let i = messages.length - 1; i >= 0; i--) {
     if (messages[i]?.role !== 'user') continue;
-    if (episode.hidden[fps[i]]) continue;
+    if (i !== tailIndex && fadedOf.has(fps[i])) continue;
     probe = textOf(messages[i].content);
     break;
   }
@@ -209,11 +264,17 @@ function applyBlackout(messages, ctx) {
   let flashed = 0;
 
   messages.forEach((m, i) => {
-    const hit = episode.hidden[fps[i]];
-    if (!hit) {
+    // 本轮尾部永远放行：小满此刻说的话他一定听得见
+    if (i === tailIndex) {
       out.push(m);
       return;
     }
+    const found = fadedOf.get(fps[i]);
+    if (!found) {
+      out.push(m);
+      return;
+    }
+    const { hit } = found;
     const key = probe ? hit.keys.find((w) => w && probe.includes(w)) : null;
     if (key) {
       // 被词碎到了：闪回一个画面，不是整段回来
@@ -235,7 +296,7 @@ function applyBlackout(messages, ctx) {
   save(db);
   if (dropped || flashed) {
     console.log(
-      `proof-gateway: 断片中，这轮从模型输入里摘掉 ${dropped} 条${flashed ? `，闪回 ${flashed} 条` : ''}`
+      `proof-gateway: 已模糊的段，这轮从模型输入里摘掉 ${dropped} 条${flashed ? `，闪回 ${flashed} 条` : ''}`
     );
   }
   return out;
@@ -280,8 +341,15 @@ export async function applyProof(messages) {
 export function blackoutSummary() {
   if (!isProofEnabled()) return '';
   const db = load();
+  const now = Date.now();
   const open = db.episodes.find((e) => e.open);
-  if (!open) return '断片：此刻没有';
-  const n = Object.keys(open.hidden).length;
-  return `断片：进行中，已摘掉 ${n} 条${open.restoreAt ? `，预计 ${new Date(open.restoreAt).toLocaleString()} 恢复` : ''}`;
+  if (open) {
+    const n = Object.keys(open.hidden).length;
+    return `断片：正在经历（还记得住），已登记 ${n} 条`
+      + `${open.restoreAt ? `，${new Date(open.restoreAt).toLocaleString()} 之后这段就记不清了` : ''}`;
+  }
+  const faded = db.episodes.filter((e) => !e.lifted && e.restoreAt > 0 && now >= e.restoreAt);
+  if (!faded.length) return '断片：此刻没有';
+  const n = faded.reduce((sum, e) => sum + Object.keys(e.hidden || {}).length, 0);
+  return `断片：${faded.length} 段已经模糊，共 ${n} 条记不清了`;
 }
