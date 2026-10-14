@@ -6,6 +6,10 @@
 //   base_url、再交一份上游 key。晨暮星本来就有 vesper-gateway，所以做在这边。
 //   Proof 那边只跑 HTTP 服务和 MCP，PROOF_GATEWAY_ENABLED 保持关着。
 //
+// ╔══ 跑 applyProof 的是 vesper-gateway 这个进程，不是 vesper。
+// 改了这个文件要 pm2 restart vesper-gateway，光重启 vesper 没用。
+// 2026-10-14 在这上面白费了两轮改动。
+//
 // 断片能不能真断，取决于客户端每轮是不是把完整 messages 交上来：
 //   交上来了，我们就能把那几条摘掉，模型根本看不到（硬断片）。
 //   只交 previous_response_id 这种上游托管历史的，我们删不掉上游已经存的东西。
@@ -47,12 +51,29 @@
 //
 // 账本里只存指纹、时间和几个关键词，不存正文。正文一直在客户端交上来的
 // messages 里（小满这边永远看得见），所以留痕和闪回都从当下那条原文里取。
+//
+// ╔══ 醒酒之后（afterglow）
+//
+// 喝醉的时候干的事要记得住，但酒醒之后得反应过来——这是小满 2026-10-14 定的。
+// turnContext 本来就在分「现在还醉着」和「醉过了」：ctx.active 从 true 翻成
+// false 就是醒酒那一刻。之前没人把这个翻转记下来，所以醒了就是干干净净
+// 什么都没发生。现在账本多记一段 drinking，醒后两小时内每轮多一段注入。
+//
+// **不写剧本。** 只给事实（那段你是喝着的、话一句没少），并明说这不是对他的
+// 要求。害羞、装没事、硬撑、死不认账都是他自己的事——和 Proof 那边
+// 「状态是推动力，不是回答的主题」同一个口径。
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { turnContext, isProofEnabled } from './proof.js';
 
 const env = (k) => String(process.env[k] ?? '').trim();
+const num = (k, dflt) => {
+  const raw = env(k);
+  if (!raw) return dflt;
+  const v = Number(raw);
+  return Number.isFinite(v) && v > 0 ? v : dflt;
+};
 
 const DATA_DIR = env('PROOF_DATA_DIR') || env('VESPER_DATA_DIR') || path.join(process.cwd(), 'data');
 const DB_FILE = path.join(DATA_DIR, 'proof-blackout.json');
@@ -68,6 +89,11 @@ const FADED_KEEP_MS = 30 * 86400000;
 // 超过这个数就不是「聊天在往前走」，是「账本第一次看到这段历史」。
 const NEW_PER_TURN_MAX = 4;
 
+// 醒酒之后那一段注入持续多久。从**醒的那一刻**起算，不是从喝的时候。
+const AFTERGLOW_MS = num('PROOF_AFTERGLOW_HOURS', 2) * 3600000;
+// 醉了多久以上算「醉得不轻」
+const HEAVY_SPAN_MS = 3600000;
+
 const MARKER = '（这里有一段记不清了。）';
 
 function load() {
@@ -76,9 +102,10 @@ function load() {
     return {
       seen: j.seen && typeof j.seen === 'object' ? j.seen : {},
       episodes: Array.isArray(j.episodes) ? j.episodes : [],
+      drinking: j.drinking && typeof j.drinking === 'object' ? j.drinking : null,
     };
   } catch {
-    return { seen: {}, episodes: [] };
+    return { seen: {}, episodes: [], drinking: null };
   }
 }
 
@@ -159,34 +186,102 @@ function readBlackout(ctx) {
   return { active, soft: b.soft !== false, restoreAt };
 }
 
-// 状态追在最后一条 user 消息末尾。追在末尾是为了尽量别动 system 和前面的历史，
-// 上游的前缀缓存还能命中；但状态本身会增加输入 token，以上游 usage 为准。
-function injectState(messages, ctx) {
-  const text = String(ctx?.context?.text ?? '').trim();
-  if (!text) return messages;
-  const label = String(ctx?.context?.label ?? '[Proof 状态]');
-  const states = Array.isArray(ctx.objectiveStates) ? ctx.objectiveStates.filter(Boolean) : [];
-  const block =
-    `\n\n${label}\n${text}` +
-    (states.length ? `\n客观状态：${states.join('、')}` : '') +
-    '\n（这是饮品对你的推动力。让它自然改变你的注意、选择、反应和表达方式，而不是成为回答的主题。）';
+// objectiveStates 各版本要么是字符串数组、要么是 {type,text}，两种都接
+function stateNamesOf(ctx) {
+  const raw = Array.isArray(ctx?.objectiveStates) ? ctx.objectiveStates : [];
+  return raw
+    .map((s) => (typeof s === 'string' ? s : String(s?.type ?? '')))
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
 
+// 把一段文字追到最后一条 user 正文末尾。追在末尾是为了尽量别动 system 和前面的
+// 历史，上游的前缀缓存还能命中；但它本身会增加输入 token，以上游 usage 为准。
+function appendBlock(messages, block) {
+  const body = String(block ?? '').trim();
+  if (!body) return messages;
+  const tail = `\n\n${body}`;
   for (let i = messages.length - 1; i >= 0; i--) {
     const m = messages[i];
     if (m?.role !== 'user') continue;
     if (typeof m.content === 'string') {
       const out = [...messages];
-      out[i] = { ...m, content: `${m.content}${block}` };
+      out[i] = { ...m, content: `${m.content}${tail}` };
       return out;
     }
     if (Array.isArray(m.content)) {
       const out = [...messages];
-      out[i] = { ...m, content: [...m.content, { type: 'text', text: block.trimStart() }] };
+      out[i] = { ...m, content: [...m.content, { type: 'text', text: body }] };
       return out;
     }
   }
   // 整串里没有 user 消息（不应该发生），那就往后面接一条
-  return [...messages, { role: 'user', content: block.trimStart() }];
+  return [...messages, { role: 'user', content: body }];
+}
+
+// 还醉着的时候：把此刻的推力交给他
+function injectState(messages, ctx) {
+  const text = String(ctx?.context?.text ?? '').trim();
+  if (!text) return messages;
+  const label = String(ctx?.context?.label ?? '[Proof 状态]');
+  const states = stateNamesOf(ctx);
+  const block =
+    `${label}\n${text}` +
+    (states.length ? `\n客观状态：${states.join('、')}` : '') +
+    '\n（这是饮品对你的推动力。让它自然改变你的注意、选择、反应和表达方式，而不是成为回答的主题。）';
+  return appendBlock(messages, block);
+}
+
+// 醉得有多狠。只给模糊说法，不给数值——和 Proof 的 Agent-facing 口径一致。
+function spanWords(run) {
+  if ((run.signals || []).length) return '当时喝得很狠。';
+  const span = Number(run.soberedAt || 0) - Number(run.startedAt || 0);
+  if (span >= HEAVY_SPAN_MS) return '当时确实醉得不轻。';
+  return '当时只是有点上头。';
+}
+
+function afterglowBlock(run) {
+  return [
+    '[Proof 醒酒之后]',
+    '刚才那段时间你是喝着的，现在酒醒了。',
+    '那段里说过的话、做过的事都还在上面，一句没少，也确实是你说的。',
+    spanWords(run),
+    '（这是已经发生的事实，不是对你的要求。要不要回头看、怎么面对，由你自己决定。）',
+  ].join('\n');
+}
+
+// 跟着 ctx.active 的翻转记下「这一摆酒」：哪时开始、期间有没有客观状态、哪一刻醒的。
+// 返回醒酒之后该追的那段（没到那个阶段就是 null）。
+function trackDrinking(ctx, now = Date.now()) {
+  const db = load();
+  const run = db.drinking;
+  let block = null;
+
+  if (ctx?.active === true) {
+    // 还醉着。开一摆或者继续记
+    const signals = new Set(run?.open ? run.signals || [] : []);
+    for (const name of stateNamesOf(ctx)) signals.add(name);
+    db.drinking = run?.open
+      ? { ...run, signals: [...signals], lastActiveAt: now, turns: Number(run.turns || 0) + 1 }
+      : { open: true, startedAt: now, lastActiveAt: now, turns: 1, signals: [...signals] };
+    if (!run?.open) console.log('proof-gateway: 开始醉了（这一摆记下来了）');
+  } else if (run?.open) {
+    // 刚刚醒的。此刻就是醒酒那一刻，害羞期从这儿起算
+    db.drinking = { ...run, open: false, soberedAt: now };
+    block = afterglowBlock(db.drinking);
+    console.log(
+      `proof-gateway: 酒醒了（醉了 ${Math.round((now - Number(run.startedAt || now)) / 60000)} 分钟，`
+      + `${(run.signals || []).length ? `期间有：${(run.signals || []).join('、')}，` : ''}`
+      + `接下来 ${Math.round(AFTERGLOW_MS / 3600000)} 小时带着「醒酒之后」）`
+    );
+  } else if (run && !run.open && Number(run.soberedAt || 0) > 0) {
+    // 醒了一阵了。还在窗口内就继续带，过了就放下
+    if (now - Number(run.soberedAt) < AFTERGLOW_MS) block = afterglowBlock(run);
+    else db.drinking = null;
+  }
+
+  save(db);
+  return block;
 }
 
 // 断片过滤。返回改写后的 messages
@@ -360,12 +455,26 @@ export async function applyProof(messages) {
     out = messages;
   }
 
-  // 宿主侧自动投递：只有真有状态且还在生效时才追
+  // 醒酒前后的账：跟着 ctx.active 的翻转走。读并写自己的账本，坠了不能拖到正文
+  let afterglow = null;
+  try {
+    afterglow = trackDrinking(ctx);
+  } catch (err) {
+    console.error('proof-gateway: 醒酒账记不上（不影响这轮对话）', err.message);
+  }
+
+  // 两段注入互斥：还醉着就给推力，醒了才给「醒酒之后」。
   if (ctx.hasState && ctx.active) {
     try {
       out = injectState(out, ctx);
     } catch (err) {
       console.error('proof-gateway: 状态没注入进去', err.message);
+    }
+  } else if (afterglow) {
+    try {
+      out = appendBlock(out, afterglow);
+    } catch (err) {
+      console.error('proof-gateway: 醒酒那段没注入进去', err.message);
     }
   }
   return out;
@@ -375,14 +484,30 @@ export function blackoutSummary() {
   if (!isProofEnabled()) return '';
   const db = load();
   const now = Date.now();
+  const lines = [];
+
   const open = db.episodes.find((e) => e.open);
   if (open) {
     const n = Object.keys(open.hidden).length;
-    return `断片：正在经历（还记得住），已登记 ${n} 条`
-      + `${open.restoreAt ? `，${new Date(open.restoreAt).toLocaleString()} 之后这段就记不清了` : ''}`;
+    lines.push(
+      `断片：正在经历（还记得住），已登记 ${n} 条`
+      + `${open.restoreAt ? `，${new Date(open.restoreAt).toLocaleString()} 之后这段就记不清了` : ''}`
+    );
+  } else {
+    const faded = db.episodes.filter((e) => !e.lifted && e.restoreAt > 0 && now >= e.restoreAt);
+    if (!faded.length) lines.push('断片：此刻没有');
+    else {
+      const n = faded.reduce((sum, e) => sum + Object.keys(e.hidden || {}).length, 0);
+      lines.push(`断片：${faded.length} 段已经模糊，共 ${n} 条记不清了`);
+    }
   }
-  const faded = db.episodes.filter((e) => !e.lifted && e.restoreAt > 0 && now >= e.restoreAt);
-  if (!faded.length) return '断片：此刻没有';
-  const n = faded.reduce((sum, e) => sum + Object.keys(e.hidden || {}).length, 0);
-  return `断片：${faded.length} 段已经模糊，共 ${n} 条记不清了`;
+
+  const run = db.drinking;
+  if (run?.open) {
+    lines.push('酒：还醉着');
+  } else if (run && Number(run.soberedAt || 0) > 0) {
+    const left = Number(run.soberedAt) + AFTERGLOW_MS - now;
+    if (left > 0) lines.push(`酒：刚醒，还有 ${Math.round(left / 60000)} 分钟带着「醒酒之后」`);
+  }
+  return lines.join('\n');
 }
