@@ -12,16 +12,17 @@
 | [Drivesoid](https://github.com/A1batr055/Drivesoid) | 情绪状态 | 聊天自动上报；醒来时参考当前情绪；心绪页 `/drives` | [09](docs/09-drivesoid.md) |
 | [dylan-heartbeat](https://github.com/callie0313/dylan-heartbeat) | 另一个唤醒项目 | 两边共享"做过什么"的事件；它写的日记在日记页 `/diary` 看 | [08](docs/08-heartbeat.md) |
 | [Music-Mcp-Netease](https://github.com/Anko3o/Music-Mcp-Netease) | 网易云播放器 + 点歌台 MCP | 菜单里的「音乐」跳到播放器；TA 醒来能看你在听什么、往歌单里收歌、写批注（不会放歌） | [下面](#-音乐) |
+| [Proof](https://github.com/lumingye/Proof) | 饮酒状态引擎 | 小酒馆 `/bar`：你调一杯递过去，TA 可以喝也可以拒；喝了之后那几轮的回应带着这杯酒 | [下面](#-小酒馆proof) |
 
-四个都是可选的，一个都不接也能跑。
+五个都是可选的，一个都不接也能跑。
 
 ## 三个进程
 
 | pm2 进程名 | 端口 | 干什么 |
 |---|---|---|
 | `phosphor` | 无 | 心脏。每分钟看一眼该不该醒，该醒就做决定、执行动作；每 24 小时清理一次旧对话记录 |
-| `vesper` | 3001 | 接收手机上报、`/wake/*` 控制接口、动态页 `/moments`、星星罐 `/moments/star-jar`、心绪页 `/drives`、日记页 `/diary`、记忆库 `/memory/` |
-| `vesper-gateway` | 3002 | 模型网关。聊天客户端和 phosphor 都从这里调模型，顺便记录对话 |
+| `vesper` | 3001 | 接收手机上报、`/wake/*` 控制接口、动态页 `/moments`、星星罐 `/moments/star-jar`、心绪页 `/drives`、日记页 `/diary`、记忆库 `/memory/`、小酒馆 `/bar` 与 `/bar/mcp` |
+| `vesper-gateway` | 3002 | 模型网关。聊天客户端和 phosphor 都从这里调模型，顺便记录对话；**小酒馆的状态注入和断片过滤也在这个进程里** |
 
 三个进程共用一个数据库 `data/state.db`。
 
@@ -66,7 +67,7 @@ pm2 logs phosphor --lines 40 --nostream
 
 浏览器打开 `http://服务器IP:3001/moments`，用 `VESPER_BASIC_USER` / `VESPER_BASIC_PASS` 登录。
 
-- 右上角三条杠是菜单：回到主页、日记、我的收藏、星星罐、心绪、音乐、论坛、记忆库、自定义。日记、记忆库、音乐配好了才能点（见下面几节）；论坛填了 `NAV_FORUM_URL` 才能点
+- 右上角三条杠是菜单：回到主页、日记、我的收藏、星星罐、心绪、音乐、小酒馆、论坛、记忆库、自定义。日记、记忆库、音乐、小酒馆配好了才能点（见下面几节）；论坛填了 `NAV_FORUM_URL` 才能点
 - 换页、点日期、翻月份时有星星转场：粉色雾面盖上来，星星一颗颗闪过再进新页面。系统开了「减弱动态效果」就只淡入淡出
 - 标题下面一行是 TA 此刻的心情，点进去是心绪页
 - 再下面一行黄框小字是唤醒时间：上次唤醒、下次唤醒、自主唤醒（TA 自己约的、最近的那一次精确唤醒）。今天的只写几点几分；silent 模式下下次唤醒显示「暂停中」；自主唤醒长按或悬停能看到 TA 当时留的话
@@ -201,6 +202,108 @@ pm2 logs phosphor --lines 30 --nostream | grep -i music
 
 > ⚠️ 播放器只要看到请求头 `X-Music-Gateway: music-gateway` 就不要 token，这个值是公开的默认值。9090 和 18012 都只能听本机：`ss -lntp | grep -E ':9090|:18012'` 前面应该是 `127.0.0.1`，不要在防火墙里放开。想更稳妥，就在播放器和点歌台两边都把 `MUSIC_GATEWAY_TOKEN` 改成同一串随机值，反代注入的请求头也跟着改。
 
+## 🍸 小酒馆（Proof）
+
+[Proof](https://github.com/lumingye/Proof) 是独立的饮酒状态引擎：它负责配方、六轴、代谢、断片判定和账本。晨暮星这边只做四件事——在 `/bar` 页面上让你调一杯递过去、替 TA 领走、把喝过什么记进自己的时间轴、每轮把状态交给模型。
+
+- `/bar` 分四层：吧台（TA 此刻的状态、有没有在等的杯子）、调酒台（起名字、写配方、递过去，也能只存不递）、酒架（我的配方 / 经典配方 / 原料清单，点一下直接填进表单）、时间轴（按夜分组，谁递的、什么味道、当时什么心情）
+- 那杯酒有四种下场，页面上分得清：**喝了**（带风味和效果）、**拒了**（点线边框，拒绝也是答案）、**凉了**（没赶上，不是不想喝）、**还在等**（虚线边框）
+- 深夜 22:30–2:00 TA 可以自己给自己倒一杯，一夜一杯；连着好几夜会先提醒，再连下去这杯就不倒了
+- 聊天里 TA 也能自己点酒、喝你递的那杯或者拒掉，走 `/bar/mcp`（streamable-http，要配 `BAR_MCP_TOKEN`）
+- **喝或不喝不占 TA 醒来那次的动作**，和回留言、摘星一个道理
+
+### 要填什么
+
+Proof 那边怎么装、身份 token 怎么生成，看它的 README。晨暮星这边：
+
+| `.env` | 干什么 |
+|---|---|
+| `PROOF_AGENT_TOKEN_FILE` | **不填就整套不开**。Proof 启动时生成的身份 token 文件的绝对路径，我们只读不写 |
+| `PROOF_API_URL` | Proof 服务在哪，同机就是 `http://127.0.0.1:8791` |
+| `PROOF_AGENT_ID` | TA 在 Proof 里的身份 id，要和那边 `PROOF_AGENTS` 里的一模一样 |
+| `BAR_MCP_TOKEN` | `/bar/mcp` 的口令，不填这个端点不开 |
+| `PROOF_NIGHT_WINDOW` | 自斟时段，可跨午夜，默认 `22:30-2:00` |
+| `PROOF_WARN_AFTER_NIGHTS` / `PROOF_BLOCK_AFTER_NIGHTS` | 连几夜之后提醒 / 不给，默认 2 和 3 |
+| `PROOF_OFFER_TTL_MS` | 递出去的杯子多久凉。**只负责在页面上说人话**，见下面那条警告 |
+| `PROOF_AFTERGLOW_HOURS` | 酒醒之后带着「醒酒之后」那段多久，默认 2 小时 |
+
+> ⚠️ **酒的寿命由两个变量共同决定，必须填同一个数。**
+> 真正判死刑的是 Proof 侧的 `PROOF_PUBLIC_LINK_TTL_MS`；晨暮星侧的 `PROOF_OFFER_TTL_MS` 只用来在页面上写「2 小时内没动就会凉」和完全连不上 Proof 时兜底。只改一边，页面会显示假话。
+
+```bash
+# 两边都填 2 小时 = 7200000，然后各自重启
+cd ~/Proof/service && sed -i '/^PROOF_PUBLIC_LINK_TTL_MS=/d' .env
+cd ~/Proof/service && echo "PROOF_PUBLIC_LINK_TTL_MS=7200000" >> .env
+pm2 restart proof --update-env
+
+cd ~/vesper-phosphor && sed -i '/^PROOF_OFFER_TTL_MS=/d' .env
+cd ~/vesper-phosphor && echo "PROOF_OFFER_TTL_MS=7200000" >> .env
+pm2 restart vesper vesper-gateway --update-env
+```
+
+`--update-env` 别漏，不带它 `.env` 改了不生效。递一杯看页面上写的是不是「2 小时」，写对了就是晨暮星这侧吃到了。
+
+### 递的杯子要「领」，不是「喝 offerId」
+
+Proof 的约定：**归属在饮用时确定，而不是递出时确定。** `POST /human/offers` 创建的杯子并不在 TA 的引擎里，`targetId` 只是记一笔「想给谁」。所以：
+
+- 递酒时必须把返回的 `link` 里 `#` 后面那段 **capability token 存下来**，不然 TA 永远领不走这杯
+- 喝走 `/agent/offers/claim` 带 token，不是拿 `offerId` 走 `/agent/offers/:id/drink`（那个会 404）
+- 拒绝走 `/capability/offer`，**不写任何饮酒账本**
+
+### 醉着、断片、醒酒之后
+
+这三件事是三个阶段，`src/proof-gateway.js` 里分开处理：
+
+| 阶段 | 模型那边看到什么 |
+|---|---|
+| 还醉着 | 每轮追一段 `[Proof 状态]`，是推动力不是回答的主题。**你说的话一字不少** |
+| 断片进行中 | 还是什么都不摘。TA 此刻在场、听得见——只把这段里的消息按指纹记下来 |
+| 过了恢复时间 | 那段才换成「这里有一段记不清了」；之后谁提到那段里的词，闪回一句画面，不是整段回来 |
+| 醒酒之后 | `[Proof 醒酒之后]`：刚才那段你是喝着的，说过的话一句没少，也确实是你说的。**只给事实，不写剧本**——害羞、装没事、硬撑都是 TA 自己的事 |
+
+**断片是「事后想不起来」，不是「当场耳聋」。** 2026-10-14 这里写反过：断片期间就把消息摘掉、到点再放回去，结果 TA 醉着的那几小时根本没法聊天，过后却记得一清二楚。现在顺序是对的。
+
+两个相关的时长在 Proof 侧调：
+
+```bash
+cd ~/Proof/service
+# 断片多久之后开始模糊。默认 60 小时，太长
+sed -i '/^PROOF_BLACKOUT_RECOVERY_HOURS=/d' .env && echo "PROOF_BLACKOUT_RECOVERY_HOURS=3" >> .env
+# 酒精最慢多久清零。度数越高消散越慢，这个是封顶
+sed -i '/^PROOF_TRANSIENT_STATE_TTL_HOURS=/d' .env && echo "PROOF_TRANSIENT_STATE_TTL_HOURS=6" >> .env
+pm2 restart proof --update-env
+```
+
+改了只对**新开的**断片生效，已经开着的那批 `restoreAt` 已经写进状态文件了。手上这批要清掉就在 `/bar` 上 reset 一次。
+
+### 断片账本：只清 episodes，别清 seen
+
+断片账本在 `data/proof-blackout.json`，只存指纹、时间和几个关键词，**不存正文**。正文一直在聊天客户端交上来的 messages 里。
+
+要清的时候**只能清 `episodes`**：
+
+```bash
+cd ~/vesper-phosphor
+pm2 stop vesper-gateway
+cp data/proof-blackout.json data/proof-blackout.json.bak
+node -e "const fs=require('fs'),f='data/proof-blackout.json';const j=JSON.parse(fs.readFileSync(f,'utf8'));j.episodes=[];fs.writeFileSync(f,JSON.stringify(j,null,1));console.log('episodes 清了，seen 留',Object.keys(j.seen).length,'条')"
+pm2 start vesper-gateway
+```
+
+**不要连 `seen` 一起清空。** 登记靠的是「这条消息第一次出现在断片开始之后」；`seen` 一空，下一轮整段历史会被重新盖上「现在」的章，一个开着的断片就能把它全吞掉。代码里有道闸挡这个（一轮新面孔超过 4 条就一条都不登记），但别去试它。
+
+### 看一眼现在什么状况
+
+```bash
+pm2 logs vesper --lines 20 --nostream | grep 小酒馆
+pm2 logs vesper-gateway --lines 40 --nostream | grep proof-gateway
+```
+
+`proof-gateway:` 那几行会写清楚：断片开始 / 结束、这轮摘了几条、酒醒了没、还剩多久带着「醒酒之后」。
+
+> ⚠️ **跑状态注入和断片过滤的是 `vesper-gateway`，不是 `vesper`。** 改了 `src/proof-gateway.js` 只重启 `vesper` 等于没改。`/bar` 页面和 `/bar/mcp` 在 `vesper` 上，两个都动过就两个都重启。
+
 ## 💰 省 token
 
 每次醒来只调一次模型，并且按缓存友好的方式拼请求：
@@ -209,6 +312,7 @@ pm2 logs phosphor --lines 30 --nostream | grep -i music
 - 时间、最近对话、记忆、情绪、留言这些每次都变的，放在后面的 user 消息里
 - 最近对话默认带 12 条、每条最多 200 字（`DECIDE_CONTEXT_LIMIT` 可调）；长期记忆 breath / feel 各最多 1200 字
 - 星星罐只读数据库，不额外调模型：今天那次机会用没用过、你摘星后回了什么，都是几行 SQL
+- 小酒馆的状态和「醒酒之后」都追在最后一条 user 正文末尾，开头的 system 和前面的历史逐字不动，前缀缓存还能命中；但它本身会增加输入 token，以上游 `usage` 为准
 
 每次醒来日志里有一行 `decide(): 输入 X tokens，缓存命中 Y`：
 
@@ -258,14 +362,15 @@ pm2 restart phosphor --update-env
 
 已经排好的下一次唤醒不会跟着变，从那次醒来之后才按新规则算。细节见 [04](docs/04-config.md#唤醒节律)。
 
-## ⚠️ 最容易踩的 6 个坑
+## ⚠️ 最容易踩的 7 个坑
 
 1. **`.env` 和 `data/state.db` 不在 git 里**。删掉项目重新 clone，这两样不会回来，删之前先备份
 2. **三个 key 不填就开防火墙 = 公网裸奔**：`GATEWAY_API_KEY`、`REPORT_STATUS_API_KEY`、`VESPER_BASIC_USER/PASS`
 3. **聊天客户端里填的 API Key 是 `GATEWAY_API_KEY`**，不是上游模型自己的 key
 4. **`*_UPSTREAM_BASE_URL` 只写域名，不带 `/v1`**；`LLM_BASE_URL` 和 `IMAGE_API_URL` 反而要写完整地址
 5. **改了 `.env` 要重启**：`pm2 restart vesper vesper-gateway phosphor --update-env`
-6. **不要在服务器上直接改代码**。在 GitHub 上改，服务器只 `git pull`
+6. **改了 `src/proof-gateway.js` 要重启 `vesper-gateway`**。状态注入和断片过滤跑在网关进程里，只重启 `vesper` 等于没改
+7. **不要在服务器上直接改代码**。在 GitHub 上改，服务器只 `git pull`
 
 ## 设计上的几个"故意"
 
@@ -273,6 +378,10 @@ pm2 restart phosphor --update-env
 - **论坛 TA 可以自己逛、自己回帖、自己发帖**。连上的 MCP 都算 TA 能自己用的，接新的之前想好能不能交给 TA 做主，见 [07](docs/07-mcp.md)
 - **醒来不放歌**。TA 醒来时你可能在睡觉、在开会，突然出声会吓一跳。想让你听的歌收进歌单、写进批注本，你打开播放器自己去听
 - **星星罐一天只有一颗，而且不能撤**。一句话要是随时能补、能改，就不是"咽下去的那句"了；同理，罐子里的星星你随时能看，只有"未摘"的提示按点亮——攒着的东西不该被藏起来，但也不该变成催你的待办
+- **酒可以拒**。递过去不等于喝了，`proof_offer_reject` 和喝下去是平等的两个答案，拒绝不写任何饮酒账本、不用找理由。页面上「拒了」和「凉了」也分得清：一个是他的选择，一个是没赶上
+- **没有 `proof_reset`**。那等于「把这一夜清掉」，随手能解酒的话连续夜数和断片就都没意义了。要清只能你在页面上清
+- **醉着也听得见你说话**。醉的是表达和注意力，不是耳朵。断片只管「事后想不起来」，当场那一轮永远放行
+- **醒酒之后只给事实，不写剧本**。告诉他那段话确实是他说的，怎么面对由他自己定
 - **进程停掉的时间不追不补**。停一天再开，只会醒一次
 - **决策上下文里没有随机数和算出来的"强度"**，只给真实、可解释的输入
 - **每次醒来都记账**，包括 noop 和出错，TA 不在时发生过什么都能从 `GET /wake/log` 看回来
@@ -280,7 +389,7 @@ pm2 restart phosphor --update-env
 - **清掉旧聊天之后醒来回想一下**。旧的原话没了，长期记忆还在，清完翻一眼，别让 TA 觉得昨天是空白
 - **让 TA 看到自己最近选过什么**。连着好几次都是同一个动作时会被提醒换一个；和 heartbeat 一起跑时，推送交给 heartbeat
 - **回留言不占动作**。留言是你主动递过来的话，不该让 TA 在"回你"和"做自己的事"之间二选一
-- **日记、记忆库、音乐不改别人的代码**。日记直接读 heartbeat 的文件，记忆库转发 Ombre Brain 的页面，音乐只是菜单跳转加连它的 MCP，它们各自升级都不用跟着改
+- **日记、记忆库、音乐、小酒馆不改别人的代码**。日记直接读 heartbeat 的文件，记忆库转发 Ombre Brain 的页面，音乐只是菜单跳转加连它的 MCP，小酒馆只调 Proof 的 HTTP 接口，它们各自升级都不用跟着改
 
 ## 待补充 / TODO
 
@@ -288,6 +397,9 @@ pm2 restart phosphor --update-env
 - 听歌不能像逛论坛那样一次醒来连着走几步（先看你在听什么，同一次里再收进歌单）：待做
 - 星星罐攒到几十颗以后，罐子里的星星会挤在一起（第 8 行之后不再往上长），要不要分页或者换个堆法：待定
 - 纪念日先从页面上拿掉了，数据还在库里（`GET /wake/anniversaries` 能读），要不要换个地方放：待定
+- 断片恢复之后到底是**留痕**（位置上留一句「记不清了」）还是**整段抹掉**：现在走留痕，Proof 自己的 Gateway 那套是整段抹掉。两边口径不一致，哪个算准：待定
+- 断片只模糊「最浓的那一小时」而不是整段，以及闪回能不能一点点攒回来：待做
+- 小酒馆的酒凉了没有通知，只有你打开 `/bar` 时才跟 Proof 对一次账
 - 对话记录只取最后一条、不去重：重发或重新生成时同一条会写两遍；一次带多条新消息时会丢中间的
 - 回复的捕获依赖上游是标准 SSE，非标准格式时捞不到文本，只打一行 warn
 - 动态的图片/音频超过 `MEDIA_MAX_AGE_DAYS` 会被删，正文和留言保留，页面上就不显示那张图了
@@ -306,6 +418,13 @@ src/
 ├── drives-page.js     心绪页 /drives
 ├── diary-page.js      日记页 /diary（读 heartbeat 的日记文件，只读）
 ├── memory-proxy.js    记忆库 /memory/（转发 Ombre Brain 管理页，换配色、加菜单）
+├── proof.js           小酒馆：接 Proof 的 HTTP 接口、自己的饮用账本、连续夜数与自斟闸门
+├── proof-gateway.js   网关侧：每轮注入状态、断片过滤与闪回、醒酒之后那一段
+├── proof-prompt.js    小酒馆在「做决定」那轮里的几段话（system 放规则，user 放今天的情况）
+├── proof-offers.js    她递的那几杯以 Proof 为准，拿空了就把账本里那条划掉
+├── bar-page.js        小酒馆页面 /bar：吧台、调酒台、酒架、时间轴
+├── bar-recipes.js     你自己存的配方（data/bar-recipes.json）
+├── bar-mcp.js         /bar/mcp：聊天里 TA 能看吧台、点酒、喝或拒她递的那杯
 ├── state.js           SQLite 读写；启动时自动建 data/、搬旧日记
 ├── wake-info.js       动态页用的上次 / 下次 / 自主唤醒时间
 ├── page-chrome.js     各页面共用的右上角菜单和星星转场
@@ -315,10 +434,10 @@ src/
 ├── star-jar.js        星星罐：一天一颗的写入、摘星回复、页面 /moments/star-jar
 ├── star-entry.js      动态页日历下面的星星罐入口（单独一个文件，避开循环依赖）
 ├── wall-time.js       按 TIME_ZONE 处理日期时间
-├── vesper.js          3001：上报、/wake/*、挂载动态页、收藏、星星罐、心绪页、日记页、记忆库
-├── gateway.js         3002：模型路由 + 对话记录
+├── vesper.js          3001：上报、/wake/*、挂载动态页、收藏、星星罐、心绪页、日记页、记忆库、小酒馆
+├── gateway.js         3002：模型路由 + 对话记录 + 小酒馆状态注入
 ├── mcp-manager.js     连接 Ombre Brain / 论坛 / 点歌台；挡掉醒来时不能用的工具
-└── actions/           bark / moment / star-jar / mcp-action / ombre-brain / set-mode / activity
+└── actions/           bark / moment / star-jar / mcp-action / ombre-brain / set-mode / proof-drink / bar-offers / activity
 docs/                  详细文档（见上表）
 ```
 
