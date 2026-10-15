@@ -7,6 +7,7 @@
 //      不是「已经过去 42 分钟」——后者每轮都变，前者只在开工和收工时变。
 //      减法他自己会做（他手里本来就有 <sent_at>）。这是这个设计里唯一不能改的地方：
 //      改成注入 elapsed，前缀缓存每轮全滞。
+//      （到点没到点那一行是例外，见 dueHint 里的说明。）
 //   2、工期先验（doing_prior 表 + Ombre Brain）——「洗头这类事大概 40 分钟」。
 //      记的不是「这件事」而是「这一类事」，所以下次说「去洗个头」也用得上。
 //
@@ -25,7 +26,7 @@
 // 两条克制规矩，改代码时别把它们丢了：
 //   一件事最多问两次（ASK_LIMIT），第一次被回「还没」就顺延估值的一半，第二次之后闭嘴。
 //   只登记你亲口说出口的事，不从上下文推测。推测会把「我待会儿看看」当成开工然后追你。
-import db, { addPendingWake } from './state.js';
+import db, { addPendingWake, cancelPendingWakeByNote } from './state.js';
 import { detectStart, detectDone, detectNotDone, detectCancel } from './doing-detect.js';
 import { wallParts, wallMidnight, formatDateTime } from './wall-time.js';
 
@@ -266,12 +267,28 @@ export function activeDoings() {
   return stmt("SELECT * FROM doing WHERE status = 'active' ORDER BY started_at DESC").all();
 }
 
+// 到点唤醒的 note。**开工和收工要用同一个函数生成**，
+// 不然收工时按不同的字串去撒，撒不到，那个约就漏下来了。
+const checkNote = (what) => `看看她「${what}」怎么样了`;
+
 function scheduleCheck(row) {
   if (!row.next_check_at) return;
   try {
-    addPendingWake(row.next_check_at, `看看她「${row.what}」怎么样了`);
+    addPendingWake(row.next_check_at, checkNote(row.what));
   } catch (err) {
     console.error('doing: 约下次到点唤醒失败（不影响登记）', err.message);
+  }
+}
+
+// 事情结束了（收工、划掉、挂太久），把还没到点的那个约撒掉。
+// 不撒的话到点会触发一次完整唤醒（拉 breath、拉 feel、调模型），
+// 然后发现 dueDoings() 是空的，什么都不做。白花一次。
+function cancelCheck(what) {
+  try {
+    const n = cancelPendingWakeByNote(checkNote(what));
+    if (n) console.log(`doing: 「${what}」结束了，撒掉 ${n} 个还没到点的约`);
+  } catch (err) {
+    console.error('doing: 撒约失败（不影响收工）', err.message);
   }
 }
 
@@ -280,15 +297,20 @@ export function startDoing({ what, raw = null, at = Date.now() }) {
   const name = String(what ?? '').trim();
   if (!name) return null;
 
-  // 同一件事重复说不再登一条，只把开工时间往后挑——你可能是刚才被打断又重新开始
+  // 同一件事重复说不再登一条，只把开工时间往后挑——你可能是刚才被打断又重新开始。
+  // 旧的约要先撒，不然按老时间点触发一次白跑的唤醒。
   const same = stmt("SELECT * FROM doing WHERE status = 'active' AND what = ?").get(name);
   if (same) {
+    cancelCheck(name);
+    const nextCheck = same.estimate_ms ? afterQuiet(at + same.estimate_ms) : null;
     stmt('UPDATE doing SET started_at = ?, asked_count = 0, next_check_at = ? WHERE id = ?').run(
       at,
-      same.estimate_ms ? afterQuiet(at + same.estimate_ms) : null,
+      nextCheck,
       same.id
     );
-    return stmt('SELECT * FROM doing WHERE id = ?').get(same.id);
+    const again = stmt('SELECT * FROM doing WHERE id = ?').get(same.id);
+    scheduleCheck(again);
+    return again;
   }
 
   const category = categoryOf(name);
@@ -304,12 +326,13 @@ export function startDoing({ what, raw = null, at = Date.now() }) {
   ).run(name, raw ? String(raw).slice(0, 200) : null, category, at, estimateMs, nextCheck)
     .lastInsertRowid;
 
-  // 挂不下那么多：超过 MAX_ACTIVE 把最旧的默默划掉
+  // 挂不下那么多：超过 MAX_ACTIVE 把最旧的默默划掉，约也跟着撒
   const extra = stmt(
-    "SELECT id FROM doing WHERE status = 'active' ORDER BY started_at DESC LIMIT -1 OFFSET ?"
+    "SELECT id, what FROM doing WHERE status = 'active' ORDER BY started_at DESC LIMIT -1 OFFSET ?"
   ).all(MAX_ACTIVE);
   for (const e of extra) {
     stmt("UPDATE doing SET status = 'stale', closed_at = ? WHERE id = ?").run(at, e.id);
+    cancelCheck(e.what);
   }
 
   const row = stmt('SELECT * FROM doing WHERE id = ?').get(id);
@@ -334,6 +357,7 @@ export function finishDoing(id = null) {
   const now = Date.now();
   const actual = now - row.started_at;
   stmt("UPDATE doing SET status = 'done', closed_at = ?, actual_ms = ? WHERE id = ?").run(now, actual, row.id);
+  cancelCheck(row.what);
   const prior = recordActual(row.category, actual);
   console.log(
     `doing: 「${row.what}」收工，用了 ${Math.round(actual / 60000)} 分钟${
@@ -353,6 +377,7 @@ export function cancelDoing(id = null) {
     : stmt("SELECT * FROM doing WHERE status = 'active' ORDER BY started_at DESC LIMIT 1").get();
   if (!row) return null;
   stmt("UPDATE doing SET status = 'cancelled', closed_at = ? WHERE id = ?").run(Date.now(), row.id);
+  cancelCheck(row.what);
   console.log(`doing: 「${row.what}」划掉了（认错或不做了）`);
   return row;
 }
@@ -365,6 +390,7 @@ export function deferDoing(id = null) {
     : stmt("SELECT * FROM doing WHERE status = 'active' ORDER BY started_at DESC LIMIT 1").get();
   if (!row) return null;
   if (!row.next_check_at) return row;
+  cancelCheck(row.what);
   const step = row.estimate_ms ? Math.round(row.estimate_ms / 2) : 30 * 60000;
   const next = afterQuiet(Date.now() + step);
   stmt('UPDATE doing SET next_check_at = ? WHERE id = ?').run(next, row.id);
@@ -394,6 +420,7 @@ export function sweepStale(now = Date.now()) {
   const rows = stmt("SELECT id, what FROM doing WHERE status = 'active' AND started_at < ?").all(now - STALE_MS);
   for (const r of rows) {
     stmt("UPDATE doing SET status = 'stale', closed_at = ? WHERE id = ?").run(now, r.id);
+    cancelCheck(r.what);
     console.log(`doing: 「${r.what}」挂太久了，不再问`);
   }
   return rows.length;
@@ -436,16 +463,31 @@ export function doingSection(userName = '对方') {
 她说出口一件正在做的事（「我去洗头」「我先把那个 bug 改一下」），系统会把它和**开工时间**记下来。
 - 给你的是开始时刻，不是「已经过了多久」。你知道现在几点，减法自己做。
 - **没到点就不要问进度。** 一件事刚开始五分钟就问「做完了没」，是这整套东西要治的毛病。
-  到没到点不用你猜，用户消息里会明说。
+  到没到点不用你猜，每条事后面会明写着。
 - 她自己提起那件事、或者话顺着走到那里，当然可以接。这条规矩治的是「没事找事地催」，不是让你对她在做的事装作不知道。
-- 到点了想问，写在 doing_follow_up 里（不占这次的动作）。问得具体：卡在哪了、顺不顺、
-  要不要歇一下——你知道她是什么时候开始的，所以问得出这种话，而不是「做完了没」。
+- 自己醒来的那一轮里，到点了想问就写在 doing_follow_up 里（不占这次的动作）。
+  问得具体：卡在哪了、顺不顺、要不要歇一下——你知道她是什么时候开始的，
+  所以问得出这种话，而不是「做完了没」。
 - 一件事最多问两次。她回「还没」就是还没，系统会自己顺延；到了上限就等她自己说。
 - 第一次遇到某类事时还不知道要多久，那次就只知道她在做、不会让你问。
   等她做完了，系统记下真实耗时，下一次就有谱了。不知道要多久就别按自己猜的时间追。`;
 }
 
-// **只给 started_at，不给 elapsed。** 这段字节只在开工/收工时变，
+// 到点没到点的那一句。
+//
+// 这是「只给 started_at」原则的唯一例外，因为它和 elapsed 不同：
+// elapsed 每分钟都在变，而这句话在整个等待期间是同一串字节，只在践过到点的那一刻翻一次面。
+// 而且没有它的话，system 里那句「到没到点不用你猜」在聊天里是空话——
+// 唤醒那条路有到点名单，聊天这条没有，于是他只能拿开工时间自己算。
+function dueHint(row, now) {
+  if (!row.next_check_at) return '这类事还没攒过工期，不知道要多久，所以这条不用问进度';
+  if (row.asked_count >= ASK_LIMIT) return '已经问过两次了，就等她自己说';
+  if (now < row.next_check_at) return `还没到点（按节奏大约 ${formatDateTime(row.next_check_at)} 才该好），这条别问进度`;
+  if (inQuiet(now)) return '到点了，但现在是夜里，不主动提';
+  return '已经到点了，话赶到那里的话可以问一句具体的（卡在哪了、顺不顺）';
+}
+
+// **只给 started_at，不给 elapsed。** 这段字节只在开工/收工、以及践过到点那一刻变，
 // 所以哪怕放在前缀里也不会每轮清空缓存。「已经过去多久」让他自己减。
 export function doingBlock() {
   if (!isDoingEnabled()) return '';
@@ -458,12 +500,11 @@ export function doingBlock() {
   }
   if (!rows.length) return '';
 
+  const now = Date.now();
   const lines = rows.map((r) => {
-    const est = r.estimate_ms
-      ? `，这类事她平常要 ${Math.round(r.estimate_ms / 60000)} 分钟`
-      : '，这类事还没攒过工期，不知道要多久';
+    const est = r.estimate_ms ? `，这类事她平常要 ${Math.round(r.estimate_ms / 60000)} 分钟` : '';
     const asked = r.asked_count ? `，已经问过 ${r.asked_count} 次` : '';
-    return `  「${r.what}」开始于 ${formatDateTime(r.started_at)}${est}${asked}`;
+    return `  「${r.what}」开始于 ${formatDateTime(r.started_at)}${est}${asked}\n    → ${dueHint(r, now)}`;
   });
 
   return (
