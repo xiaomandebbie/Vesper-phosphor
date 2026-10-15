@@ -10,6 +10,11 @@
 //   2、工期先验（doing_prior 表 + Ombre Brain）——「洗头这类事大概 40 分钟」。
 //      记的不是「这件事」而是「这一类事」，所以下次说「去洗个头」也用得上。
 //
+// 类别有两条来路：下面 CATEGORIES 里我写死的那十三条，以及**认不出时拿事情名本身当类别**。
+// 后者是为了「写病历」这种我猜不到的事：第一次仍然不估不问（没任何依据就催人是最糟的），
+// 但收工时把真实耗时记下来，第二次就有工期了。代价是类别会碎（「写病历」和「写个病历」
+// 算两类），但那反而安全：宁可多攒几次，也别把不同的事混成一类然后估错。
+//
 // 工期先验的正本在 OB：形成和改变时 hold 进去（按固定格式写，所以读得回来）。
 // 本地表是缓存，也是算中位数的地方。用中位数而不是平均数：偶尔一次搞到半夜，
 // 不该把这类事的估值永久拘远。
@@ -108,7 +113,7 @@ function afterQuiet(ms) {
 // ---------- 工期先验 ----------
 
 // 事情名 → 类别。记的是类别，所以「洗头」「洗个头」「把头洗了」算同一类。
-// 认不出类别就是 null：**不估、不问**。宁可沉默，也别瞎猜一个十分钟然后追人。
+// 这十三条是我写死的常见事；认不出的走下面 learnedCategory，拿事情名本身当类别。
 const CATEGORIES = [
   ['洗漱', /洗头|洗浴|洗漱|洗个澡|冲澡|吹头发/],
   ['吃饭', /吃饭|午饭|晚饭|早饭|做饭|点外卖|吃点/],
@@ -125,14 +130,29 @@ const CATEGORIES = [
   ['看片', /看电影|看剧|追剧|看番|看比赛/],
 ];
 
-export function categoryOf(what) {
+// 写死的那十三条。认不出返回 null。
+function seedCategory(what) {
   const s = String(what ?? '');
   for (const [key, re] of CATEGORIES) if (re.test(s)) return key;
   return null;
 }
 
+// 自己长出来的类别：拿事情名本身当类别名。
+// 前缀「~」是为了和我写死的类别分开，也让 OB 里那句话一眼看得出是学来的。
+// 太长、太短的不当类别：太长说明里面夹着具体细节，下次不会一字不差地重现，攒不起样本。
+function learnedCategory(what) {
+  const s = String(what ?? '').trim();
+  if (s.length < 2 || s.length > 12) return null;
+  return `~${s}`;
+}
+
+export function categoryOf(what) {
+  return seedCategory(what) ?? learnedCategory(what);
+}
+
 // 出厂先验（分钟）。第一次遇到某类事时用这个，之后被你自己的真实耗时覆盖。
 // 这些数字没什么权威，就是个起步值，跑几轮之后就不用了。
+// 自己长出来的类别（~开头）没有出厂值：第一次不估、不问，宁可沉默。
 const SEED_MINUTES = {
   '洗漱': 40,
   '吃饭': 40,
@@ -180,7 +200,7 @@ export function cachePrior(category, minutes, source = 'ombre') {
   ).run(category, Math.round(minutes), source, Date.now());
 }
 
-// 收工时把真实耗时记回先验。返回 { category, minutes, count, changed }，
+// 收工时把真实耗时记回先验。返回 { category, minutes, count, changed, firstTime }，
 // changed 为 true 时值得写回 OB（由 phosphor 那边做，这里不碰网络）。
 export function recordActual(category, actualMs) {
   if (!category || !Number.isFinite(actualMs) || actualMs <= 0) return null;
@@ -190,6 +210,7 @@ export function recordActual(category, actualMs) {
 
   const row = stmt('SELECT * FROM doing_prior WHERE category = ?').get(category);
   const samples = row ? JSON.parse(row.samples || '[]') : [];
+  const firstTime = samples.length === 0;
   samples.push(minutes);
   while (samples.length > PRIOR_KEEP) samples.shift();
 
@@ -202,9 +223,9 @@ export function recordActual(category, actualMs) {
        source = 'actual', updated_at = excluded.updated_at`
   ).run(category, next, JSON.stringify(samples), Date.now());
 
-  // 差不到一成的漂移不算变，不必为此写一条 OB
-  const changed = before == null || Math.abs(next - before) / before > 0.1;
-  return { category, minutes: next, count: samples.length, changed };
+  // 差不到一成的漂移不算变，不必为此写一条 OB；但第一次总要写
+  const changed = firstTime || before == null || Math.abs(next - before) / before > 0.1;
+  return { category, minutes: next, count: samples.length, changed, firstTime };
 }
 
 // 写回 OB 的那句话。**格式固定**，因为还要用 PRIOR_RE 读回来。改了这里就读不到了。
@@ -213,8 +234,8 @@ export function priorMemoText(category, minutes, count) {
 }
 
 // 从 OB 返回的文本里把分钟数抓出来。只认我们自己写的那个格式，
-// 所以不会把别的记忆里的数字误读成工期。
-const PRIOR_RE = /工期先验｜\s*(.{1,12}?)\s*≈\s*(\d{1,4})\s*分钟/g;
+// 所以不会把别的记忆里的数字误读成工期。类别名可能带 ~ 前缀（自己学的）。
+const PRIOR_RE = /工期先验｜\s*(~?.{1,12}?)\s*≈\s*(\d{1,4})\s*分钟/g;
 
 export function parsePriorsFromMemory(text) {
   const out = [];
@@ -273,7 +294,8 @@ export function startDoing({ what, raw = null, at = Date.now() }) {
   const category = categoryOf(name);
   const prior = getPrior(category);
   const estimateMs = prior ? prior.minutes * 60000 : null;
-  // 估不出工期的事不安排到点检查：它只以「开工时间」的形式存在，不触发追问
+  // 估不出工期的事不安排到点检查：它只以「开工时间」的形式存在，不触发追问。
+  // 第一次遇到自己学的类别就是这种情况——没任何依据就催人是最糟的。
   const nextCheck = estimateMs ? afterQuiet(at + estimateMs) : null;
 
   const id = stmt(
@@ -296,7 +318,7 @@ export function startDoing({ what, raw = null, at = Date.now() }) {
     `doing: 登记「${row.what}」（${row.category ?? '认不出类别'}），${
       row.estimate_ms
         ? `估 ${Math.round(row.estimate_ms / 60000)} 分钟，到点在 ${formatDateTime(row.next_check_at)}`
-        : '不估工期，不会主动问'
+        : '还没攒过工期，这次不估不问，收工时记下来'
     }`
   );
   return row;
@@ -315,7 +337,11 @@ export function finishDoing(id = null) {
   const prior = recordActual(row.category, actual);
   console.log(
     `doing: 「${row.what}」收工，用了 ${Math.round(actual / 60000)} 分钟${
-      prior ? `，${prior.category} 的估值更新为 ${prior.minutes} 分钟` : ''
+      prior
+        ? prior.firstTime
+          ? `，第一次攒到 ${prior.category} 的工期：${prior.minutes} 分钟（下次就能估了）`
+          : `，${prior.category} 的估值更新为 ${prior.minutes} 分钟`
+        : ''
     }`
   );
   return { row, prior };
@@ -332,11 +358,13 @@ export function cancelDoing(id = null) {
 }
 
 // 被问到进度、回了「还没」：顺延估值的一半。不计作一次提问。
+// 本来就没估值的（第一次遇到这类事）不动：它也没被问过，没什么可顺延的。
 export function deferDoing(id = null) {
   const row = id
     ? stmt("SELECT * FROM doing WHERE id = ? AND status = 'active'").get(id)
     : stmt("SELECT * FROM doing WHERE status = 'active' ORDER BY started_at DESC LIMIT 1").get();
   if (!row) return null;
+  if (!row.next_check_at) return row;
   const step = row.estimate_ms ? Math.round(row.estimate_ms / 2) : 30 * 60000;
   const next = afterQuiet(Date.now() + step);
   stmt('UPDATE doing SET next_check_at = ? WHERE id = ?').run(next, row.id);
@@ -413,7 +441,8 @@ export function doingSection(userName = '对方') {
 - 到点了想问，写在 doing_follow_up 里（不占这次的动作）。问得具体：卡在哪了、顺不顺、
   要不要歇一下——你知道她是什么时候开始的，所以问得出这种话，而不是「做完了没」。
 - 一件事最多问两次。她回「还没」就是还没，系统会自己顺延；到了上限就等她自己说。
-- 估不出工期的事不会让你问，只是让你知道她在做。不知道要多久就别按自己猜的时间追。`;
+- 第一次遇到某类事时还不知道要多久，那次就只知道她在做、不会让你问。
+  等她做完了，系统记下真实耗时，下一次就有谱了。不知道要多久就别按自己猜的时间追。`;
 }
 
 // **只给 started_at，不给 elapsed。** 这段字节只在开工/收工时变，
@@ -430,7 +459,9 @@ export function doingBlock() {
   if (!rows.length) return '';
 
   const lines = rows.map((r) => {
-    const est = r.estimate_ms ? `，这类事她平常要 ${Math.round(r.estimate_ms / 60000)} 分钟` : '，不知道要多久';
+    const est = r.estimate_ms
+      ? `，这类事她平常要 ${Math.round(r.estimate_ms / 60000)} 分钟`
+      : '，这类事还没攒过工期，不知道要多久';
     const asked = r.asked_count ? `，已经问过 ${r.asked_count} 次` : '';
     return `  「${r.what}」开始于 ${formatDateTime(r.started_at)}${est}${asked}`;
   });
@@ -472,7 +503,8 @@ export function doingSummary() {
   try {
     const active = activeDoings().length;
     const priors = stmt('SELECT COUNT(*) AS c FROM doing_prior').get().c;
-    return `时间感知：开着，在做 ${active} 件，工期先验 ${priors} 类，安静时段 ${QUIET_FROM}:00–${QUIET_TO}:00`;
+    const learned = stmt("SELECT COUNT(*) AS c FROM doing_prior WHERE category LIKE '~%'").get().c;
+    return `时间感知：开着，在做 ${active} 件，工期先验 ${priors} 类（自己学的 ${learned} 类），安静时段 ${QUIET_FROM}:00–${QUIET_TO}:00`;
   } catch {
     return '时间感知：开着（账本还没建）';
   }
