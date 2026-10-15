@@ -7,6 +7,7 @@ import { getSharedContext, formatContextText } from './context.js';
 import { isDrivesEnabled, reportUserMessage, reportAssistantMessage } from './drives.js';
 import { applyProof } from './proof-gateway.js';
 import { observeUserMessage, doingBlock } from './doing.js';
+import { repairMessages } from './message-repair.js';
 
 const app = express();
 app.use(express.json({ limit: '10mb' }));
@@ -331,8 +332,13 @@ app.post('/v1/chat/completions', requireGatewayAuth, async (req, res) => {
     ? injectSharedContext(req.body.messages)
     : req.body.messages;
 
+  // 把「上游一定会报 400」的形状修掉（见 message-repair.js）。
+  // 放在所有注入之前、对所有线路生效：孤立的 tool 消息和聊天还是唤醒无关，
+  // 哪条路带着它上去都会被上游拒，而且坏序列一旦进了历史就每轮都带着。
+  messages = repairMessages(messages);
+
   // 小酒馆（见 proof-gateway.js）：只管聊天这条线路。
-  // 每轮读一次 Proof 状态追在输入末尾；断片期间把那段从模型可见输入里摘掉。
+  // 每轮读一次 Proof 状态追在输入末尾；断片期间把那段从模型可见输入里捡掉。
   // 读不到 Proof 就原样转发，只打一行警告——不能把「读不到状态」假装成「没喝酒」。
   if (recordConversation) {
     try {
