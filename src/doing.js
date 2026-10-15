@@ -14,11 +14,13 @@
 // 本地表是缓存，也是算中位数的地方。用中位数而不是平均数：偶尔一次搞到半夜，
 // 不该把这类事的估值永久拘远。
 //
+// 收工是在 gateway 进程里发生的（听见你说「改完了」的那一刻），而那条路径上不该碰网络。
+// 所以工期变了只先落库，等 phosphor 下次醒来再写进 OB（见 pendingPriorWrites）。
+//
 // 两条克制规矩，改代码时别把它们丢了：
 //   一件事最多问两次（ASK_LIMIT），第一次被回「还没」就顺延估值的一半，第二次之后闭嘴。
 //   只登记你亲口说出口的事，不从上下文推测。推测会把「我待会儿看看」当成开工然后追你。
-import db from './state.js';
-import { addPendingWake } from './state.js';
+import db, { addPendingWake } from './state.js';
 import { detectStart, detectDone, detectNotDone, detectCancel } from './doing-detect.js';
 import { wallParts, wallMidnight, formatDateTime } from './wall-time.js';
 
@@ -39,7 +41,7 @@ CREATE TABLE IF NOT EXISTS doing (
 );
 CREATE INDEX IF NOT EXISTS idx_doing_status ON doing (status, next_check_at);
 
--- 工期先验的本地缓存。samples 是 JSON 数组（毫秒），只留最近 PRIOR_KEEP 条。
+-- 工期先验的本地缓存。samples 是 JSON 数组（分钟），只留最近 PRIOR_KEEP 条。
 CREATE TABLE IF NOT EXISTS doing_prior (
   category TEXT PRIMARY KEY,
   minutes INTEGER NOT NULL,
@@ -67,17 +69,20 @@ const MAX_ACTIVE = 2;
 const STALE_MS = 18 * 60 * 60 * 1000;
 // 中位数最多用几次记录
 const PRIOR_KEEP = 9;
-
-// 安静时段：这段时间到期的事顺延到第二天早上，不是作废。
-// 你说「我去睡了」之后那条洗头到期了，他不该三点钟投一句「吹干了没」。
-const QUIET_FROM = numEnv('DOING_QUIET_FROM_HOUR', 23);
-const QUIET_TO = numEnv('DOING_QUIET_TO_HOUR', 9);
+// 工期先验上次写进 OB 的时间（存在 state.js 建的 meta 表里，不动 doing_prior 的 schema）
+const PRIOR_SYNC_KEY = 'doing_prior_ob_synced_at';
 
 function numEnv(key, fallback) {
   const raw = String(process.env[key] ?? '').trim();
   const n = Number(raw);
   return raw && Number.isFinite(n) ? n : fallback;
 }
+
+// 安静时段：这段时间到期的事顺延到这段结束，不是作废。
+// 默认 2 点到 8 点：小满 23 点明显还在干活，那个点到期的事不该被按下。
+// 真正不该出声的是凌晨两点之后。
+const QUIET_FROM = numEnv('DOING_QUIET_FROM_HOUR', 2);
+const QUIET_TO = numEnv('DOING_QUIET_TO_HOUR', 8);
 
 export function isDoingEnabled() {
   return !/^(0|off|false|no)$/i.test(String(process.env.DOING_TRACKING ?? '').trim());
@@ -94,8 +99,9 @@ function inQuiet(ms) {
 function afterQuiet(ms) {
   if (!inQuiet(ms)) return ms;
   const p = wallParts(ms);
-  // 凌晨那段（已经过了午夜）就是今天早上，否则是明天早上
-  const sameDay = p.h < QUIET_TO;
+  // 跳过午夜的区间（比如 23–9）里，h >= QUIET_FROM 那半要算到明天；
+  // 不跳午夜的区间（比如 2–8）永远是当天。
+  const sameDay = QUIET_FROM > QUIET_TO ? p.h < QUIET_TO : true;
   return wallMidnight(p.y, p.m, p.d + (sameDay ? 0 : 1)) + QUIET_TO * 3600000;
 }
 
@@ -203,7 +209,7 @@ export function recordActual(category, actualMs) {
 
 // 写回 OB 的那句话。**格式固定**，因为还要用 PRIOR_RE 读回来。改了这里就读不到了。
 export function priorMemoText(category, minutes, count) {
-  return `工期先验｜${category} ≈ ${minutes} 分钟（中位数，${count} 次记录）。这是她做这类事的真实节她，不是通用人类的速度；到点了再问进度，没到点别催。`;
+  return `工期先验｜${category} ≈ ${minutes} 分钟（中位数，${count} 次记录）。这是她做这类事的真实节奏，不是通用人类的速度；到点了再问进度，没到点别催。`;
 }
 
 // 从 OB 返回的文本里把分钟数抓出来。只认我们自己写的那个格式，
@@ -217,6 +223,20 @@ export function parsePriorsFromMemory(text) {
     if (Number.isFinite(minutes) && minutes > 0) out.push({ category: m[1].trim(), minutes });
   }
   return out;
+}
+
+// 还没写进 OB 的工期先验。只管真实耗时算出来的（source='actual'）——
+// 从 OB 读回来的那些本来就在 OB 里，不该再写一遍。
+export function pendingPriorWrites() {
+  const row = db.prepare('SELECT value FROM meta WHERE key = ?').get(PRIOR_SYNC_KEY);
+  const since = Number(row?.value);
+  return stmt(
+    "SELECT * FROM doing_prior WHERE source = 'actual' AND updated_at > ? ORDER BY updated_at ASC"
+  ).all(Number.isFinite(since) ? since : 0);
+}
+
+export function markPriorsSynced(at = Date.now()) {
+  db.prepare('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)').run(PRIOR_SYNC_KEY, String(at));
 }
 
 // ---------- 在做的事 ----------
@@ -244,7 +264,7 @@ export function startDoing({ what, raw = null, at = Date.now() }) {
   if (same) {
     stmt('UPDATE doing SET started_at = ?, asked_count = 0, next_check_at = ? WHERE id = ?').run(
       at,
-      same.estimate_ms ? at + same.estimate_ms : null,
+      same.estimate_ms ? afterQuiet(at + same.estimate_ms) : null,
       same.id
     );
     return stmt('SELECT * FROM doing WHERE id = ?').get(same.id);
@@ -274,7 +294,9 @@ export function startDoing({ what, raw = null, at = Date.now() }) {
   scheduleCheck(row);
   console.log(
     `doing: 登记「${row.what}」（${row.category ?? '认不出类别'}），${
-      row.estimate_ms ? `估 ${Math.round(row.estimate_ms / 60000)} 分钟，到点在 ${formatDateTime(row.next_check_at)}` : '不估工期，不会主动问'
+      row.estimate_ms
+        ? `估 ${Math.round(row.estimate_ms / 60000)} 分钟，到点在 ${formatDateTime(row.next_check_at)}`
+        : '不估工期，不会主动问'
     }`
   );
   return row;
@@ -377,6 +399,23 @@ export function observeUserMessage(text) {
 
 // ---------- 给模型看的那几行 ----------
 
+// system 里的规矩。只跟配置有关，进程不重启就不变，不破前缀缓存。
+export function doingSection(userName = '对方') {
+  if (!isDoingEnabled()) return '';
+  return `
+
+## 她正在做的事
+她说出口一件正在做的事（「我去洗头」「我先把那个 bug 改一下」），系统会把它和**开工时间**记下来。
+- 给你的是开始时刻，不是「已经过了多久」。你知道现在几点，减法自己做。
+- **没到点就不要问进度。** 一件事刚开始五分钟就问「做完了没」，是这整套东西要治的毛病。
+  到没到点不用你猜，用户消息里会明说。
+- 她自己提起那件事、或者话顺着走到那里，当然可以接。这条规矩治的是「没事找事地催」，不是让你对她在做的事装作不知道。
+- 到点了想问，写在 doing_follow_up 里（不占这次的动作）。问得具体：卡在哪了、顺不顺、
+  要不要歇一下——你知道她是什么时候开始的，所以问得出这种话，而不是「做完了没」。
+- 一件事最多问两次。她回「还没」就是还没，系统会自己顺延；到了上限就等她自己说。
+- 估不出工期的事不会让你问，只是让你知道她在做。不知道要多久就别按自己猜的时间追。`;
+}
+
 // **只给 started_at，不给 elapsed。** 这段字节只在开工/收工时变，
 // 所以哪怕放在前缀里也不会每轮清空缓存。「已经过去多久」让他自己减。
 export function doingBlock() {
@@ -391,12 +430,16 @@ export function doingBlock() {
   if (!rows.length) return '';
 
   const lines = rows.map((r) => {
-    const est = r.estimate_ms ? `，这类事她平均要 ${Math.round(r.estimate_ms / 60000)} 分钟` : '，不知道要多久';
+    const est = r.estimate_ms ? `，这类事她平常要 ${Math.round(r.estimate_ms / 60000)} 分钟` : '，不知道要多久';
     const asked = r.asked_count ? `，已经问过 ${r.asked_count} 次` : '';
     return `  「${r.what}」开始于 ${formatDateTime(r.started_at)}${est}${asked}`;
   });
 
-  return `[她正在做的事]\n${lines.join('\n')}\n（开始时间是真的，距现在多久你自己算——你知道现在几点。没到点就别问「做完了没」，这是这段东西存在的全部理由；她自己提起来当然可以接。）`;
+  return (
+    `[她正在做的事]\n${lines.join('\n')}\n` +
+    `（开始时间是真的，距现在多久你自己算——你知道现在几点。没到点就别问「做完了没」，` +
+    `这是这段东西存在的全部理由；她自己提起来当然可以接。）`
+  );
 }
 
 // 做决定那一轮（phosphor）用的行：在做的事 + 到点该问的。
@@ -414,7 +457,7 @@ export function doingStatusLine() {
       lines.push(
         `按她做这类事的速度，这几件差不多该到点了（问或不问都不占这次的动作）：\n${items}\n` +
           `想问就写在 doing_follow_up 里：{"doing_id":上面那个,"ask":"你想说的话"}。` +
-          `问得具体一点（卡在哪了、顺不顺），不要只问「做完了没」。一件事最多问两次，到了上限就等她自己说；` +
+          `问得具体一点（卡在哪了、顺不顺），不要只问「做完了没」。一件事最多问两次；` +
           `这次不想问就留空数组，事还在那里，下次还会遇到。`
       );
     }
