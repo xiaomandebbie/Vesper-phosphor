@@ -56,7 +56,7 @@ CREATE TABLE IF NOT EXISTS conversation_log (
 );
 
 -- 对话记录的归档：整理 conversation_log 时先搬到这里再删，原话不会真的消失。
--- 平时没人读它，只在翻旧账（跨天锚点、按时间回查）时才查。
+-- 平时没人读它，只在翻旧账（跳天锚点、按时间回查）时才查。
 CREATE TABLE IF NOT EXISTS conversation_archive (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   ts INTEGER NOT NULL,
@@ -190,6 +190,22 @@ export function getOverduePendingWakes(now, graceMs) {
 export function setPendingWakeStatus(id, status) {
   stmt('UPDATE pending_wake SET status = ? WHERE id = ?').run(status, id);
 }
+
+// 按 note 撒掉还没到点的约。返回撒掉几条。
+//
+// 为什么要有这个：「她在做的事」登记时会约一次到点唤醒（见 doing.js 的 scheduleCheck），
+// 她提前说「写完了」之后那个约必须撒，不然到点还是会触发一次完整唤醒
+// （拉 breath、拉 feel、调模型），然后发现 dueDoings() 是空的，什么都不做。白花一次。
+//
+// 用 status='cancelled' 而不是真删：跟 pending_wake 其他状态一个做法，也查得到历史。
+// 只撒 pending 的：已经 triggered 或 missed 的是发生过的事，不该改。
+export function cancelPendingWakeByNote(note) {
+  const n = String(note ?? '').trim();
+  if (!n) return 0;
+  return stmt("UPDATE pending_wake SET status = 'cancelled' WHERE status = 'pending' AND note = ?").run(n)
+    .changes;
+}
+
 export function getUnacknowledgedMissed() {
   return stmt("SELECT * FROM pending_wake WHERE status = 'missed' AND acknowledged = 0").all();
 }
@@ -321,7 +337,7 @@ export function countRecentConversation(windowMs) {
 }
 
 // ---------- 对话记录的归档 ----------
-// 从"最近的对话"里搬出来的原话。平时不读，翻旧账时才查（跨天锚点、按时间回查）。
+// 从"最近的对话"里搬出来的原话。平时不读，翻旧账时才查（跳天锚点、按时间回查）。
 
 export function listArchivedConversation(limit = 50) {
   return stmt('SELECT ts, speaker, content FROM conversation_archive ORDER BY ts DESC, id DESC LIMIT ?')
@@ -382,7 +398,7 @@ export function getRecentCaptureWarnings(limit = 20) {
 // 上次整理的时间记在 meta 表里，进程重启不会重复清，也不会因为重启把计时清零。
 //
 // 整理不是直接删：先把要清的那些搬进 conversation_archive，再删 conversation_log。
-// 这样"最近的对话"窗口变短了，但原话还在，跨天锚点和按时间回查都还能读到。
+// 这样"最近的对话"窗口变短了，但原话还在，跳天锚点和按时间回查都还能读到。
 // .env 的 CONVERSATION_ARCHIVE=0 可以退回老做法（直接删）。
 const CONVERSATION_CLEANED_KEY = 'conversation_log_cleaned_at';
 
