@@ -33,6 +33,16 @@ import { getUnseenStarReplies, markStarRepliesSeen, hasStarToday, starWindowLabe
 import { collectFromHer, handleFromHer } from './from-her.js';
 import { handleBarOffers } from './actions/bar-offers.js';
 import { configSummary as proofSummary } from './proof.js';
+import { handleDoingFollowUp } from './actions/doing-follow-up.js';
+import {
+  doingSummary,
+  sweepStale,
+  pendingPriorWrites,
+  markPriorsSynced,
+  priorMemoText,
+  cachePrior,
+  parsePriorsFromMemory,
+} from './doing.js';
 
 const TICK_MS = 60 * 1000;
 const MISSED_GRACE_MS = 3 * 60 * 1000;
@@ -137,6 +147,7 @@ function normalizeDecision(raw, fallbackMood) {
 
   // star_replies / moment_replies 原样透传，洗形状在 from-her.js 里做（normalizeFromHerReplies）
   // bar_offers 同理，洗形状在 actions/bar-offers.js 里做（normalizeBarOffers）
+  // doing_follow_up 也同理，洗形状在 actions/doing-follow-up.js 里做（normalizeDoingFollowUp）
   return {
     ...d,
     next_wake_minutes: minutes,
@@ -192,6 +203,57 @@ async function getMemorySummary() {
     callOmbre('feel', { query: '我现在感觉怎么样，最近在想什么' }),
   ]);
   return { breathSummary, feelSummary };
+}
+
+// 工期先验和 OB 对一次。
+//
+// 读：OB 里存过的先验喂进本地缓存——换机器、清库之后还认得得她做事的节奏。
+//          顺着 breath 读，不额外调一次：breath 本来就要拉的。
+// 写：收工时算出的新先验写进 OB。
+//
+// 为什么回写放在这边而不是收工那一刻：收工是 gateway 进程听见她说「改完了」的时候发生的，
+// 那条路径在每一轮对话的关键路上，不该碰网络。所以那边只落库，这边补写。
+async function syncDoingPriors(breathSummary) {
+  if (!isConnected('ombre-brain')) return;
+
+  try {
+    for (const p of parsePriorsFromMemory(breathSummary)) cachePrior(p.category, p.minutes);
+  } catch (err) {
+    console.error('phosphor: OB 里的工期先验没读进来（不影响这次）', err.message);
+  }
+
+  let pending = [];
+  try {
+    pending = pendingPriorWrites();
+  } catch (err) {
+    console.error('phosphor: 读不到待写的工期先验（不影响这次）', err.message);
+    return;
+  }
+  if (!pending.length) return;
+
+  let written = 0;
+  for (const row of pending) {
+    let count = 0;
+    try {
+      count = JSON.parse(row.samples || '[]').length;
+    } catch {
+      count = 0;
+    }
+    const out = await callOmbre('hold', {
+      content: priorMemoText(row.category, row.minutes, count),
+      title: `工期先验：${row.category}`,
+      domain: '时间感知',
+      importance: 4,
+    });
+    if (out !== null) written++;
+  }
+  // 有一条没写成就不推水位，下次醒来再试。宁可重写一条（OB 会合并），不能默默丢掉。
+  if (written === pending.length) {
+    markPriorsSynced();
+    console.log(`phosphor: ${written} 条工期先验写进了 OB`);
+  } else {
+    console.warn(`phosphor: 工期先验只写成 ${written}/${pending.length} 条，下次醒来再试`);
+  }
 }
 
 // ---------- 逛论坛连着走几步 ----------
@@ -401,6 +463,9 @@ async function runDecisionCycle({ kind, scheduledAt = null, selfNote = null, cle
     getMemorySummary(),
     getTopDrives({ refresh: true }),
   ]);
+  // 工期先验和 OB 对一次（读顺着刚拉的 breath 走，写是收工时欠下的）。
+  // 出什么错都不能拖累这次唤醒，里面每一步各自包了 try
+  await syncDoingPriors(breathSummary);
   const gapMinutes = wakeState.updated_at ? (Date.now() - wakeState.updated_at) / 60000 : 0;
   const pendingComments = getPendingComments(MAX_COMMENTS_PER_WAKE);
   // 星星罐：今天那一次机会用没用过，以及她摘下星星后回的话（读库，不调模型）。
@@ -519,16 +584,24 @@ async function runDecisionCycle({ kind, scheduledAt = null, selfNote = null, cle
     } catch (err) {
       console.error(`[${kind}] handleFromHer failed:`, err);
     }
-    // 她递到吧台上的那几杯：想喝就喝，想退就退。同样不占这次的动作。
+    // 她递到吧台上的那几杖：想喝就喝，想退就退。同样不占这次的动作。
     // 提示词告诉他写在 bar_offers 里（见 proof-prompt.js），执行在 actions/bar-offers.js。
     // 这一步之前一直没人调，所以他写了也落不了地（小满 2026-10-13 发现）
     try {
       const bo = await handleBarOffers(decision);
       if (bo.drunk || bo.rejected) {
-        console.log(`phosphor: 喝了 ${bo.drunk} 杯她递的，退了 ${bo.rejected} 杯`);
+        console.log(`phosphor: 喝了 ${bo.drunk} 杖她递的，退了 ${bo.rejected} 杖`);
       }
     } catch (err) {
       console.error(`[${kind}] handleBarOffers failed:`, err);
+    }
+    // 到点了的事问一句进度。同样不占这次的动作；
+    // 到没到点由账本说了算，不信模型给的 id（见 actions/doing-follow-up.js）
+    try {
+      const df = await handleDoingFollowUp(decision);
+      if (df.asked) console.log(`phosphor: 问了 ${df.asked} 件事的进度`);
+    } catch (err) {
+      console.error(`[${kind}] handleDoingFollowUp failed:`, err);
     }
     try {
       result = await executeAction(decision);
@@ -688,6 +761,12 @@ async function tick() {
     } catch (err) {
       console.error('cleanupTick error:', err);
     }
+    // 挂太久没收工的事自己消失。她大概只是忘了说，不该被追一辈子（见 doing.js）
+    try {
+      sweepStale();
+    } catch (err) {
+      console.error('sweepStale error:', err);
+    }
   } finally {
     ticking = false;
   }
@@ -719,7 +798,7 @@ async function main() {
               : '不归档'
           }`
         : '关闭'
-    }；论坛一次最多再走 ${FORUM_MAX_STEPS} 步；听歌一次最多再走 ${MUSIC_MAX_STEPS} 步；${dreamConfigSummary()}；共享时间线：${isSharedTimelineEnabled() ? '已开启' : '未开启'}；动态配图：${isImageEnabled() ? '已开启' : '未配置'}；动态语音：${isVoiceEnabled() ? '已开启' : '未配置'}；情绪（Drivesoid）：${isDrivesEnabled() ? '已接入' : '未接入'}；星星罐：一天一颗，提示窗 ${starWindowLabel()}；她放的星和她发的动态：醒来会带上，回应不占动作；${proofSummary()}`
+    }；论坛一次最多再走 ${FORUM_MAX_STEPS} 步；听歌一次最多再走 ${MUSIC_MAX_STEPS} 步；${dreamConfigSummary()}；共享时间线：${isSharedTimelineEnabled() ? '已开启' : '未开启'}；动态配图：${isImageEnabled() ? '已开启' : '未配置'}；动态语音：${isVoiceEnabled() ? '已开启' : '未配置'}；情绪（Drivesoid）：${isDrivesEnabled() ? '已接入' : '未接入'}；星星罐：一天一颗，提示窗 ${starWindowLabel()}；她放的星和她发的动态：醒来会带上，回应不占动作；${proofSummary()}；${doingSummary()}`
   );
   await connectAll();
   await tick();
