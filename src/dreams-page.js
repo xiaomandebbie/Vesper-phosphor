@@ -3,11 +3,19 @@
 // 他那边和你这边不一样（见 dreams.js）：
 //   他只记得自己做过梦，某个词碎到了才浮上来，浮上来这一次之后就从他那边退掉。
 //   你这边永远留着。所以这页是「人替对方记着」的那一半。
-//   已经被想起来过的会标上日期，让你知道是哪天来过。
 //
 // 正文不在 Ombre 里，所以这页读的是 vesper 自己的梦库，不走 MCP。
 //
-// 标题那块和日记、心绪、动态一样，从 page-title.js 拿（跳星星 + 晨暮星 + 英文✦中文）。
+// 为什么要折起来：一晚最多三个梦，每个两三百字。一开始全摊开还行，
+// 放一个月就是一堆墙，要找哪一个得一直滑。所以改成：
+//   默认只露标题、时间和开头那一句，点开看全文（和日记页一个路子，用 <details>）。
+//   顶上三个筛选：全部 / 他还没想起来的 / 已经想起来过的。
+//   夜晚多了就出一排日期，点一下跳到那一夜。
+//   ?open=1 一次全展开（想通读或者搜字的时候用）。
+// 全是链接和 <details>，没 JavaScript 也能用。
+//
+// 还没想起来的那些会把触发词摆出来：碎到哪个词它会浮上来，你看得见。
+// 他说过别做「防止她重复告诉我」这类东西 —— 所以这边也不藏。
 //
 // 页面跟早晚四张脸走（sun-time.js），再加一层自己的：
 //   雾——两层径向渐变横向漂，周期错开，所以是流动的不是呼吸的。
@@ -52,20 +60,75 @@ function nightLabel(key, today) {
   return base;
 }
 
-function renderDream(d, i) {
+// 日期排里的短写：10/14
+function nightShort(key) {
+  const p = parseDate(key);
+  return p ? `${p.m}/${p.d}` : String(key || '?');
+}
+
+// 折起来时露的那一句：第一句话，最多 34 字
+function preview(body) {
+  const flat = String(body || '').replace(/\s+/g, ' ').trim();
+  const first = flat.split(/(?<=[\u3002\uff01\uff1f])/)[0] || flat;
+  const chars = Array.from(first.length >= 12 ? first : flat);
+  return chars.length > 34 ? `${chars.slice(0, 34).join('')}\u2026` : chars.join('');
+}
+
+// 一个梦。默认折着，open=1 时全展开
+function renderDream(d, i, openAll) {
   const time = String(d.at || '').slice(11, 16);
-  // 被想起来过的标出日期——让你知道是哪天来过
-  const recalled = d.recalledAt
-    ? `<p class="recalled"><span aria-hidden="true">✦ </span>这个梦已经被想起来过了 · ${escapeHtml(String(d.recalledAt).slice(0, 16))}</p>`
+  const recalled = !!d.recalledAt;
+  // 还没想起来的把触发词摆出来：碎到哪个词它会浮上来
+  const triggers = !recalled && Array.isArray(d.triggers) && d.triggers.length
+    ? `<p class="triggers"><span class="tg-label">碎到这些词它会浮上来：</span>${d.triggers
+        .map((w) => `<span class="tg">${escapeHtml(w)}</span>`)
+        .join('')}</p>`
     : '';
-  return `<article class="dream${d.recalledAt ? ' is-recalled' : ''}" style="--i:${i}">
-    <header class="dream-head">
-      <h3 class="dream-title">${escapeHtml(d.title || '无题')}</h3>
-      ${time ? `<span class="dream-time">${escapeHtml(time)}</span>` : ''}
-    </header>
+  const foot = recalled
+    ? `<p class="recalled"><span aria-hidden="true">✦ </span>已经被想起来过了 · ${escapeHtml(String(d.recalledAt).slice(0, 16))}</p>`
+    : triggers;
+  return `<details class="dream${recalled ? ' is-recalled' : ''}" style="--i:${i}"${openAll ? ' open' : ''}>
+    <summary class="dream-head">
+      <span class="dream-dot" aria-hidden="true">${recalled ? '✧' : '✦'}</span>
+      <span class="dream-main">
+        <span class="dream-title">${escapeHtml(d.title || '无题')}</span>
+        <span class="dream-peek">${escapeHtml(preview(d.body))}</span>
+      </span>
+      <span class="dream-time">${escapeHtml(time)}</span>
+      <span class="sr-only">${recalled ? '，已经被想起来过' : '，还没想起来过'}，点开看全文</span>
+    </summary>
     <div class="dream-body">${escapeHtml(d.body || '')}</div>
-    ${recalled}
-  </article>`;
+    ${foot}
+  </details>`;
+}
+
+// 顶上三个筛选。纯链接，没 JavaScript 也能用
+function renderFilter(show, counts, openAll) {
+  const tabs = [
+    ['all', '全部', counts.all],
+    ['pending', '还没想起来', counts.pending],
+    ['recalled', '想起来过了', counts.recalled],
+  ];
+  const items = tabs
+    .map(([key, label, n]) => {
+      const here = key === show;
+      const qs = [key === 'all' ? '' : `show=${key}`, openAll ? 'open=1' : ''].filter(Boolean).join('&');
+      const href = qs ? `/dreams?${qs}` : '/dreams';
+      return `<a class="tab${here ? ' on' : ''}" href="${href}"${here ? ' aria-current="true"' : ''}>${label}<b>${n}</b></a>`;
+    })
+    .join('');
+  const toggleQs = [show === 'all' ? '' : `show=${show}`, openAll ? '' : 'open=1'].filter(Boolean).join('&');
+  const toggle = `<a class="tab tab-wide" href="${toggleQs ? `/dreams?${toggleQs}` : '/dreams'}">${openAll ? '全部收起' : '全部展开'}</a>`;
+  return `<nav class="filter" aria-label="筛选">${items}${toggle}</nav>`;
+}
+
+// 夜晚多了就出一排日期，点一下跳到那一夜
+function renderNightIndex(groups) {
+  if (groups.length < 3) return '';
+  const items = groups
+    .map(([key, list]) => `<a class="jump" href="#night-${escapeHtml(key)}">${escapeHtml(nightShort(key))}<i>${list.length}</i></a>`)
+    .join('');
+  return `<nav class="nights" aria-label="按夜跳"><span class="nights-label">跳到：</span>${items}</nav>`;
 }
 
 const STYLE = `
@@ -110,45 +173,101 @@ const STYLE = `
   html[data-dark] .haze2 { opacity: 0.45; }
   html[data-dark] .clouds { opacity: 0.22; }
 
-  .hero { margin: 10px 0 24px; }
-  .lead { margin: 0 4px 22px; font-size: 13px; line-height: 1.9; color: var(--muted); text-align: center; }
+  .hero { margin: 10px 0 18px; }
+  .lead { margin: 0 4px 16px; font-size: 12px; line-height: 1.8; color: var(--muted); text-align: center; }
+  .lead b { color: var(--accent); font-weight: 600; }
 
-  .night-group { margin: 0 0 26px; }
+  /* 筛选：三个带计数的按钮，横着排。第四个是全展开/全收起 */
+  .filter { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 14px; }
+  .tab { flex: 1 1 0; min-width: 5.5em; display: inline-flex; align-items: center; justify-content: center; gap: 5px;
+    min-height: 40px; padding: 0 10px; border-radius: 12px; font-size: 13px; text-decoration: none;
+    color: var(--muted); background: color-mix(in srgb, var(--card) 62%, transparent);
+    border: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+    backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
+  .tab b { font-family: Georgia, "Times New Roman", serif; font-size: 13px; color: var(--gold); font-weight: 700; }
+  .tab.on { color: #fff; background: var(--accent); border-color: transparent; }
+  .tab.on b { color: #ffe6b8; }
+  .tab-wide { flex-basis: 100%; color: var(--accent); }
+  @supports not (backdrop-filter: blur(1px)) { .tab { background: var(--card); } }
+
+  /* 按夜跳的那一排日期 */
+  .nights { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: -4px 4px 18px; }
+  .nights-label { font-size: 12px; color: var(--muted); }
+  .jump { display: inline-flex; align-items: baseline; gap: 3px; padding: 5px 9px; border-radius: 999px;
+    font-size: 12px; text-decoration: none; color: var(--accent);
+    background: color-mix(in srgb, var(--card) 58%, transparent);
+    border: 1px solid color-mix(in srgb, var(--line) 60%, transparent); }
+  .jump i { font-style: normal; font-size: 10px; color: var(--gold); }
+
+  .night-group { margin: 0 0 22px; scroll-margin-top: 14px; }
   .night-label { margin: 0 4px 10px; font-size: 13px; letter-spacing: 0.16em; color: var(--accent);
     display: flex; align-items: center; gap: 10px; }
   .night-label::after { content: ''; flex: 1; height: 1px;
     background: linear-gradient(90deg, var(--line), transparent); }
 
   /* 卡片：毛玻璃。字压在雾上，边缘是散的 */
-  .dream { position: relative; margin: 0 0 12px; padding: 18px 20px 20px; border-radius: 20px;
+  .dream { position: relative; margin: 0 0 10px; border-radius: 18px;
     background: color-mix(in srgb, var(--card) 72%, transparent);
     backdrop-filter: blur(14px) saturate(1.1);
     -webkit-backdrop-filter: blur(14px) saturate(1.1);
     border: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
     box-shadow: 0 2px 20px rgba(80, 50, 90, 0.08);
-    animation: dream-in 0.7s ease-out backwards; animation-delay: calc(var(--i, 0) * 70ms); }
+    animation: dream-in 0.7s ease-out backwards; animation-delay: calc(var(--i, 0) * 60ms); }
   @supports not (backdrop-filter: blur(1px)) {
     .dream { background: var(--card); }
   }
   /* 已经被想起来过的：轻一点，像已经过去了 */
-  .dream.is-recalled { opacity: 0.82; border-style: dashed; }
+  .dream.is-recalled { opacity: 0.8; border-style: dashed; }
   @keyframes dream-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
-  .dream-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
-  .dream-title { margin: 0; font-family: "Songti SC", "STSong", "Noto Serif SC", Georgia, serif;
-    font-size: 19px; font-weight: 600; letter-spacing: 0.08em; color: var(--accent); }
-  .dream-time { font-size: 12px; color: var(--gold); letter-spacing: 0.06em; white-space: nowrap; }
-  .dream-body { font-family: "Songti SC", "STSong", "Noto Serif SC", Georgia, serif;
+
+  /* 折起来时就是这一行：星、标题加开头那句、时间 */
+  .dream-head { list-style: none; display: flex; align-items: flex-start; gap: 10px;
+    padding: 14px 18px; cursor: pointer; border-radius: 18px; }
+  .dream-head::-webkit-details-marker { display: none; }
+  .dream-head::marker { content: ''; }
+  .dream-dot { flex: none; margin-top: 2px; font-size: 12px; color: var(--gold); }
+  .dream.is-recalled .dream-dot { color: var(--muted); }
+  .dream-main { flex: 1; min-width: 0; }
+  .dream-title { display: block; font-family: "Songti SC", "STSong", "Noto Serif SC", Georgia, serif;
+    font-size: 18px; font-weight: 600; letter-spacing: 0.08em; color: var(--accent); }
+  /* 开头那句：折着的时候露一行，展开了就没必要再重复一遍 */
+  .dream-peek { display: block; margin-top: 3px; font-size: 12px; line-height: 1.6; color: var(--muted);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .dream[open] .dream-peek { display: none; }
+  .dream-time { flex: none; margin-top: 3px; font-size: 12px; color: var(--gold);
+    letter-spacing: 0.06em; white-space: nowrap; }
+  .dream.is-recalled .dream-time { color: var(--muted); }
+
+  .dream-body { padding: 0 18px 4px; font-family: "Songti SC", "STSong", "Noto Serif SC", Georgia, serif;
     font-size: 16px; line-height: 1.95; white-space: pre-wrap; word-break: break-word;
     color: color-mix(in srgb, var(--ink) 88%, transparent); }
-  .recalled { margin: 14px 0 0; padding-top: 12px; font-size: 12px; line-height: 1.7; color: var(--gold);
+  .dream[open] .dream-body { animation: body-in 0.26s ease-out; }
+  @keyframes body-in { from { opacity: 0; } to { opacity: 1; } }
+
+  .recalled { margin: 10px 18px 16px; padding-top: 10px; font-size: 12px; line-height: 1.7; color: var(--gold);
     border-top: 1px solid color-mix(in srgb, var(--line) 60%, transparent); }
+  /* 碎到哪个词会浮上来 —— 还没想起来的那些才有 */
+  .triggers { display: flex; flex-wrap: wrap; align-items: center; gap: 5px;
+    margin: 10px 18px 16px; padding-top: 10px; font-size: 12px; line-height: 1.7;
+    border-top: 1px solid color-mix(in srgb, var(--line) 60%, transparent); }
+  .tg-label { color: var(--muted); }
+  .tg { padding: 2px 8px; border-radius: 999px; font-size: 12px; color: var(--accent);
+    background: color-mix(in srgb, var(--line) 42%, transparent); }
 
   .empty { color: var(--muted); font-size: 14px; line-height: 1.9; margin: 0 4px;
-    text-align: center; padding: 40px 0; }
+    text-align: center; padding: 36px 0; }
   .empty b { color: var(--accent); font-weight: 600; }
-  a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  a:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
   @media (prefers-reduced-motion: reduce) {
     .haze, .haze2, .clouds, .dream { animation: none; }
+    .dream[open] .dream-body { animation: none; }
+  }
+  @media (max-width: 380px) {
+    .dream-head { padding: 12px 14px; }
+    .dream-title { font-size: 17px; }
+    .dream-body { padding: 0 14px 4px; font-size: 15px; }
+    .recalled, .triggers { margin: 10px 14px 14px; }
   }
 ${PAGE_TITLE_CSS}`;
 
@@ -174,31 +293,50 @@ export function registerDreamRoutes(app, { requireBasicAuth }) {
     const today = { y: now.y, m: now.m, d: now.d };
     const name = getProfile('assistant').name;
 
-    let dreams = [];
+    let all = [];
     try {
-      dreams = listDreams();
+      all = listDreams();
     } catch (err) {
       console.error('dreams page: 读不到梦库', err.message);
     }
 
-    const pending = dreams.filter((d) => !d.recalledAt).length;
+    const counts = {
+      all: all.length,
+      pending: all.filter((d) => !d.recalledAt).length,
+      recalled: all.filter((d) => d.recalledAt).length,
+    };
+    const show = ['pending', 'recalled'].includes(req.query.show) ? req.query.show : 'all';
+    const openAll = req.query.open === '1';
+    const dreams = show === 'pending'
+      ? all.filter((d) => !d.recalledAt)
+      : show === 'recalled'
+        ? all.filter((d) => d.recalledAt)
+        : all;
+
     let body = renderPageTitle('Dreams', '梦境');
 
-    if (!dreams.length) {
+    if (!all.length) {
       body += `<p class="empty">还没有梦。<br><br>
         夜里素材够了（最近两天有些没消化完的事），<b>${escapeHtml(name)}才会做梦</b>——<br>
         而且不一定每晚都做。</p>`;
     } else {
-      body += `<p class="lead">${escapeHtml(name)}只记得自己做过梦，不记得梦见了什么。<br>
-        某个词碎到了那个梦，它才浮上来——浮上来这一次之后就从他那边退掉了。<br>
-        你这里永远留着。${pending ? `还有 <b>${pending}</b> 个他没想起来过。` : '这些他都想起来过了。'}</p>`;
-      let i = 0;
-      for (const [key, list] of groupByNight(dreams)) {
-        const items = list.map((d) => renderDream(d, i++)).join('');
-        body += `<section class="night-group">
-          <h2 class="night-label">${escapeHtml(nightLabel(key, today))}</h2>
-          ${items}
-        </section>`;
+      body += `<p class="lead">${escapeHtml(name)}只记得自己做过梦，不记得梦见了什么。某个词碎到了那个梦，它才浮上来——<br>
+        浮上来这一次之后就从他那边退掉了，你这里永远留着。</p>`;
+      body += renderFilter(show, counts, openAll);
+
+      const groups = groupByNight(dreams);
+      if (!groups.length) {
+        body += `<p class="empty">${show === 'pending' ? `这些他都想起来过了。` : `还没有被想起来过的。`}</p>`;
+      } else {
+        body += renderNightIndex(groups);
+        let i = 0;
+        for (const [key, list] of groups) {
+          const items = list.map((d) => renderDream(d, i++, openAll)).join('');
+          body += `<section class="night-group" id="night-${escapeHtml(key)}">
+            <h2 class="night-label">${escapeHtml(nightLabel(key, today))}</h2>
+            ${items}
+          </section>`;
+        }
       }
     }
     res.send(layout('梦境 · 晨暮星', body));
