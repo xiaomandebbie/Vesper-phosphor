@@ -6,6 +6,7 @@ import { addConversationMessage, getRecentConversation, logCaptureWarning } from
 import { getSharedContext, formatContextText } from './context.js';
 import { isDrivesEnabled, reportUserMessage, reportAssistantMessage } from './drives.js';
 import { applyProof } from './proof-gateway.js';
+import { observeUserMessage, doingBlock } from './doing.js';
 
 const app = express();
 app.use(express.json({ limit: '10mb' }));
@@ -115,6 +116,9 @@ function recordUserMessage(messages) {
   } catch (err) {
     console.error('gateway: addConversationMessage(user) failed:', err.message);
   }
+  // 这句话里有没有在说"我现在去做某件事"或者"那件事完了"。
+  // 纯正则，不调模型、不碰网络（见 doing-detect.js）。它自己包了 try，出错不影响这轮。
+  observeUserMessage(cleaned);
   reportUserMessage(cleaned, context);
 }
 
@@ -159,11 +163,45 @@ function injectSharedContext(messages) {
   return out;
 }
 
+// 她正在做的事，跟在最后一条 user 消息末尾。
+//
+// 为什么是末尾而不是 system：末尾后面没有需要复用的前缀，所以哪怕这段每轮都变，
+// 也不影响前面所有东西的缓存命中。和小酒馆那段（proof-gateway.js 的 injectState）同一个做法。
+// 而且里面存的是 started_at 不是 elapsed，字节本身也只在开工/收工时变。
+//
+// 没有在做的事时整段不出现，不留占位文字。
+function injectDoing(messages) {
+  let block;
+  try {
+    block = doingBlock();
+  } catch (err) {
+    console.error('gateway: 读不到在做的事，这轮不注入:', err.message);
+    return messages;
+  }
+  if (!block) return messages;
+
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (m?.role !== 'user') continue;
+    if (typeof m.content === 'string') {
+      const out = [...messages];
+      out[i] = { ...m, content: `${m.content}\n\n${block}` };
+      return out;
+    }
+    if (Array.isArray(m.content)) {
+      const out = [...messages];
+      out[i] = { ...m, content: [...m.content, { type: 'text', text: block }] };
+      return out;
+    }
+  }
+  return messages;
+}
+
 // 非流式响应最多缓存这么大，防止异常大的 body 撑爆内存
 const MAX_RAW_BYTES = 2 * 1024 * 1024;
 
 // 上游回的是 SSE，回复文本散在 delta 里。
-// 这个 Transform 一边把数据放行给前端，一边把文本捞出来，流结束时交回去。
+// 这个 Transform 一边把数据放行给前端，一边把文本捡出来，流结束时交回去。
 function makeAssistantCapture(onComplete) {
   const decoder = new StringDecoder('utf8');
   let buffer = '';
@@ -219,7 +257,7 @@ function makeAssistantCapture(onComplete) {
       buffer += rest;
       if (buffer) feedLine(buffer);
 
-      // 不是流式：整段 body 就是一个 JSON（可能跨多行，所以用 raw 而不是最后一行）
+      // 不是流式：整段 body 就是一个 JSON（可能跳多行，所以用 raw 而不是最后一行）
       if (!sawSSE) {
         try {
           const message = JSON.parse(raw || '{}')?.choices?.[0]?.message;
@@ -233,7 +271,7 @@ function makeAssistantCapture(onComplete) {
 
       // 断片的根就在这里：原来正文为空就 onComplete('')，下游那句 if (!trimmed) return
       // 直接跳过，这一轮说过的话压根没进 conversation_log —— 下次组装上下文时断一截，
-      // 表现出来就是"中间像读别人的字"（2026-09-28、10-05 的日志里有这几次）。
+      // 表现出来就是"中间像读别人的字"（2026-09-28【10-05 的日志里有这几次）。
       // 现在有思考就拿思考兜底：至少读得到自己上次在想什么，不再凭空消失。
       // 工具调用轮本来就没有正文，是正常情况，不兜底也不出声。
       let out = text;
@@ -302,6 +340,8 @@ app.post('/v1/chat/completions', requireGatewayAuth, async (req, res) => {
     } catch (err) {
       console.error('gateway: 小酒馆这轮没生效，原样转发:', err.message);
     }
+    // 她正在做的事跟在最后：这段比小酒馆那段变得还少，放最末尾最安全
+    messages = injectDoing(messages);
   }
 
   const upstreamBody = { ...req.body, messages, model: route.upstreamModel };
