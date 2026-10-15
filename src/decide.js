@@ -14,6 +14,7 @@ import { clipText, wellFormedDeep } from './text.js';
 import { MAX_STAR_CHARS, starWindowLabel } from './star-jar.js';
 import { fromHerBlock } from './from-her.js';
 import { proofSection, proofActionNote, proofStatusLine } from './proof-prompt.js';
+import { doingSection, doingStatusLine } from './doing.js';
 
 const LLM_BASE_URL =
   process.env.LLM_BASE_URL || 'https://api.deepseek.com/v1/chat/completions';
@@ -378,7 +379,7 @@ mode 有 normal / low-frequency / silent 三种，只影响非精确唤醒的节
   lutopia_cli(command="activity --limit 10")    看自己最近发过什么
 list 只显示一个未读切片并会标记已读，不要把一页 list 当成整个论坛；读帖要读正文和回复，不能只看标题；不要为了凑数回帖；发帖不加破折号签名；私信(dm)和公开频道(chat)是两套东西，别混；hot-memes 是可选调味，不是必须玩梗；不透露隐私（学校、具体位置、真实姓名等能定位到人的细节）。
 回帖、发帖都由你自己决定，不用先问人。
-每次去论坛都从 discover 或 wander 起步，去看新的帖子。用户消息里的"你最近在论坛做过的"只是备忘：已经看过的帖子不用再点开，除非你回过它、想看看有没有人接着回你。同一篇帖子 24 小时内只能回一次，再回不会发出去。${forumSteps}${musicSection}${proofSection()}
+每次去论坛都从 discover 或 wander 起步，去看新的帖子。用户消息里的"你最近在论坛做过的"只是备忘：已经看过的帖子不用再点开，除非你回过它、想看看有没有人接着回你。同一篇帖子 24 小时内只能回一次，再回不会发出去。${forumSteps}${musicSection}${proofSection()}${doingSection(USER_NAME)}
 
 ## 可用的动作（每次醒来选一个）
 - bark（推送，action_detail直接是推送文案）
@@ -418,9 +419,10 @@ list 只显示一个未读切片并会标记已读，不要把一页 list 当成
 5. 可选：要不要给未来的自己安排一次精确唤醒。不需要就把 self_wake 设为 null。
 6. 可选：回复动态下的留言（不占动作）。没有留言或不想回就给空数组。
 7. 可选：摘${USER_NAME}的星回一句、回她的动态或给个赞（都不占动作）。没有或不想回就给空数组。
+8. 可选：到点了的事想问一句进度（不占动作）。没到点、或者这次不想问，就给空数组——她在做的事下次还在，不用急着问。
 
 只返回一个JSON对象，不要任何其他文字、不要markdown代码块标记：
-{"next_wake_minutes": number, "mood": string, "action": string, "action_detail": string, "self_wake": {"after_minutes": number, "note": string} | null, "comment_replies": [{"comment_id": number, "reply": string}], "star_replies": [{"star_id": number, "reply": string}], "moment_replies": [{"moment_id": number, "reply": string, "like": boolean}]}`;
+{"next_wake_minutes": number, "mood": string, "action": string, "action_detail": string, "self_wake": {"after_minutes": number, "note": string} | null, "comment_replies": [{"comment_id": number, "reply": string}], "star_replies": [{"star_id": number, "reply": string}], "moment_replies": [{"moment_id": number, "reply": string, "like": boolean}], "doing_follow_up": [{"doing_id": number, "ask": string}]}`;
 }
 
 // 这次为什么醒。after_cleanup 是 phosphor 刚清理完 conversation_log 之后的那一次（见 phosphor.js 的 cleanupTick）。
@@ -468,6 +470,7 @@ function buildUserPrompt(context) {
     momentCooldownNote(),
     starJarLine(context),
     proofStatusLine(),
+    doingStatusLine(),
     starRepliesBlock(context.starReplies),
     pendingCommentsBlock(context.pendingComments),
     fromHerBlock(context.fromHer),
