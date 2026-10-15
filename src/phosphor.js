@@ -21,6 +21,7 @@ import {
 } from './state.js';
 import { decideWithMessages, forumNextStep, musicNextStep, FORUM_MAX_STEPS, MUSIC_MAX_STEPS } from './decide.js';
 import { executeAction } from './actions/index.js';
+import { maybeDream, recallDream, markRecalled, dreamConfigSummary } from './dreams.js';
 import { describeActivity, describeActivityDetail } from './actions/activity.js';
 import { addActivityMoment } from './moments-store.js';
 import { isImageEnabled, isVoiceEnabled } from './actions/moment.js';
@@ -81,7 +82,7 @@ const CONVERSATION_ARCHIVE_KEEP_DAYS = (() => {
 })();
 
 // 论坛："看"的命令做完可以接着走；"写"的命令做完这次就结束
-const FORUM_READ_OPS = new Set(['discover', 'wander', 'list', 'show', 'activity']);
+const FORUM_READ_OPS = new Set(['discover', 'wander', 'list', 'show', 'activity', 'search', 'comment-show']);
 const FORUM_WRITE_OPS = new Set(['comment', 'post']);
 // 下次醒来带多少条"最近在论坛做过的"
 const FORUM_NOTES_SHOWN = 6;
@@ -452,6 +453,25 @@ async function runDecisionCycle({ kind, scheduledAt = null, selfNote = null, cle
     heartbeatActive: isSharedTimelineEnabled(),
   };
 
+  // 梦的浮现（见 dreams.js）：拿最近对话和心绪去碰触发词。
+  // 不是他去找梦 —— 是某个词碰到了那个梦，它自己浮上来。
+  // 碰到了就把正文注进这一次的上下文；标记退掉要等调用真的成功返回之后。
+  let dreamHit = null;
+  try {
+    const haystack = [
+      ...recentMessages.map((m) => String(m.content ?? '')),
+      String(wakeState?.mood ?? ''),
+      ...(drivesTop ?? []).map((t) => String(t.label ?? '')),
+    ].join(' ');
+    dreamHit = recallDream(haystack);
+    if (dreamHit) {
+      context.dreamRecall = dreamHit.text;
+      console.log('[' + kind + '] 梦被「' + dreamHit.hit + '」碰到了，正文注进这一次的上下文');
+    }
+  } catch (err) {
+    console.error('[' + kind + '] recallDream failed:', err.message);
+  }
+
   let decision = null;
   let messages = null;
   let result = null;
@@ -461,6 +481,9 @@ async function runDecisionCycle({ kind, scheduledAt = null, selfNote = null, cle
     const out = await decideWithMessages(context);
     decision = normalizeDecision(out.decision, wakeState.mood);
     messages = out.messages;
+    // 调用真的成功返回了，正文确实进过他的上下文 —— 现在才算浮现过。
+    // 前面报错或超时就走不到这里，梦还在，下次再碰。
+    if (dreamHit) markRecalled(dreamHit.id);
     console.log(`[${kind}] decision:`, decision);
   } catch (err) {
     errorMessage = err.message;
@@ -533,6 +556,15 @@ async function runDecisionCycle({ kind, scheduledAt = null, selfNote = null, cle
     } catch (err) {
       console.error(`[${kind}] continueMusic failed:`, err);
     }
+  }
+
+  // 夜梦（见 dreams.js）：凌晨、素材够、赶上概率才做。
+  // 不占行动、不影响 say，出什么错都不拖累这次唤醒的收尾。
+  // 正文不进 wake_log —— 他只该记得自己做过梦。
+  try {
+    await maybeDream();
+  } catch (err) {
+    console.error('[' + kind + '] maybeDream failed:', err.message);
   }
 
   logWake({
@@ -687,7 +719,7 @@ async function main() {
               : '不归档'
           }`
         : '关闭'
-    }；论坛一次最多再走 ${FORUM_MAX_STEPS} 步；听歌一次最多再走 ${MUSIC_MAX_STEPS} 步；共享时间线：${isSharedTimelineEnabled() ? '已开启' : '未开启'}；动态配图：${isImageEnabled() ? '已开启' : '未配置'}；动态语音：${isVoiceEnabled() ? '已开启' : '未配置'}；情绪（Drivesoid）：${isDrivesEnabled() ? '已接入' : '未接入'}；星星罐：一天一颗，提示窗 ${starWindowLabel()}；她放的星和她发的动态：醒来会带上，回应不占动作；${proofSummary()}`
+    }；论坛一次最多再走 ${FORUM_MAX_STEPS} 步；听歌一次最多再走 ${MUSIC_MAX_STEPS} 步；${dreamConfigSummary()}；共享时间线：${isSharedTimelineEnabled() ? '已开启' : '未开启'}；动态配图：${isImageEnabled() ? '已开启' : '未配置'}；动态语音：${isVoiceEnabled() ? '已开启' : '未配置'}；情绪（Drivesoid）：${isDrivesEnabled() ? '已接入' : '未接入'}；星星罐：一天一颗，提示窗 ${starWindowLabel()}；她放的星和她发的动态：醒来会带上，回应不占动作；${proofSummary()}`
   );
   await connectAll();
   await tick();

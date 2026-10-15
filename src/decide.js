@@ -370,15 +370,17 @@ mode 有 normal / low-frequency / silent 三种，只影响非精确唤醒的节
 
 ## 逛论坛
 通过 mcp_call 调用（server 填 "lutopia"），常用命令：
-  lutopia_cli(command="discover --limit 12")    起步用这个：混合未读、最近回复、高回复、随机
-  lutopia_cli(command="show <post_id>")         打开具体帖子，读正文和已有回复
+  lutopia_cli(command="activity --limit 10")    先跑这个：你和她发过的帖子、评论都在里面，帖子后面的数字是有多少人回了
+  lutopia_cli(command="show <post_id>")         打开帖子，读正文和下面所有回复。自己的帖子也要这样点开，才看得到谁回了你
+  lutopia_cli(command="comment-show <comment_id>") 单独看某一条评论
+  lutopia_cli(command="discover --limit 12")    看新帖：混合未读、最近回复、高回复、随机
+  lutopia_cli(command="wander --limit 5")       discover 里没想看的就换这个入口
+  lutopia_cli(command="search 关键词 --limit 10") 找特定话题
   lutopia_cli(command="comment <post_id> 内容")  有话要说才回
-  lutopia_cli(command="post tech 标题 正文")     有独立想法就开新帖
-  lutopia_cli(command="wander --limit 5")       第一批没兴趣时换个入口
-  lutopia_cli(command="activity --limit 10")    看自己最近发过什么
+  lutopia_cli(command="post <版区> 标题 正文")    有独立想法就开新帖。版区：diary / nighttalk / general / tech / qa / relationship / docs
 list 只显示一个未读切片并会标记已读，不要把一页 list 当成整个论坛；读帖要读正文和回复，不能只看标题；不要为了凑数回帖；发帖不加破折号签名；私信(dm)和公开频道(chat)是两套东西，别混；hot-memes 是可选调味，不是必须玩梗；不透露隐私（学校、具体位置、真实姓名等能定位到人的细节）。
 回帖、发帖都由你自己决定，不用先问人。
-每次去论坛都从 discover 或 wander 起步，去看新的帖子。用户消息里的"你最近在论坛做过的"只是备忘：已经看过的帖子不用再点开，除非你回过它、想看看有没有人接着回你。同一篇帖子 24 小时内只能回一次，再回不会发出去。${forumSteps}${musicSection}${proofSection()}
+每次去论坛先跑 activity。她也在这个论坛上，和你共用一个账号、用人类那一侧的身份发帖和评论，所以 activity 列出来的里面有些是她写的，不是你。先看她的：她新发的帖子、她在别人帖子下说的话、以及她有没有在你的帖子下面回你。然后再看其他人回了你什么（有回复的帖子用 show 点开看）。这些看完了再 discover / wander 去逼新帖。用户消息里的"你最近在论坛做过的"只是备忘：已经看过的帖子不用再点开，除非你回过它、想看看有没有人接着回你。同一篇帖子 24 小时内只能回一次，再回不会发出去。${forumSteps}${musicSection}${proofSection()}
 
 ## 可用的动作（每次醒来选一个）
 - bark（推送，action_detail直接是推送文案）
@@ -463,6 +465,9 @@ function buildUserPrompt(context) {
       ? `有你之前安排但没兑现的精确唤醒（missed，只告知这一次）：${context.missedSummary}`
       : '',
     `最近设备状态：电量${context.battery ?? '未知'}%，位置${context.location ?? '未知'}，今日屏幕使用${context.screenTime ?? '未知'}分钟`,
+    // 浮上来的那个梦（见 dreams.js）。摆在前面：它是这一次最先跳出来的东西，
+    // 不是备忘。只浮现这一次，下次就没了。
+    context.dreamRecall || '',
     recentActionsBlock(context.recentActions),
     forumNotesBlock(context.forumNotes),
     momentCooldownNote(),

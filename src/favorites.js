@@ -362,7 +362,7 @@ function renderFavoritesPage() {
 </head>
 <body><main>${renderMenu('/moments/favorites')}
   <header class="hero">
-    <h1 class="title title-sm">我的收藏</h1>
+    <h1 class="title">我的收藏</h1>
     <p class="subtitle">${rows.length ? `${rows.length} 条` : 'Collected'}</p>
   </header>
   <a class="back-link" href="/moments">‹ 回到动态</a>

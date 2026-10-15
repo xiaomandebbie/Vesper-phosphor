@@ -504,7 +504,7 @@ function renderStarJarPage() {
 </head>
 <body><main>${renderMenu('/moments/star-jar')}
   <header class="hero">
-    <h1 class="title title-sm">星星罐</h1>
+    <h1 class="title">星星罐</h1>
     <p class="subtitle">${stars.length ? `${stars.length} 颗` : 'Star Jar'}</p>
   </header>
   <a class="back-link" href="/moments">‹ 回到动态</a>
