@@ -36,6 +36,17 @@
 // 写到 <html> 的行内样式上；没那段脚本，变量没值，渐变整条声明失效，
 // 而 color: transparent 照旧生效——于是字是透明的。
 // 颜色还必须在 head 里最先跑：首屏绘制前就定好，不然天黑了会先亮一下再暗。
+//
+// ── 2026-10-16：别给 app.use 配一条同路径的 app.get ──
+//
+// 第一版还写过这么两行：
+//   app.get('/games/workkk', ..., (req, res) => res.redirect(302, '/games/workkk/'));
+//   app.use('/games/workkk/', ..., proxyWorkkk);
+// 意图是「不带斜杠的补上斜杠」，结果是一条指向自己的重定向：
+// Express 默认 strict routing 是关的，app.get('/games/workkk') 同时匹配
+// 带斜杠和不带斜杠两种，所以 302 的目标又命中同一条 get——浏览器弹到
+// 上限就报「太多重定位」，而那条 app.use 永远轮不到，转发从没执行过。
+// app.use 本身就按前缀匹配，带不带斜杠都接得住。
 import { renderMenu, HEAD_SCRIPT, CHROME_CSS, CHROME_SCRIPT, workkkEnabled } from './page-chrome.js';
 import { renderPageTitle, PAGE_TITLE_CSS } from './page-title.js';
 
@@ -170,11 +181,15 @@ function rewriteWorkkkHtml(html) {
     .replace(/fetch\((["'])\/(?!\/|games\/)/g, (_, q) => `fetch(${q}/games/workkk/`);
 }
 
+// app.use 挂在 /games/workkk 上，所以进来时 req.url 已经被剥掉了这段前缀：
+// 访问 /games/workkk/ 时 req.url 是 '/'，访问 /games/workkk/status 时是 '/status'。
+// 拼回 workkk 的 base 正好是它自己的路径。不带斜杠进来时 req.url 是空串，
+// 那样 base + '' 会丢掉根路径的斜杠，所以补一个。
 async function proxyWorkkk(req, res) {
   const base = WORKKK_BASE();
   if (!base) return res.status(503).send('WORKKK 没配置（缺 WORKKK_PAGE_URL）');
 
-  const target = base + req.url;
+  const target = base + (req.url && req.url !== '/' ? req.url : '/');
   const init = { method: req.method, headers: {} };
   if (req.method !== 'GET' && req.method !== 'HEAD') {
     init.headers['content-type'] = 'application/json';
@@ -232,9 +247,9 @@ export function registerGameRoutes(app, { requireBasicAuth }) {
     res.send(layout('小游戏 · 晨暮星', body));
   });
 
-  // WORKKK 本体：/games/workkk/ 起头的都转发过去
-  app.get('/games/workkk', requireBasicAuth, (req, res) => res.redirect(302, '/games/workkk/'));
-  app.use('/games/workkk/', requireBasicAuth, proxyWorkkk);
+  // WORKKK 本体：/games/workkk 起头的都转发过去。
+  // 只这一条，不要再配一条同路径的 app.get 重定向（理由见文件头）。
+  app.use('/games/workkk', requireBasicAuth, proxyWorkkk);
 
   return { enabled: workkkEnabled() };
 }
