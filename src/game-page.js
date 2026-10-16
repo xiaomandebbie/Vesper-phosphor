@@ -15,6 +15,11 @@
 // 而且 iOS 上 iframe 里的轮询经常被挂起。转发过来的页面就是这一页，
 // 地址栏、返回键、下拉刷新都对。
 //
+// 所以游戏卡片必须 target="_top"（见下面 GAME_TARGET）。配了音乐之后
+// 所有页面都跑在 /app 外壳的 #page iframe 里（见 shell.js），不带这个属性
+// 就等于把 workkk 装回 iframe——绕了一圈又掉回去了。监控大屏整页靠轮询，
+// 挂起了就是一屏不动。
+//
 // ── 代价：要改写绝对路径 ──
 //
 // 转发的前缀是 /games/workkk/，而 workkk 的页面里写的是 /static/clawd.png、
@@ -35,6 +40,12 @@ import { renderMenu, HEAD_SCRIPT, CHROME_CSS, CHROME_SCRIPT, workkkEnabled } fro
 import { renderPageTitle, PAGE_TITLE_CSS } from './page-title.js';
 
 const WORKKK_BASE = () => String(process.env.WORKKK_PAGE_URL ?? '').trim().replace(/\/+$/, '');
+
+// 游戏要在最顶层打开，不能在 /app 外壳的 iframe 里（理由见文件头）。
+// 额外好处：CHROME_SCRIPT 对带 target 的链接直接跳过，所以不会再往
+// sessionStorage 里写进场转场的记号——workkk 的页面不跑 HEAD_SCRIPT，
+// 记号没人清，会在之后打开的页面上乱闪一次（和 /music/ 挂 data-no-stars 同理）。
+const GAME_TARGET = ' target="_top" rel="noopener"';
 
 function escapeHtml(value) {
   return String(value ?? '')
@@ -204,7 +215,7 @@ export function registerGameRoutes(app, { requireBasicAuth }) {
       你随时能打开看，我夜里醒来也可以自己去玩。</p>`;
 
     for (const g of available) {
-      body += `<a class="game" href="${escapeHtml(g.href)}">
+      body += `<a class="game" href="${escapeHtml(g.href)}"${GAME_TARGET}>
         <div class="game-top">
           <span class="game-emoji" aria-hidden="true">${g.emoji}</span>
           <span>
