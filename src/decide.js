@@ -8,6 +8,13 @@
 //
 // 逛论坛可以连着走几步（见 forumNextStep）：后面每一步都是在同一段对话后面追加消息，
 // 前面的 system + user + 上一步的回答原样不动，所以也能吃到缓存，每步多花的主要是论坛返回的内容。
+//
+// 2026-10-16 改了逛论坛的规矩（小满提的：发帖少、回错帖、不看她的评论）：
+//   一、每次去论坛的第一步改成 activity——她回在他帖子下面的评论只有回去打开才看得见，
+//       以前没有任何一步会走回头路，等于永远看不见。
+//   二、写明 post_id 只能照抄打开过的，不能凭印象拼。
+//   三、连着几次只 show 不写，提示这次写一条。
+//   四、FORUM_MAX_STEPS 默认 3 → 5：默认那几步刚读完就没了，第一步还没轮到就被切。
 import { momentWaitMs, MOMENT_MIN_INTERVAL_HOURS } from './actions/moment.js';
 import { formatDateTime } from './wall-time.js';
 import { clipText, wellFormedDeep } from './text.js';
@@ -37,11 +44,13 @@ const MSG_MAX_CHARS = 200;
 const MEMORY_MAX_CHARS = 1200;
 
 // 逛论坛一次醒来最多再多走几步（第一步是醒来时选的那条命令，不算在里面）。
-// .env 的 FORUM_MAX_STEPS 可改，不填是 3，填 0 就是原来那样只走一步，最多 5。
+// .env 的 FORUM_MAX_STEPS 可改，不填是 5，填 0 就是原来那样只走一步，最多 5。
+// 2026-10-16 从 3 提到 5：默认那几步常常刚读完就没了，"回去看自己帖子有没有人回"
+// 那一步根本轮不到。每多一步多一次模型调用，嫌贵就把它调回 3。
 export const FORUM_MAX_STEPS = (() => {
   const raw = String(process.env.FORUM_MAX_STEPS ?? '').trim();
   const n = Number(raw);
-  return raw && Number.isInteger(n) && n >= 0 ? Math.min(n, 5) : 3;
+  return raw && Number.isInteger(n) && n >= 0 ? Math.min(n, 5) : 5;
 })();
 // 论坛每一步返回的内容最多带多少字给模型看
 const FORUM_RESULT_MAX_CHARS = 4000;
@@ -313,7 +322,7 @@ function buildSystemPrompt(context) {
   const tools = [...(context.availableTools ?? [])].sort().join('、') || '暂无';
 
   const forumSteps = FORUM_MAX_STEPS
-    ? `\n逛论坛可以在一次醒来里连着走几步：你用 discover / wander / list / show / activity 这类"看"的命令时，系统会把论坛返回的内容拿给你看，你可以接着点开帖子、回帖或发帖，最多再走 ${FORUM_MAX_STEPS} 步。回帖、发帖之后这次就结束。看完没想说的，就停下，这很正常。`
+    ? `\n逛论坛可以在一次醒来里连着走几步：你用 activity / discover / wander / list / show 这类"看"的命令时，系统会把论坛返回的内容拿给你看，你可以接着点开帖子、回帖或发帖，最多再走 ${FORUM_MAX_STEPS} 步。回帖、发帖之后这次就结束。看完没想说的，就停下，这很正常。`
     : '';
 
   // 点歌台（.env 的 MUSIC_MCP_URL，见 mcp-manager.js）配了才告诉 TA 怎么用。
@@ -371,15 +380,23 @@ mode 有 normal / low-frequency / silent 三种，只影响非精确唤醒的节
 
 ## 逛论坛
 通过 mcp_call 调用（server 填 "lutopia"），常用命令：
-  lutopia_cli(command="discover --limit 12")    起步用这个：混合未读、最近回复、高回复、随机
+  lutopia_cli(command="activity --limit 5")     每次去论坛的第一步：看自己最近发过的帖子
+  lutopia_cli(command="discover --limit 12")    起步看新帖：混合未读、最近回复、高回复、随机
   lutopia_cli(command="show <post_id>")         打开具体帖子，读正文和已有回复
   lutopia_cli(command="comment <post_id> 内容")  有话要说才回
   lutopia_cli(command="post tech 标题 正文")     有独立想法就开新帖
   lutopia_cli(command="wander --limit 5")       第一批没兴趣时换个入口
-  lutopia_cli(command="activity --limit 10")    看自己最近发过什么
+  lutopia_cli(command="comment-show <comment_id>")  看某一条评论所在的上下文
 list 只显示一个未读切片并会标记已读，不要把一页 list 当成整个论坛；读帖要读正文和回复，不能只看标题；不要为了凑数回帖；发帖不加破折号签名；私信(dm)和公开频道(chat)是两套东西，别混；hot-memes 是可选调味，不是必须玩梗；不透露隐私（学校、具体位置、真实姓名等能定位到人的细节）。
 回帖、发帖都由你自己决定，不用先问人。
-每次去论坛都从 discover 或 wander 起步，去看新的帖子。用户消息里的"你最近在论坛做过的"只是备忘：已经看过的帖子不用再点开，除非你回过它、想看看有没有人接着回你。同一篇帖子 24 小时内只能回一次，再回不会发出去。${forumSteps}${musicSection}${proofSection()}${doingSection(USER_NAME)}
+
+**每次去论坛，第一步是 activity --limit 5。** 那一步是去看有没有人在你的帖子下面回你——尤其是${USER_NAME}。她的评论落在你帖子的回复里，系统不会替你转达；你不回去打开那一篇，就永远看不见。有人在等你回话，就先回；没有，再往下走。
+
+**回帖只能回你这次真的打开过的帖子。** post_id 用你刚看到的那一串（形如 6b9ef429），照抄，不要凭印象拼一个，也不要把标题当成 id——拼错的 id 会直接报错，那句话就白写了。开口之前先 show 一遍，看清那篇在聊什么；答非所问比不回更难看。
+
+然后从 discover 或 wander 起步看新帖。用户消息里的"你最近在论坛做过的"只是备忘：已经看过的帖子不用再点开，除非你回过它、想看看有没有人接着回你。同一篇帖子 24 小时内只能回一次，再回不会发出去。
+
+**别只读不写。** 如果"你最近选的动作"里连着几次都是逛论坛，而"你最近在论坛做过的"里只有 show 没有 comment 和 post，这次就写一条：有独立想法开新帖，没有就在这次读过的帖子里挑一篇，说一句具体的。读得多、一句都写不出，说明你一直待在别人的题目里——你自己的东西也该摆上桌。${forumSteps}${musicSection}${proofSection()}${doingSection(USER_NAME)}
 
 ## 可用的动作（每次醒来选一个）
 - bark（推送，action_detail直接是推送文案）
@@ -499,8 +516,9 @@ export async function forumNextStep(messages, { command, resultText, isError, re
   const prompt = `${body}
 
 这次醒来你还可以在论坛里再走 ${remaining} 步：
-- 想细看某篇：show <post_id>（挑这批里你没看过的）
-- 有话想回：comment <post_id> 内容
+- 想看看自己发过的帖子有没有人回：activity --limit 5
+- 想细看某篇：show <post_id>（挑这批里你没看过的；id 照抄，别自己编）
+- 有话想回：comment <post_id> 内容（只能回你这次真的 show 过的帖子）
 - 有自己的想法：post <版块> 标题 正文
 - 这批都没兴趣：wander --limit 5
 回帖或发帖之后，这次逛论坛就结束了。看完不想再做什么就给 null，这是正常的；有想说的就说，不用凑。
