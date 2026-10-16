@@ -1,27 +1,23 @@
 #!/usr/bin/env node
-// 把「醒来去上班」接进 phosphor 和 decide。八处。
+// 把「醒来去上班」接进 phosphor 和 decide。五处。
 //
-// 小满 2026-10-16：「允朔醒来可以玩游戏吗，一次规定就玩一天吧」
+// 小满 2026-10-16：「不要一天一次，而是一次只能玩游戏的一天的内容」
 //
-// 主体在 src/workkk.js（一天一次的账）和 src/workkk-steps.js（连着走到下班），
-// 这个脚本只负责把它们接到现有的唤醒流程上。
+// 想玩随时可以玩，边界在「下班结算」那一刻：上完游戏里的那一天就收手，
+// 不往下一天续。主体在 src/workkk.js 和 src/workkk-steps.js，
+// 这个脚本只负责接到现有的唤醒流程上。
 //
 //   phosphor.js
 //     1. import 两行
-//     2. workkkToday 这个标记（作用域要在 if (decision) 外面，续步那段用得到）
-//     3. 一天一次的门禁：摆在 executeAction 之前
-//     4. 连着走到下班，走完记这一场的账
-//     5. 启动日志带上上班配置
+//     2. 连着走到下班（摆在 continueMusic 后面，和那三支并列）
+//     3. 启动日志带上上班配置
 //   decide.js
-//     6. import 一行
-//     7. 用户消息里「今天还能不能去」
-//     8. 系统提示里「## 上班」那一段
+//     4. import 一行
+//     5. 系统提示里「## 上班」那一段
 //
-// ── 门禁为什么在 executeAction 之前 ──
-//
-// startToday() 既是「查」也是「占」（一个事务，见 workkk.js）。占得住就是
-// 这一场的开头，占不住就是今天已经去过了——那就把这次的动作改成 noop。
-// 如果摆在后面，第一步已经打到游戏里了，再发现「今天去过了」就晚了。
+// 第一版有八处：那时把这件事读成了「现实里一天只给一次机会」，
+// 建了张 workkk_days 表做日期门禁，还要在 executeAction 前摆一道检查。
+// 那三处（workkkToday 标记、执行前的门禁、今天还能不能去）都没了。
 //
 // ── 两阶段：先全查，再全写 ──
 //
@@ -45,45 +41,13 @@ const changes = [
   // ── 一、phosphor.js ─────────────────────────────────
   {
     file: 'phosphor.js',
-    name: 'import 上班那几个函数',
-    marker: "from './workkk.js'",
+    name: 'import 上班那两个',
+    marker: "from './workkk-steps.js'",
     anchor: "import { describeActivity, describeActivityDetail } from './actions/activity.js';",
     replacement: [
       "import { describeActivity, describeActivityDetail } from './actions/activity.js';",
-      "import { isWorkkkCall, startToday, finishToday, workkkConfigSummary } from './workkk.js';",
+      "import { workkkConfigSummary } from './workkk.js';",
       "import { continueWorkkk } from './workkk-steps.js';",
-    ].join('\n'),
-  },
-  {
-    file: 'phosphor.js',
-    name: 'workkkToday 标记',
-    marker: 'let workkkToday',
-    anchor: '  let repliedCount = 0;',
-    replacement: [
-      '  let repliedCount = 0;',
-      '  // 上班一天一次（见 workkk.js）。这一场是不是你开的——续步那段要看它，',
-      '  // 所以声明得在 if (decision) 外面',
-      '  let workkkToday = false;',
-    ].join('\n'),
-  },
-  {
-    file: 'phosphor.js',
-    name: '一天一次的门禁',
-    marker: 'isWorkkkCall(decision)',
-    anchor: '      result = await executeAction(decision);',
-    replacement: [
-      '    // 上班一天只去一次。startToday() 既是查也是占（一个事务）：',
-      '    // 占得住就是这一场的开头，占不住就是今天已经去过了。',
-      '    // 摆在执行之前：别让第一步先打到游戏里，再发现今天不该去。',
-      '    if (isWorkkkCall(decision)) {',
-      '      workkkToday = startToday();',
-      '      if (!workkkToday) {',
-      "        console.log(`[${kind}] \u4eca天已经\u4e0a\u8fc7\u73ed\u4e86\uff0c\u8fd9\u6b21\u4e0d\u518d\u53bb\uff08\u4e00\u5929\u4e00\u6b21\uff09`);",
-      "        decision.action = 'noop';",
-      "        decision.action_detail = '';",
-      '      }',
-      '    }',
-      '      result = await executeAction(decision);',
     ].join('\n'),
   },
   {
@@ -108,12 +72,12 @@ const changes = [
       '    }',
       '  }',
       '',
-      '  // 上班：开了就把那天的班上完（见 workkk-steps.js）。',
-      '  // 做到一半停下这天不结算工资，所以这一支走到「今日进度」满为止。',
-      '  // 只有这一场是你开的才走（workkkToday）；出什么错都不影响剩下的收尾。',
-      '  if (workkkToday && decision && !errorMessage) {',
+      '  // 上班：开了就把游戏里的那一天上完（见 workkk-steps.js）。',
+      '  // 做到一半停下这天不结算工资，所以走到「今日进度」满；',
+      '  // 下班那一刻立即收手，不往下一天续。出什么错都不影响剩下的收尾。',
+      '  if (decision && !errorMessage) {',
       '    try {',
-      '      finishToday(await continueWorkkk(decision, result, messages));',
+      '      await continueWorkkk(decision, result, messages);',
       '    } catch (err) {',
       '      console.error(`[${kind}] continueWorkkk failed:`, err);',
       '    }',
@@ -131,22 +95,12 @@ const changes = [
   // ── 二、decide.js ──────────────────────────────────
   {
     file: 'decide.js',
-    name: 'import 上班的那两段话',
+    name: 'import 上班那一段话',
     marker: "from './workkk.js'",
     anchor: "import { doingSection, doingStatusLine } from './doing.js';",
     replacement: [
       "import { doingSection, doingStatusLine } from './doing.js';",
-      "import { workkkSection, workkkStatusLine } from './workkk.js';",
-    ].join('\n'),
-  },
-  {
-    file: 'decide.js',
-    name: '今天还能不能去上班',
-    marker: 'workkkStatusLine()',
-    anchor: '    forumNotesBlock(context.forumNotes),',
-    replacement: [
-      '    forumNotesBlock(context.forumNotes),',
-      '    workkkStatusLine(),',
+      "import { workkkSection } from './workkk.js';",
     ].join('\n'),
   },
   {
@@ -170,18 +124,31 @@ for (const f of ['workkk.js', 'workkk-steps.js']) {
 }
 
 const texts = new Map();
-const problems = [];
-
 for (const c of changes) {
+  if (texts.has(c.file)) continue;
   const full = path.join(SRC, c.file);
-  if (!texts.has(c.file)) {
-    if (!fs.existsSync(full)) {
-      problems.push(`找不到 src/${c.file}`);
-      c.state = 'missing';
-      continue;
-    }
-    texts.set(c.file, fs.readFileSync(full, 'utf8'));
+  if (!fs.existsSync(full)) {
+    console.error(`找不到 src/${c.file}。要在仓库根目录里跑。什么都没改。`);
+    process.exit(1);
   }
+  texts.set(c.file, fs.readFileSync(full, 'utf8'));
+}
+
+// 跑过第一版（日期门禁那个）的话，正文里会有 startToday。
+// 那几个函数已经从 workkk.js 删掉了，留着会让 phosphor 启动就 ReferenceError。
+// 不在半成品上再打一层，直接停下来让人用 .bak 恢复。
+for (const [file, src] of texts) {
+  if (src.includes('startToday') || src.includes('workkkStatusLine')) {
+    console.error(`src/${file} 里还有第一版的日期门禁接线（startToday / workkkStatusLine）。`);
+    console.error('那几个函数已经没了，留着 phosphor 启动就报错。先恢复再重跑：');
+    console.error(`  cp src/${file}.bak src/${file}`);
+    console.error('什么都没改。');
+    process.exit(1);
+  }
+}
+
+const problems = [];
+for (const c of changes) {
   const src = texts.get(c.file);
   if (src.includes(c.marker)) {
     c.state = 'done';
@@ -232,4 +199,4 @@ if (touched.size) log(`\n备份：${[...touched].map((f) => `src/${f}.bak`).join
 log('\n接着：');
 log('  node --check src/phosphor.js && node --check src/decide.js && node --check src/workkk.js && node --check src/workkk-steps.js && echo 语法OK');
 log('  pm2 restart phosphor --update-env');
-log('\n启动日志里该出现「上班：一天一次、一次最多再走 8 步；今天还没去」那一段。');
+log('\n启动日志里该出现「上班：一次上完游戏里的一天（下班结算就停）」那一段。');
