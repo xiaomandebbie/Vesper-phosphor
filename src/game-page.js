@@ -5,6 +5,9 @@
 // 署名和源码链接照它的许可条款留着，卡片下面那一行不能删。
 //
 // 以后接新游戏就在 GAMES 里加一格，页面和菜单都不用动。
+// 加的时候要带上自己的 enabled()——这一页按每个游戏自己的开关决定露不露。
+// 第一版写成了 GAMES.filter(() => workkkEnabled())，filter 没看 g，
+// 以后接的游戏会跟着 WORKKK 一起消失，所以改成每格自己管自己。
 //
 // ── 为什么用转发不用 iframe ──
 //
@@ -12,15 +15,37 @@
 // 而且 iOS 上 iframe 里的轮询经常被挂起。转发过来的页面就是这一页，
 // 地址栏、返回键、下拉刷新都对。
 //
+// 所以游戏卡片必须 target="_top"（见下面 GAME_TARGET）。配了音乐之后
+// 所有页面都跑在 /app 外壳的 #page iframe 里（见 shell.js），不带这个属性
+// 就等于把 workkk 装回 iframe——绕了一圈又掉回去了。监控大屏整页靠轮询，
+// 挂起了就是一屏不动。
+//
 // ── 代价：要改写绝对路径 ──
 //
 // 转发的前缀是 /games/workkk/，而 workkk 的页面里写的是 /static/clawd.png、
 // fetch('/status') 这种绝对路径。不改写的话它们会打到 vesper 根上（404）。
 // 所以 HTML 响应过一遍 rewriteWorkkkHtml，只动这两类字符串，别的一字不改。
-import { renderMenu, CHROME_CSS, CHROME_SCRIPT, workkkEnabled } from './page-chrome.js';
+//
+// ── 2026-10-16：HEAD_SCRIPT 不能漏 ──
+//
+// 第一版的 layout() 里没有 <script>${HEAD_SCRIPT}</script>，其他几页都有。
+// 结果两个症状：「晨暮星」三个字整个看不见，早晚四张脸也不换。
+// 根因是同一个：FACE_PATCH_CSS 里 .title 用
+//   background: linear-gradient(var(--t1), var(--t2), var(--t3)) + color: transparent
+// 把字染成渐变的。--t1/--t2/--t3 由 FACE_SCRIPT（在 HEAD_SCRIPT 里）
+// 写到 <html> 的行内样式上；没那段脚本，变量没值，渐变整条声明失效，
+// 而 color: transparent 照旧生效——于是字是透明的。
+// 颜色还必须在 head 里最先跑：首屏绘制前就定好，不然天黑了会先亮一下再暗。
+import { renderMenu, HEAD_SCRIPT, CHROME_CSS, CHROME_SCRIPT, workkkEnabled } from './page-chrome.js';
 import { renderPageTitle, PAGE_TITLE_CSS } from './page-title.js';
 
 const WORKKK_BASE = () => String(process.env.WORKKK_PAGE_URL ?? '').trim().replace(/\/+$/, '');
+
+// 游戏要在最顶层打开，不能在 /app 外壳的 iframe 里（理由见文件头）。
+// 额外好处：CHROME_SCRIPT 对带 target 的链接直接跳过，所以不会再往
+// sessionStorage 里写进场转场的记号——workkk 的页面不跑 HEAD_SCRIPT，
+// 记号没人清，会在之后打开的页面上乱闪一次（和 /music/ 挂 data-no-stars 同理）。
+const GAME_TARGET = ' target="_top" rel="noopener"';
 
 function escapeHtml(value) {
   return String(value ?? '')
@@ -40,6 +65,7 @@ const GAMES = [
     desc: '有工资、有心情值、有精力值。会摸鱼、会被老板骂、会买奶茶带回家。你在旁边看着它今天干了什么。',
     href: '/games/workkk/',
     credit: '原作 谢之舟（zhizhou-xiee）· AGPL-3.0-or-later',
+    enabled: workkkEnabled,
   },
 ];
 
@@ -114,6 +140,8 @@ const STYLE = `
   @media (prefers-reduced-motion: reduce) { .haze, .haze2, .clouds { animation: none; } .game { transition: none; } }
 ${PAGE_TITLE_CSS}`;
 
+// HEAD_SCRIPT 必须在 <head> 里、在 <style> 之前——早晚四张脸的颜色要在
+// 首屏绘制前定好，标题的文字渐变也靠它给的 --t1/--t2/--t3。
 function layout(title, body) {
   return `<!DOCTYPE html>
 <html lang="zh">
@@ -121,6 +149,7 @@ function layout(title, body) {
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>${escapeHtml(title)}</title>
+<script>${HEAD_SCRIPT}</script>
 <style>${STYLE}${CHROME_CSS}</style>
 </head>
 <body><div class="haze" aria-hidden="true"></div><div class="haze2" aria-hidden="true"></div><div class="clouds" aria-hidden="true"></div>
@@ -174,7 +203,7 @@ export function registerGameRoutes(app, { requireBasicAuth }) {
     res.set('Cache-Control', 'no-store');
     let body = renderPageTitle('Games', '小游戏');
 
-    const available = GAMES.filter((g) => workkkEnabled());
+    const available = GAMES.filter((g) => g.enabled());
     if (!available.length) {
       body += `<p class="empty">还没有接游戏。<br><br>
         接好一个之后这里会出现入口。第一步在服务器上跑：<br>
@@ -186,7 +215,7 @@ export function registerGameRoutes(app, { requireBasicAuth }) {
       你随时能打开看，我夜里醒来也可以自己去玩。</p>`;
 
     for (const g of available) {
-      body += `<a class="game" href="${escapeHtml(g.href)}">
+      body += `<a class="game" href="${escapeHtml(g.href)}"${GAME_TARGET}>
         <div class="game-top">
           <span class="game-emoji" aria-hidden="true">${g.emoji}</span>
           <span>

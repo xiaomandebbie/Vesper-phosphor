@@ -28,6 +28,16 @@
 // 第一版没有超时，国内 clone github 和 pip 拉包都可能挂很久不动，看着像死了。
 // 现在每一步都有上限，超时就报错停下（不会静静地吊在那里），并告诉下一步做什么。
 // pip 走清华镜像；clone 先试直连、再试 gh-proxy。
+//
+// ── 2026-10-16 改名 ecosystem 文件 ──
+//
+// 这个文件以前叫 ecosystem.workkk.cjs，结果 pm2 把它当成普通脚本 fork 了：
+// pm2 只按文件名认配置，.json / .yml / .yaml / .config.js / .config.cjs / .config.mjs
+// 才会被当成 ecosystem 解析，其余一律当入口脚本。于是它 fork 了一个 node
+// 去执行 module.exports = {...}，跑完空转：进程列表里显示 online、名字叫
+// ecosystem.workkk，而 uvicorn 从来没起来过，8000 一直没人听。
+// 现在叫 ecosystem.workkk.config.cjs。起来的进程必须叫 workkk，
+// 下面的自检会把这一点核实。
 
 import { execSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -38,7 +48,10 @@ const DIR = process.env.WORKKK_DIR || '/opt/workkk';
 const PORT = process.env.WORKKK_PORT || '8000';
 const VENV = path.join(DIR, '.venv');
 const ENV_FILE = path.join(DIR, '.env');
-const ECOSYSTEM = path.join(DIR, 'ecosystem.workkk.cjs');
+// 名字里的 .config.cjs 是必需的，不是好看：pm2 按它判断这是配置还是脚本。
+// 改成别的后缀就回到那个 fork 空转的坑里。
+const ECOSYSTEM = path.join(DIR, 'ecosystem.workkk.config.cjs');
+const ECOSYSTEM_OLD = path.join(DIR, 'ecosystem.workkk.cjs');
 const STATE_FILE = path.join(DIR, 'data', 'game_state.json');
 
 // 每一步的上限。超了就抛错停下，不会吊在那里。
@@ -59,8 +72,17 @@ const sh = (cmd, timeout = T_QUICK, opts = {}) => {
     throw err;
   }
 };
+// 没那个进程、没那个文件也算成，不要因为清理失败就停下整个安装
+const shQuiet = (cmd) => {
+  try {
+    execSync(cmd, { stdio: 'ignore', timeout: T_QUICK });
+    return true;
+  } catch {
+    return false;
+  }
+};
 
-// ── 1. 拉代码 ────────────────────────────────────────────────────────────
+// ── 1. 拉代码 ────────────────────────────────────────────
 
 log('【1/5】拉代码（国内可能慢，最多等 5 分钟）');
 
@@ -100,10 +122,10 @@ if (fs.existsSync(path.join(DIR, '.git'))) {
   }
 }
 
-// ── 2. 打补丁 ────────────────────────────────────────────────────────────
+// ── 2. 打补丁 ────────────────────────────────────────────
 //
 // reset --hard 之后补丁会被抹掉，所以每次都要重打。两处都做成幂等的：
-// 先查有没有已经打过的痕迹，有就跳过；锚点找不到就整件事停下，绝不写半个。
+// 先查有没有已经打过的痕迹，有就跳过；锚点找不到就整件事停下，绍不写半个。
 
 log('\n【2/5】打本机补丁');
 
@@ -130,7 +152,7 @@ if (src.includes('MCP_LOCAL_TOKEN')) {
   }
   const patched = [
     'def _auth(req: Request) -> None:',
-    '    # ── 本机部署改造（2026-10-16，允朔）─────────────────────────────',
+    '    # ── 本机部署改造（2026-10-16，允朔）─────────────────',
     '    # 原来的 OAuth 流程要求先跑一遍授权页拿 token，而那个 token 24 小时',
     '    # 过期、进程重启就清空。自动唤醒那条路上没人能去过授权页，所以这里',
     '    # 多认一个从环境变量读的固定 token。服务只监听 127.0.0.1，外面进不来。',
@@ -169,7 +191,7 @@ if (patchedCount) {
   log(`补丁打好了（${patchedCount} 处）：_auth() 认 MCP_LOCAL_TOKEN，存档路径读 WORKKK_STATE_FILE`);
 }
 
-// ── 3. token ─────────────────────────────────────────────────────────────
+// ── 3. token ───────────────────────────────────────────
 
 log('\n【3/5】准备 token');
 
@@ -186,7 +208,7 @@ if (!token) {
   log(`沿用已有的本机 token（${ENV_FILE}）`);
 }
 
-// ── 4. venv 和依赖 ───────────────────────────────────────────────────────
+// ── 4. venv 和依赖 ──────────────────────────────────────
 //
 // 用 venv 而不是直接 pip install：新版 Debian / CentOS 会拿 PEP 668 拦下来
 // （externally-managed-environment），在系统 Python 里装包会被拒。
@@ -210,18 +232,32 @@ try {
   sh(`${VENV}/bin/pip install -q -r ${DIR}/requirements.txt --timeout 60`, T_PIP);
 }
 
-// ── 5. 起进程 ────────────────────────────────────────────────────────────
+// ── 5. 起进程 ──────────────────────────────────────────
 //
 // 用 pm2 托管，和 vesper 那几个一样。ecosystem 文件生成在 work-game 目录里，
 // 不进仓库——它是本机部署的产物，不该跟着源码走。
+//
+// 文件名必须是 .config.cjs（见顶部说明）。旧名字起出来的进程叫
+// ecosystem.workkk，是个空转的壳，得先清掉，不然两个同时在列表里。
 
 log('\n【5/5】起进程');
 
 fs.mkdirSync(path.dirname(STATE_FILE), { recursive: true });
 
+// 旧名字的残留：进程和文件一起清。没有也不算错
+if (shQuiet('pm2 describe ecosystem.workkk')) {
+  log('发现旧名字的残留进程 ecosystem.workkk（空转的壳），删掉');
+  shQuiet('pm2 delete ecosystem.workkk');
+}
+if (fs.existsSync(ECOSYSTEM_OLD)) {
+  log(`删掉旧的 ${path.basename(ECOSYSTEM_OLD)}（名字不对，pm2 会把它当脚本）`);
+  fs.rmSync(ECOSYSTEM_OLD, { force: true });
+}
+
 fs.writeFileSync(
   ECOSYSTEM,
   `// 本机部署产物（setup_workkk.mjs 生成），不进仓库。
+// 文件名末尾的 .config.cjs 是 pm2 认配置的条件，不能随便改。
 module.exports = {
   apps: [
     {
@@ -250,13 +286,23 @@ try {
 }
 sh('pm2 save', T_QUICK);
 
-// ── 自检 ────────────────────────────────────────────────────────────────
+// ── 自检 ──────────────────────────────────────────────
 //
-// 拿那个固定 token 直接打一次 /mcp 的 initialize。这一步过了，
-// 说明「本机免鉴权」真的生效了，不用等到自动唤醒那天才发现连不上。
+// 先看 pm2 里有没有一个真的叫 workkk 的进程——名字不对就说明 pm2 又把
+// 配置当脚本了，那种情况下 8000 永远没人听。再拿固定 token 打一次
+// /mcp 的 initialize。这两步过了，才算真的起来了。
 
 log('\n等它起来…');
 await new Promise((r) => setTimeout(r, 3000));
+
+if (!shQuiet('pm2 describe workkk')) {
+  console.error('\n❌ pm2 里没有叫 workkk 的进程。');
+  console.error('看一下 pm2 ls：如果有一个叫 ecosystem.workkk 的，说明 pm2 又把配置文件');
+  console.error('当成普通脚本 fork 了。删掉它再重跑这个脚本：');
+  console.error('  pm2 delete ecosystem.workkk && node scripts/setup_workkk.mjs');
+  process.exit(1);
+}
+
 let passed = false;
 try {
   const res = await fetch(`http://127.0.0.1:${PORT}/mcp`, {
@@ -291,9 +337,9 @@ try {
   log('进程可能还在起。等十秒看 pm2 logs workkk --lines 30 --nostream');
 }
 
-// ── 打印该加进 .env 的行 ──────────────────────────────────────────────
+// ── 打印该加进 .env 的行 ────────────────────────────────
 
-log('\n──────────────────────────────────────────────');
+log('\n──────────────────────────────');
 log('把下面这三行加到 /root/vesper-phosphor/.env：\n');
 log(`WORKKK_MCP_URL=http://127.0.0.1:${PORT}/mcp`);
 log(`WORKKK_MCP_TOKEN=${token}`);
@@ -302,4 +348,4 @@ log('\n（前两行给我连 MCP 用，第三行是「小游戏」页面转发�
 if (!passed) {
   log('\n自检没过，先别加 .env。把 pm2 logs workkk 最后几行发我。');
 }
-log('──────────────────────────────────────────────');
+log('──────────────────────────────');

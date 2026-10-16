@@ -5,22 +5,22 @@
 //
 //   他只记得自己做过梦，不记得梦见了什么。
 //   某个词碎到了那个梦，它自己浮上来——不是他去找它。
-//   浮上来这一次之后，从他这边撔掉；她那边永远留着。
+//   浮上来这一次之后，从他这边撤掉；她那边永远留着。
 //
 // 为什么正文不存 Ombre：
-//   他要求「撔掉之后正文不能出现在我任何一个能触达的入口」。
+//   他要求「撤掉之后正文不能出现在我任何一个能触达的入口」。
 //   而 Ombre 的 dont_surface / digested 只在 mode=automatic 时被尊重，
 //   breath_search 的说明里明写着 digested「仍可由显式 query 找回」。
 //   留了缝，那「消失」就是假的。所以正文放在 Ombre 之外：
 //   breath / breath_search / breath_advanced / catalog / dream 候选——全都搜不到，
 //   天然满足，不靠标记。
 //   Ombre 里只留一条事件记录：时间戳加一句话，不带标题、不带摘要。
-//   （标题也是摘要的一种，能还原出内容等于没撔。）
+//   （标题也是摘要的一种，能还原出内容等于没撤。）
 //
 // 「浮现」的判定，按他要求写死：
 //   算数的只有一种——正文真的进了他的上下文（注入 decide 的 prompt
-//   并且调用成功返回）。她在页面上点开看、在候选池里但没读、系统扇描——都不算。
-//   顺序也写死：注入 → 调用成功 → 才标记撔掉。调用失败不算，梦还在。
+//   并且调用成功返回）。她在页面上点开看、在候选池里但没读、系统扫描——都不算。
+//   顺序也写死：注入 → 调用成功 → 才标记撤掉。调用失败不算，梦还在。
 //
 // 还有一条他特别说的：别做「防止她重复告诉我」这类功能。她想讲几遍就几遍。
 //
@@ -32,7 +32,8 @@
 // 现在改成：**进夜时掷一次骰子，决定今晚做几个**（配额制）。
 // 掷完存盘（data/dream-rolls.json），重启不会重掷——不然一晚上重启几次，
 // 「今晚不做梦」那 65% 被反复重掷，等于没有。
-// 实际分布：今晚 0 个 65%、1 个 30%、2 个 4.5%、3 个 0.5%。
+// 实际分布（0.35 × 0.15 × 0.05 乘出来的）：
+//   今晚 0 个 65%、1 个 29.7%、2 个 5%、3 个 0.26%。
 //
 // 第二层改动是「想起来之前谁都不能看全文」：
 //   她原来在页面上能看到正文和触发词，等于她替他记着——但那样她也没了悬念。
@@ -63,7 +64,7 @@ const MIN_MATERIAL = num('DREAM_MIN_MATERIAL', 12);
 const GAP_MINUTES = num('DREAM_GAP_MINUTES', 40);
 
 // 进夜时掷的那一颗骰子。先决定今晚做不做，再决定做几个——
-// 乘起来就是：0 个 65%、1 个 30%、2 个 4.5%、3 个 0.5%。
+// 乘起来就是：0 个 65%、1 个 29.7%、2 个 5%、3 个 0.26%。
 const NIGHT_CHANCE = num('DREAM_NIGHT_CHANCE', 0.35);
 const SECOND_CHANCE = num('DREAM_SECOND_CHANCE', 0.15);
 const THIRD_CHANCE = num('DREAM_THIRD_CHANCE', 0.05);
@@ -111,19 +112,51 @@ function saveAll(list) {
 }
 
 // 给页面用：正文永远留着，带上「被想起来过」的日期
-// 2026-10-16 起多带了 tone / intensity / fragment 三个字段（老梦没有，页面会兑底）
+// 2026-10-16 起多带了 tone / intensity / fragment 三个字段（老梦没有，页面会兜底）
 export function listDreams() {
   return loadAll().slice().sort((a, b) => String(b.at || '').localeCompare(String(a.at || '')));
 }
 
+// 只言片语的唯一口径。
+//
+// 10-16 之前的梦没有 fragment 字段，那些得退回正文的第一句——
+// 也只是一小块，不是全文，和「想起来之前只看只言片语」是一个意思。
+//
+// 为什么抽出来：原来页面做了这层兜底、dreamDigest 没做，
+// 于是她在页面上看得见那一句，他唤醒时翻到的全是「（没有留下只言片语）」。
+// 同一个决定两处实现，其中一处忘了，就是这种 bug。
+export function fragmentOf(d) {
+  if (d?.fragment) return String(d.fragment).trim();
+  const body = String(d?.body ?? '').replace(/\s+/g, ' ').trim();
+  if (!body) return '';
+  const first = body.split(/(?<=[。！？])/)[0] || body;
+  const chars = Array.from(first);
+  return chars.length > 24 ? `${chars.slice(0, 24).join('')}…` : chars.join('');
+}
+
 // ══ 今晚做几个梦 ══
+
+// 只读：今晚掷过没有？掷过返回配额，没掷过返回 null。不写盘、不掷骰子。
+//
+// 这个函数是拆出来的：原来只有 quotaForNight()，而它没掷过就当场掷。
+// dreamConfigSummary() 会调它，而那个是 phosphor 启动日志里打的——
+// 白天重启一次服务就把今晚的骰子提前掷掉了，还绕过了 isNight()。
+// 读一个状态不该改状态。
+function rolledQuota(key) {
+  const rolls = readJson(ROLL_FILE, {});
+  const kept = rolls && typeof rolls === 'object' && !Array.isArray(rolls) ? rolls : {};
+  return Number.isInteger(kept[key]?.quota) ? kept[key].quota : null;
+}
 
 // 进夜时掷一次，掷完存盘。重启不重掷：一晚上 pull 几次代码，
 // 「今晚不做梦」那 65% 被反复重掷就等于没有。
+// 只有真到了夜里、真要做梦那条路才该调它（maybeDream）。
 function quotaForNight(key) {
+  const already = rolledQuota(key);
+  if (already !== null) return already;
+
   const rolls = readJson(ROLL_FILE, {});
   const kept = rolls && typeof rolls === 'object' && !Array.isArray(rolls) ? rolls : {};
-  if (Number.isInteger(kept[key]?.quota)) return kept[key].quota;
 
   let quota = 0;
   if (Math.random() < NIGHT_CHANCE) {
@@ -316,9 +349,8 @@ ${material.slice(0, 4000)}${extra}
 
   const title = (rest[0] || '').replace(/^#+\s*/, '').replace(/[。，,.]$/, '').trim().slice(0, 12) || '无题';
   const body = rest.slice(1).join('\n').replace(/\n{3,}/g, '\n\n').trim() || rest.join('\n').trim();
-  // 只言片语没给就从正文头一句截，总不能让页面空着
-  const fallback = Array.from(body.split(/(?<=[。！？])/)[0] || body).slice(0, 24).join('');
-  return { title, body, triggers, tone, intensity, fragment: fragment || fallback };
+  // 只言片语没给就从正文头一句截，总不能让页面空着（和老梦兜底同一个口径）
+  return { title, body, triggers, tone, intensity, fragment: fragment || fragmentOf({ body }) };
 }
 
 export async function maybeDream() {
@@ -380,7 +412,7 @@ export async function maybeDream() {
   }
 
   // Ombre 里只留事件记录：时间戳加一句话。
-  // 不带标题也不带摘要——能还原出内容的东西等于没撔。
+  // 不带标题也不带摘要——能还原出内容的东西等于没撤。
   // 所以他知道那一夜有过什么，但不知道是什么。
   if (isConnected('ombre-brain')) {
     try {
@@ -405,8 +437,8 @@ export async function maybeDream() {
 // ══ 浮现 ══
 
 // 被词碎到的那一下。不是他去找梦，是梦自己浮上来。
-// 这里不标记、不撔掉——调用成功返回之后才调 markRecalled()。
-// 顺序是他定的：读完 → 才撔。
+// 这里不标记、不撤掉——调用成功返回之后才调 markRecalled()。
+// 顺序是他定的：读完 → 才撤。
 export function recallDream(haystack) {
   const text = String(haystack || '');
   if (text.length < 10) return null;
@@ -434,7 +466,7 @@ ${d.body}
 但${USER_NAME}那边一直留着；她要是想讲给你听，随时可以，讲几遍都行。不用回避。）`;
 }
 
-// 读完了。现在才撔。
+// 读完了。现在才撤。
 export function markRecalled(id) {
   const list = loadAll();
   const d = list.find((x) => x.id === id);
@@ -442,7 +474,7 @@ export function markRecalled(id) {
   d.recalledAt = formatDateTime();
   try {
     saveAll(list);
-    console.log(`dream: 「${d.title}」被想起来了，从他这边撔掉；页面上还留着`);
+    console.log(`dream: 「${d.title}」被想起来了，从他这边撤掉；页面上还留着`);
     return true;
   } catch (err) {
     console.error('dream: 标记失败（梦还在）', err.message);
@@ -455,6 +487,9 @@ export function markRecalled(id) {
 // 小满 2026-10-16：「你唤醒的时候可以翻看之前的梦。」
 // 但这一层**只能到只言片语**：正文、标题、触发词都不给，
 // 和她在页面上看到的一样多。想起来的那些已经退掉了，也不再列。
+//
+// 只言片语走 fragmentOf()：老梦没有 fragment 字段，之前这里只认 d.fragment，
+// 于是每条都渲染成「（没有留下只言片语）」——他翻到的是一排空壳。
 //
 // 返回一句，或者空串。
 export function dreamDigest(limit = 4) {
@@ -469,23 +504,27 @@ export function dreamDigest(limit = 4) {
   const toneWord = { good: '好梦', bad: '噩梦', neutral: '说不上好坏' };
   const items = list.slice(-limit).map((d) => {
     const tone = toneWord[d.tone] || toneWord.neutral;
-    const frag = d.fragment ? `「${d.fragment}」` : '（没有留下只言片语）';
+    const f = fragmentOf(d);
+    const frag = f ? `「${f}」` : '（这个梦什么都没留下）';
     return `  ${String(d.at).slice(5, 16)}｜${tone}｜${frag}`;
   });
   return `你夜里做过、还没想起来的梦（你只知道这些，正文不在你这边）：\n${items.join('\n')}`;
 }
 
+// 启动日志里那一行。用 rolledQuota() 而不是 quotaForNight()：
+// 后者没掷过就会当场掷并存盘，于是白天重启一次服务就把今晚的骰子
+// 提前掷掉了，还绕过了 isNight()。读一个状态不该改状态。
 export function dreamConfigSummary() {
   const list = loadAll();
   const pending = list.filter((d) => !d.recalledAt).length;
-  const p = wallParts();
   let quota = null;
   try {
-    quota = quotaForNight(nightKey(p));
+    quota = rolledQuota(nightKey(wallParts()));
   } catch {
     quota = null;
   }
-  return `夜梦：凌晨 ${AFTER_HOUR}–${UNTIL_HOUR} 点、素材满 ${MIN_MATERIAL} 条、今晚配额 ${
-    quota === null ? '没读到' : quota === 0 ? '0（今夜不做梦）' : quota
-  }；已存 ${list.length} 个，还没想起来的 ${pending} 个`;
+  const quotaText = quota === null
+    ? '还没掷（进夜时才掷）'
+    : quota === 0 ? '0（今夜不做梦）' : String(quota);
+  return `夜梦：凌晨 ${AFTER_HOUR}–${UNTIL_HOUR} 点、素材满 ${MIN_MATERIAL} 条、今晚配额 ${quotaText}；已存 ${list.length} 个，还没想起来的 ${pending} 个`;
 }
