@@ -26,8 +26,13 @@
 // 两条克制规矩，改代码时别把它们丢了：
 //   一件事最多问两次（ASK_LIMIT），第一次被回「还没」就顺延估值的一半，第二次之后闭嘴。
 //   只登记你亲口说出口的事，不从上下文推测。推测会把「我待会儿看看」当成开工然后追你。
+//
+// 2026-10-16 修了收工关错对象：以前一律关「最近开工的那条」，于是
+// 23:36 登记了「洗澡」、23:53 一句「继续复习」又登记了「复习」，
+// 00:00 的「洗完啦」把「复习」关掉，真正那条洗澡一直挂到第二天中午。
+// 现在收工句里的动词优先（doneClue），按子串去找对应那条；认不出才退回老办法。
 import db, { addPendingWake, cancelPendingWakeByNote } from './state.js';
-import { detectStart, detectDone, detectNotDone, detectCancel } from './doing-detect.js';
+import { detectStart, detectDone, detectNotDone, detectCancel, doneClue } from './doing-detect.js';
 import { wallParts, wallMidnight, formatDateTime } from './wall-time.js';
 
 db.exec(`
@@ -116,7 +121,7 @@ function afterQuiet(ms) {
 // 事情名 → 类别。记的是类别，所以「洗头」「洗个头」「把头洗了」算同一类。
 // 这十三条是我写死的常见事；认不出的走下面 learnedCategory，拿事情名本身当类别。
 const CATEGORIES = [
-  ['洗漱', /洗头|洗浴|洗漱|洗个澡|冲澡|吹头发/],
+  ['洗漱', /洗头|洗浴|洗漱|洗个澡|冲澡|吹头发|洗澡/],
   ['吃饭', /吃饭|午饭|晚饭|早饭|做饭|点外卖|吃点/],
   ['睡觉', /睡觉|午睡|瞄一会|躺一下|休息一下/],
   ['改 bug', /bug|报错|修一下|修个|改个|改一下|调一下|debug|排查/],
@@ -347,11 +352,22 @@ export function startDoing({ what, raw = null, at = Date.now() }) {
   return row;
 }
 
-// 收工。没指定 id 就关最近那一件。返回 { row, prior }，prior 是该不该写回 OB。
-export function finishDoing(id = null) {
+// 收工句里的动词能不能对上某条登记。对上了就关那条，不再关错。
+// 「洗完啦」→ 洗 → 找 what 里含「洗」的那条。取最近开工的一条，避免同词多开时关到旧的。
+function pickByClue(clue) {
+  if (!clue) return null;
+  return stmt(
+    "SELECT * FROM doing WHERE status = 'active' AND what LIKE ? ORDER BY started_at DESC LIMIT 1"
+  ).get(`%${clue}%`);
+}
+
+// 收工。没指定 id 就按收工句里的动词找，找不到才关最近那一件。
+// 返回 { row, prior }，prior 是该不该写回 OB。
+export function finishDoing(id = null, clue = null) {
   const row = id
     ? stmt("SELECT * FROM doing WHERE id = ? AND status = 'active'").get(id)
-    : stmt("SELECT * FROM doing WHERE status = 'active' ORDER BY started_at DESC LIMIT 1").get();
+    : pickByClue(clue) ??
+      stmt("SELECT * FROM doing WHERE status = 'active' ORDER BY started_at DESC LIMIT 1").get();
   if (!row) return null;
 
   const now = Date.now();
@@ -438,9 +454,10 @@ export function observeUserMessage(text) {
   try {
     // 先试收工和撤回：「改完了」这类话里没有开工词，不会互撞；
     // 但「改完了去洗头」这种一句两件事的，先关旧的再开新的，顺序才对。
+    // 收工时带上这句话里的动词，去认它关的是哪一条（见 pickByClue）。
     const out = {};
     if (detectCancel(s)) out.cancelled = cancelDoing();
-    else if (detectDone(s)) out.finished = finishDoing();
+    else if (detectDone(s)) out.finished = finishDoing(null, doneClue(s));
     else if (detectNotDone(s)) out.deferred = deferDoing();
 
     const what = detectStart(s);
