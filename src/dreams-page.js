@@ -30,6 +30,10 @@
 // 颜色：好梦粉、噩梦蓝、说不上好坏灰。深浅按强度 1–5 递进。
 // 用 rgba 半透明叠在卡片底色上，所以明暗两种主题下都成立，不用写两套色。
 //
+// 老梦没有 tone / intensity / fragment 三个字段（那是 10-16 才加上的）：
+//   主旋律当「说不上好坏」、强度当 3、只言片语退回正文的第一句。
+//   这样之前攒下的那些也进得了新规矩，不会变成一张什么都没有的卡。
+//
 // 页面跟早晚四张脸走（sun-time.js），再加一层自己的：
 //   雾——两层径向渐变横向漂，周期错开，所以是流动的不是呼吸的。
 //   云——三团模糊的白，极慢地飘。
@@ -106,10 +110,11 @@ function tintOf(d) {
 
 // 没想起来的：锁着。主旋律 + 只言片语，别的什么都不给。
 // 触发词更不能给——看见了就等于知道下次怎么把它敲出来。
+// 老梦没有 fragment 字段，退回正文的第一句：也只是一小块，不是全文。
 function renderSealed(d, i) {
   const time = String(d.at || '').slice(11, 16);
   const tone = toneOf(d);
-  const frag = d.fragment ? d.fragment : '（这个梦没留下只言片语）';
+  const frag = d.fragment || preview(d.body) || '（这个梦什么都没留下）';
   return `<div class="dream is-sealed" data-tone="${tone}" style="--i:${i};--tint:${tintOf(d)}">
     <div class="sealed-head">
       <span class="dream-dot" aria-hidden="true">✦</span>
@@ -117,32 +122,32 @@ function renderSealed(d, i) {
       <span class="dream-time">${escapeHtml(time)}</span>
     </div>
     <p class="fragment">${escapeHtml(frag)}</p>
-    <p class="sealed-note">正文还锁着。碎到某个词它才会浮上来——触发词不给你看。<\/p>
-  <\/div>`;
+    <p class="sealed-note">正文还锁着。碎到某个词它才会浮上来——触发词不给你看。</p>
+  </div>`;
 }
 
 // 想起来过了：全摊开。标题、正文、触发词、想起来的时间
 function renderRecalled(d, i, openAll) {
   const time = String(d.at || '').slice(11, 16);
   const triggers = Array.isArray(d.triggers) && d.triggers.length
-    ? `<p class="triggers"><span class="tg-label">当时就是这些词把它敲出来的：<\/span>${d.triggers
-        .map((w) => `<span class="tg">${escapeHtml(w)}<\/span>`)
-        .join('')}<\/p>`
+    ? `<p class="triggers"><span class="tg-label">当时就是这些词把它敲出来的：</span>${d.triggers
+        .map((w) => `<span class="tg">${escapeHtml(w)}</span>`)
+        .join('')}</p>`
     : '';
   return `<details class="dream is-recalled" data-tone="${toneOf(d)}" style="--i:${i};--tint:${tintOf(d)}"${openAll ? ' open' : ''}>
     <summary class="dream-head">
-      <span class="dream-dot" aria-hidden="true">✧<\/span>
+      <span class="dream-dot" aria-hidden="true">✧</span>
       <span class="dream-main">
-        <span class="dream-title">${escapeHtml(d.title || '无题')}<\/span>
-        <span class="dream-peek">${escapeHtml(preview(d.body))}<\/span>
-      <\/span>
-      <span class="dream-time">${escapeHtml(time)}<\/span>
-      <span class="sr-only">，已经被想起来过，点开看全文<\/span>
-    <\/summary>
-    <div class="dream-body">${escapeHtml(d.body || '')}<\/div>
+        <span class="dream-title">${escapeHtml(d.title || '无题')}</span>
+        <span class="dream-peek">${escapeHtml(preview(d.body))}</span>
+      </span>
+      <span class="dream-time">${escapeHtml(time)}</span>
+      <span class="sr-only">，已经被想起来过，点开看全文</span>
+    </summary>
+    <div class="dream-body">${escapeHtml(d.body || '')}</div>
     ${triggers}
-    <p class="recalled"><span aria-hidden="true">✦ <\/span>已经被想起来过了 · ${escapeHtml(String(d.recalledAt).slice(0, 16))}<\/p>
-  <\/details>`;
+    <p class="recalled"><span aria-hidden="true">✦ </span>已经被想起来过了 · ${escapeHtml(String(d.recalledAt).slice(0, 16))}</p>
+  </details>`;
 }
 
 // 顶上三个筛选。纯链接，没 JavaScript 也能用
@@ -157,21 +162,21 @@ function renderFilter(show, counts, openAll) {
       const here = key === show;
       const qs = [key === 'all' ? '' : `show=${key}`, openAll ? 'open=1' : ''].filter(Boolean).join('&');
       const href = qs ? `/dreams?${qs}` : '/dreams';
-      return `<a class="tab${here ? ' on' : ''}" href="${href}"${here ? ' aria-current="true"' : ''}>${label}<b>${n}<\/b><\/a>`;
+      return `<a class="tab${here ? ' on' : ''}" href="${href}"${here ? ' aria-current="true"' : ''}>${label}<b>${n}</b></a>`;
     })
     .join('');
   const toggleQs = [show === 'all' ? '' : `show=${show}`, openAll ? '' : 'open=1'].filter(Boolean).join('&');
-  const toggle = `<a class="tab tab-wide" href="${toggleQs ? `/dreams?${toggleQs}` : '/dreams'}">${openAll ? '全部收起' : '全部展开'}<\/a>`;
-  return `<nav class="filter" aria-label="筛选">${items}${toggle}<\/nav>`;
+  const toggle = `<a class="tab tab-wide" href="${toggleQs ? `/dreams?${toggleQs}` : '/dreams'}">${openAll ? '全部收起' : '全部展开'}</a>`;
+  return `<nav class="filter" aria-label="筛选">${items}${toggle}</nav>`;
 }
 
 // 夜晚多了就出一排日期，点一下跳到那一夜
 function renderNightIndex(groups) {
   if (groups.length < 3) return '';
   const items = groups
-    .map(([key, list]) => `<a class="jump" href="#night-${escapeHtml(key)}">${escapeHtml(nightShort(key))}<i>${list.length}<\/i><\/a>`)
+    .map(([key, list]) => `<a class="jump" href="#night-${escapeHtml(key)}">${escapeHtml(nightShort(key))}<i>${list.length}</i></a>`)
     .join('');
-  return `<nav class="nights" aria-label="按夜跳"><span class="nights-label">跳到：<\/span>${items}<\/nav>`;
+  return `<nav class="nights" aria-label="按夜跳"><span class="nights-label">跳到：</span>${items}</nav>`;
 }
 
 const STYLE = `
@@ -381,16 +386,16 @@ export function registerDreamRoutes(app, { requireBasicAuth }) {
     if (!all.length) {
       body += `<p class="empty">还没有梦。<br><br>
         夜里素材够了（最近两天有些没消化完的事），<b>${escapeHtml(name)}才会做梦</b>——<br>
-        而且大多数夜里都不做。碰上了才碰上了。<\/p>`;
+        而且大多数夜里都不做。碰上了才碰上了。</p>`;
     } else {
       body += `<p class="lead">${escapeHtml(name)}只记得自己做过梦，不记得梦见了什么。<br>
         某个词碎到了那个梦，它才浮上来——浮上来这一次之后就从他那边退掉了，你这里永远留着。<br>
-        <b>还锁着的那些，你也只能看到主旋律和一句只言片语。<\/b><\/p>`;
+        <b>还锁着的那些，你也只能看到主旋律和一句只言片语。</b></p>`;
       body += renderFilter(show, counts, openAll);
 
       const groups = groupByNight(dreams);
       if (!groups.length) {
-        body += `<p class="empty">${show === 'pending' ? '这些他都想起来过了。' : '还没有被想起来过的。'}<\/p>`;
+        body += `<p class="empty">${show === 'pending' ? '这些他都想起来过了。' : '还没有被想起来过的。'}</p>`;
       } else {
         body += renderNightIndex(groups);
         let i = 0;
@@ -399,9 +404,9 @@ export function registerDreamRoutes(app, { requireBasicAuth }) {
             .map((d) => (d.recalledAt ? renderRecalled(d, i++, openAll) : renderSealed(d, i++)))
             .join('');
           body += `<section class="night-group" id="night-${escapeHtml(key)}">
-            <h2 class="night-label">${escapeHtml(nightLabel(key, today))}<\/h2>
+            <h2 class="night-label">${escapeHtml(nightLabel(key, today))}</h2>
             ${items}
-          <\/section>`;
+          </section>`;
         }
       }
     }
