@@ -5,6 +5,9 @@
 // 署名和源码链接照它的许可条款留着，卡片下面那一行不能删。
 //
 // 以后接新游戏就在 GAMES 里加一格，页面和菜单都不用动。
+// 加的时候要带上自己的 enabled()——这一页按每个游戏自己的开关决定露不露。
+// 第一版写成了 GAMES.filter(() => workkkEnabled())，filter 没看 g，
+// 以后接的游戏会跟着 WORKKK 一起消失，所以改成每格自己管自己。
 //
 // ── 为什么用转发不用 iframe ──
 //
@@ -40,6 +43,7 @@ const GAMES = [
     desc: '有工资、有心情值、有精力值。会摸鱼、会被老板骂、会买奶茶带回家。你在旁边看着它今天干了什么。',
     href: '/games/workkk/',
     credit: '原作 谢之舟（zhizhou-xiee）· AGPL-3.0-or-later',
+    enabled: workkkEnabled,
   },
 ];
 
@@ -174,7 +178,7 @@ export function registerGameRoutes(app, { requireBasicAuth }) {
     res.set('Cache-Control', 'no-store');
     let body = renderPageTitle('Games', '小游戏');
 
-    const available = GAMES.filter((g) => workkkEnabled());
+    const available = GAMES.filter((g) => g.enabled());
     if (!available.length) {
       body += `<p class="empty">还没有接游戏。<br><br>
         接好一个之后这里会出现入口。第一步在服务器上跑：<br>
