@@ -1,4 +1,5 @@
-// 上班连着走几步。和论坛（phosphor.js 的 continueForum）、听歌（continueMusic）、
+// 上班连着走几步，走完游戏里的那一天。
+// 和论坛（phosphor.js 的 continueForum）、听歌（continueMusic）、
 // 钱包（wallet-steps.js 的 continueWallet）同一个形状，只从 decide.js 借一个 askJson。
 //
 // ── 停止条件和别的三支不一样 ──
@@ -7,9 +8,13 @@
 // 上班是「下班了才停」：做到一半停下，这天不结算工资，白干。
 // 所以条件是「今日进度」走满（见 workkk.js 的 offWork），或者步数用完。
 //
-// 重复的动作也不拦。一天要做 3–5 个动作，连着 write_code 两次是正常上班；
+// 下班那一刻要**立即**停，这是小满定的边界：一次坐下只上游戏里的一天。
+// 技术上也必须这样：结算过之后「今日进度」会归零，再调一次 work_action
+// 就是第二天了，而且那一天又要做满 3–5 个动作——步数永远不够，永远白干。
+//
+// 重复的动作不拦。一天要做 3–5 个动作，连着 write_code 两次是正常上班；
 // 别的三支拦重复是因为那些是「看」，同一个命令看两遍就是原地转圈。
-// 这边只在模型自己说停、出错、或者给了不存在的工具名时停。
+// 这边只在模型自己说停、出错、或者给了不存在的动作名时停。
 //
 // 行为卡片在这里记：上班是 mcp_call，走 activity.js 的 describeActivity，
 // 而那边对未知 server 只会写「用了 workkk 的 work_action」——说不清干了什么。
@@ -18,7 +23,7 @@
 import { askJson } from './decide.js';
 import { callTool } from './mcp-manager.js';
 import { addActivityMoment } from './moments-store.js';
-import { WORKKK_MAX_STEPS, offWork, parseProgress } from './workkk.js';
+import { WORKKK_MAX_STEPS, workkkCallOf, offWork, parseProgress } from './workkk.js';
 
 const AI_NAME = process.env.AI_DISPLAY_NAME || 'TA';
 
@@ -96,7 +101,7 @@ async function nextStep(messages, { action, resultText, isError, remaining }) {
 还没到「今日进度」要求的那个数就不算下班，这天的工资不结算。这次你还能再做 ${remaining} 个动作：
 write_code、debug、slack_off、buy_coffee、attend_meeting、check_messages、get_status
 精力不够就买咖啡，心情不好就摸鱼——摸鱼也算一个动作。thought 是你此刻心里真在想的，她在大屏上看着。
-已经下班了、或者不想再做了，给 null。
+不想再做了就给 null。
 只返回一个 JSON 对象，不要任何其他文字：{"work_action": "动作名" 或 null, "thought": "内心OS"}`;
 
   const next = [...messages, { role: 'user', content: prompt }];
@@ -111,27 +116,23 @@ write_code、debug、slack_off、buy_coffee、attend_meeting、check_messages、
 }
 
 // 醒来选的是上班时，把工牌交还给他，一直走到下班。
-// 返回 { steps, offWork }，给 phosphor.js 记这一场的账。
+// 开头就不是 work_action（比如直接 shop_buy 去买东西）就不续：
+// 那不是上班，没有「走到下班」这回事。
 export async function continueWorkkk(decision, firstResult, messages) {
-  let first = {};
-  try {
-    first = JSON.parse(decision.action_detail) ?? {};
-  } catch {
-    first = {};
-  }
-  const firstAction = String(first?.args?.action ?? '');
-  const firstText = toolText(firstResult);
+  const call = workkkCallOf(decision);
+  if (!call || call.tool !== 'work_action') return;
+  if (!WORKKK_MAX_STEPS || !messages) return;
 
+  const firstText = toolText(firstResult);
   let count = 1;
-  let done = offWork(firstText);
-  let convo = messages;
-  let lastAction = firstAction;
+  let lastAction = String(call.args?.action ?? '');
   let lastText = firstText;
   let lastError = isErr(firstResult);
+  let convo = messages;
 
-  if (done) {
+  if (offWork(firstText)) {
     console.log('workkk: 第一步就到点了，下班');
-    return { steps: count, offWork: true };
+    return;
   }
 
   while (convo && count - 1 < WORKKK_MAX_STEPS) {
@@ -182,13 +183,12 @@ export async function continueWorkkk(decision, firstResult, messages) {
       }`
     );
 
+    // 下班结算了就立即收手。再走一步就是游戏里的第二天了
     if (offWork(lastText)) {
-      done = true;
-      console.log(`workkk: 下班了，一共走了 ${count} 步`);
-      break;
+      console.log(`workkk: 下班了，这一天一共走了 ${count} 步`);
+      return;
     }
   }
 
-  if (!done) console.log(`workkk: 这次走了 ${count} 步，没走到下班`);
-  return { steps: count, offWork: done };
+  console.log(`workkk: 这次走了 ${count} 步，没走到下班`);
 }
