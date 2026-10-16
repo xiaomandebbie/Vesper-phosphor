@@ -19,6 +19,10 @@
 //
 // 判据写在下面几张表里。改这里之前先想清楚新规则会不会把「等下再说」认成开工——
 // 那条是这套东西最容易塌的地方。
+//
+// 2026-10-16 修了两处误认，都记在对应常量旁边：
+//   一、收工句又被当开工登记一遍（「洗完啦」）。
+//   二、长句描述被当开工登记（「洗澡那动作昨天就完成啦，但是……」）。
 
 // 起始词：只说明「要开始做」，它们后面才是真正在做的事。抽事情名时剥掉。
 const LEAD_VERBS = '去|来|开始|着手|动手|接着|继续|顺便|顺手';
@@ -41,6 +45,12 @@ const START_WITH_ACT = new RegExp(`^${LEAD}((?:${ACT_VERBS}|把|将).{0,40})$`);
 // 「我在洗头」「正在改那个 bug」这类进行时也算开工
 const ONGOING_RE = /^(?:那?我|咱)?\s*(?:正|正在|在)\s*(.{1,40})$/;
 
+// B 路径和进行时句的长度上限。A 路径不看长度，因为「我去……」这个开头本身就够明确。
+// 这条是为「洗澡那动作昨天就完成啦，但是不知道为什么没有终止并计算时间」这种句子立的：
+// 句首正好是「洗」，整句二十八个字，其实是在描述状态，不是在报开工。
+// 人真报开工的时候话很短，长句子多半夹着别的意思。宁可漏认。
+const ACT_PATH_MAX_CHARS = 20;
+
 // 这些词出现在句子里就不是「正在做一件事」
 const NOT_YET = /待会|等[下会一]|回头|稍后|晚点|过会|一会儿|明天|后天|下周|改天|有空|之后再|再说/;
 const ASKING = /[?？]|要不要|能不能|可不可以|可以吗|好不好|怎么样|是不是|吗$|呢$|吧$/;
@@ -52,12 +62,19 @@ const OTHERS = /^(?:他|她|它|他们|她们|你|您|咱们|大家|允朔|小�
 const TALKING = /^(?:说|问|告诉|回|聊|讲)/;
 
 // 收工。「好了」单独一句太容易误伤（应答也说「好了」），所以要求带动词或「完」。
+// 「完成」不带「了」也算：收工句经常写成「……完成啦」。
 const DONE_RE =
-  /(做完|弄好|弄完|搞定|搞完|改完|写完|洗完|吃完|睡完|跑完|修好|修完|处理完|完成了|结束了|好了|出来了|通了|过了)/;
+  /(做完|弄好|弄完|搞定|搞完|改完|写完|洗完|吃完|睡完|跑完|修好|修完|处理完|完成|结束了|好了|出来了|通了|过了)/;
 // 「还没」这一类：被问到进度时的回绝。认出来是为了顺延，而不是继续按原估值等。
 const NOT_DONE_RE = /(还没|没好|没完|没搞定|还在|正卡|卡住|卡着|快了|马上就|再等|一半|进行中)/;
 // 明确说认错了：撤掉这条登记
 const CANCEL_RE = /(没在做|不是在做|我没说|没有在做|取消|算了|不做了|放弃了|停了)/;
+
+// 收工句里的那个动词，用来认它关的是哪一条登记（见 doing.js 的 finishDoing）。
+// 「洗完啦」→ 洗，「改完了」→ 改，「弄好了」→ 弄。认不出返回 null，
+// 那时按老办法关「最近开工的那条」。
+// 多字词写在单字后面就永远匹配不到，所以长的放前面。
+const DONE_VERB_RE = /(处理|打扫|整理|收拾|部署|重构|洗|改|修|写|做|弄|搞|吃|睡|跑)/;
 
 // 把字句重排成动宾：「把那个 bug 改一下」→「改 bug」。
 // 只在句尾真的是实义动词时生效；「洗头」「写代码」这种本来就是动宾的不动。
@@ -98,12 +115,22 @@ export function detectStart(text) {
   // 太长的句子里通常夹着别的意思，不当开工句
   if (!s || s.length > 60) return null;
   if (NOT_YET.test(s) || ASKING.test(s)) return null;
+  // 收工句和「还没好」都是终态，不再当开工登记一遍。
+  // 「洗完啦」句首是「洗」，不挡的话会当场新建一条叫「洗完啦」的登记。
+  if (DONE_RE.test(s) || NOT_DONE_RE.test(s)) return null;
 
   // 去掉句首的「我」再判断主语，不然 OTHERS 对不上
   const body = s.replace(/^(?:那?我|咱|俺)\s*/, '');
   if (OTHERS.test(body)) return null;
 
-  const m = START_WITH_LEAD.exec(s) ?? START_WITH_ACT.exec(s) ?? ONGOING_RE.exec(s);
+  // A 路径（句首有「去/开始/继续」这类起始词）后面跟什么都算。
+  const byLead = START_WITH_LEAD.exec(s);
+  // B 路径和进行时句都要短——长句子多半是在描述状态，不是在报开工。
+  const byAct = byLead ? null : START_WITH_ACT.exec(s);
+  const byOngoing = byLead || byAct ? null : ONGOING_RE.exec(s);
+  if ((byAct || byOngoing) && s.length > ACT_PATH_MAX_CHARS) return null;
+
+  const m = byLead ?? byAct ?? byOngoing;
   if (!m) return null;
 
   const rest = m[1];
@@ -121,6 +148,15 @@ export function detectDone(text) {
   if (!s || ASKING.test(s)) return false;
   if (NOT_DONE_RE.test(s)) return false; // 「还没做完」里也有「做完」，先排掉
   return DONE_RE.test(s);
+}
+
+// 收工句里那个动词，给 doing.js 用来认它关的是哪一条登记。
+// 以前只按「最近开工的那条」关，于是「洗完啦」把上一条别的登记关了，
+// 真正那条洗澡一直挂着。认不出返回 null，那时退回老办法。
+export function doneClue(text) {
+  const s = String(text ?? '').trim();
+  const m = DONE_VERB_RE.exec(s);
+  return m ? m[1] : null;
 }
 
 // 这句话有没有在说「还没」。被追问之后回这个，就该顺延而不是接着按原估值等。
