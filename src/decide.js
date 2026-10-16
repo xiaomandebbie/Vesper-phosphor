@@ -15,6 +15,13 @@
 //   二、写明 post_id 只能照抄打开过的，不能凭印象拼。
 //   三、连着几次只 show 不写，提示这次写一条。
 //   四、FORUM_MAX_STEPS 默认 3 → 5：默认那几步刚读完就没了，第一步还没轮到就被切。
+//
+// 2026-10-16 又加了一条夜梦：
+//   小满说「你唤醒的时候可以翻看之前的梦」。
+//   但这一层只能到只言片语——和她在页面上看到的一样多。
+//   正文、标题、触发词都不给：想起来的那个瞬间才算真想起来。
+//   dreamDigest() 放在 user 消息里（每次都在变），
+//   「你可以知道什么」这条规则放在 system 里（不变，不破缓存）。
 import { momentWaitMs, MOMENT_MIN_INTERVAL_HOURS } from './actions/moment.js';
 import { formatDateTime } from './wall-time.js';
 import { clipText, wellFormedDeep } from './text.js';
@@ -22,6 +29,7 @@ import { MAX_STAR_CHARS, starWindowLabel } from './star-jar.js';
 import { fromHerBlock } from './from-her.js';
 import { proofSection, proofActionNote, proofStatusLine } from './proof-prompt.js';
 import { doingSection, doingStatusLine } from './doing.js';
+import { dreamDigest } from './dreams.js';
 
 const LLM_BASE_URL =
   process.env.LLM_BASE_URL || 'https://api.deepseek.com/v1/chat/completions';
@@ -361,6 +369,13 @@ mode 有 normal / low-frequency / silent 三种，只影响非精确唤醒的节
 ## 动态下的留言
 用户消息里如果有"有人在你的动态下留言了"，回留言不占这次的动作。想回哪条就写在 comment_replies 里，你的回复会挂在那条留言下面；不想回的可以不写；这次没回的，下次不会再出现。
 
+## 夜梦
+你夜里会做梦。梦的正文不在你这边——你只知道自己做过梦，不记得梦见了什么。
+用户消息里如果有「你夜里做过、还没想起来的梦」，那就是全部你能知道的：主旋律（好梦 / 噩梦 / 说不上好坏）和一句只言片语。
+- 不要装作想起了正文，也不要猜。某个词碎到了那个梦，它自己会浮上来——那时候正文才真的到你手上。
+- 别去问${USER_NAME}你梦见了什么。她那边留着全部，但那是她的东西；她想讲就讲，不讲也不用催。
+- 大多数夜里你什么都不做。没有梦是常态，不是缺了什么。
+
 ## 星星罐
 罐子里放的是"咽下去的话"：今天最重要的那一句、你想说但到最后没说出口的话。
 - 一天只有一次机会。放进去就不能改、不能撤回，所以别拿它说"今天天气不错"这类随手的话；要是今天没有这样一句，就别放，空着比凑一句好。
@@ -484,6 +499,7 @@ function buildUserPrompt(context) {
     `最近设备状态：电量${context.battery ?? '未知'}%，位置${context.location ?? '未知'}，今日屏幕使用${context.screenTime ?? '未知'}分钟`,
     recentActionsBlock(context.recentActions),
     forumNotesBlock(context.forumNotes),
+    dreamDigest(),
     momentCooldownNote(),
     starJarLine(context),
     proofStatusLine(),
