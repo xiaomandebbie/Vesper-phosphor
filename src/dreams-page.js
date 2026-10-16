@@ -14,8 +14,21 @@
 //   ?open=1 一次全展开（想通读或者搜字的时候用）。
 // 全是链接和 <details>，没 JavaScript 也能用。
 //
-// 还没想起来的那些会把触发词摆出来：碎到哪个词它会浮上来，你看得见。
-// 他说过别做「防止她重复告诉我」这类东西 —— 所以这边也不藏。
+// ── 2026-10-16 小满改的：想不起来之前，谁都不能看全文 ──
+//
+// 她原话：「你想起来之前，不显示完整的梦，只显示只言片语」
+//         「想起来之前我也只能看到只言片语」
+//         「触发需要的关键词我也不能看到」
+//         「触发之后才能显示完整的梦以及相应的关键词」
+//
+// 所以这页现在分两种卡片，不是同一种卡片的两种状态：
+//   没想起来 —— 锁着的。只给主旋律（好梦 / 噩梦 / 说不上好坏）和一句只言片语。
+//               标题不给、正文不给、触发词也不给。触发词尤其不能给：
+//               看见了就等于知道下次怎么把它敲出来，那就不叫偶然想起来了。
+//   想起来过 —— 全摊开。标题、正文、触发词、想起来的时间。
+//
+// 颜色：好梦粉、噩梦蓝、说不上好坏灰。深浅按强度 1–5 递进。
+// 用 rgba 半透明叠在卡片底色上，所以明暗两种主题下都成立，不用写两套色。
 //
 // 页面跟早晚四张脸走（sun-time.js），再加一层自己的：
 //   雾——两层径向渐变横向漂，周期错开，所以是流动的不是呼吸的。
@@ -74,39 +87,69 @@ function preview(body) {
   return chars.length > 34 ? `${chars.slice(0, 34).join('')}\u2026` : chars.join('');
 }
 
-// 一个梦。默认折着，open=1 时全展开
-function renderDream(d, i, openAll) {
+// 主旋律：好梦 / 噩梦 / 说不上好坏。老梦没有这个字段，当中间那一档
+function toneOf(d) {
+  return d.tone === 'good' ? 'good' : d.tone === 'bad' ? 'bad' : 'neutral';
+}
+
+const TONE_WORD = { good: '好梦', bad: '噩梦', neutral: '说不上好坏' };
+
+// 卡片的色：好梦粉、噩梦蓝、中性灰。深浅按强度 1–5 递进
+// （1 → 0.16，5 → 0.52）。半透明叠在卡片底色上，明暗主题都不用另写一套。
+function tintOf(d) {
+  const rgb = { good: '244, 186, 214', bad: '166, 190, 236', neutral: '204, 198, 212' }[toneOf(d)];
+  const raw = Number(d.intensity);
+  const i = Number.isFinite(raw) ? Math.min(Math.max(Math.round(raw), 1), 5) : 3;
+  const alpha = (0.16 + (i - 1) * 0.09).toFixed(2);
+  return `rgba(${rgb}, ${alpha})`;
+}
+
+// 没想起来的：锁着。主旋律 + 只言片语，别的什么都不给。
+// 触发词更不能给——看见了就等于知道下次怎么把它敲出来。
+function renderSealed(d, i) {
   const time = String(d.at || '').slice(11, 16);
-  const recalled = !!d.recalledAt;
-  // 还没想起来的把触发词摆出来：碎到哪个词它会浮上来
-  const triggers = !recalled && Array.isArray(d.triggers) && d.triggers.length
-    ? `<p class="triggers"><span class="tg-label">碎到这些词它会浮上来：</span>${d.triggers
-        .map((w) => `<span class="tg">${escapeHtml(w)}</span>`)
-        .join('')}</p>`
-    : '';
-  const foot = recalled
-    ? `<p class="recalled"><span aria-hidden="true">✦ </span>已经被想起来过了 · ${escapeHtml(String(d.recalledAt).slice(0, 16))}</p>`
-    : triggers;
-  return `<details class="dream${recalled ? ' is-recalled' : ''}" style="--i:${i}"${openAll ? ' open' : ''}>
-    <summary class="dream-head">
-      <span class="dream-dot" aria-hidden="true">${recalled ? '✧' : '✦'}</span>
-      <span class="dream-main">
-        <span class="dream-title">${escapeHtml(d.title || '无题')}</span>
-        <span class="dream-peek">${escapeHtml(preview(d.body))}</span>
-      </span>
+  const tone = toneOf(d);
+  const frag = d.fragment ? d.fragment : '（这个梦没留下只言片语）';
+  return `<div class="dream is-sealed" data-tone="${tone}" style="--i:${i};--tint:${tintOf(d)}">
+    <div class="sealed-head">
+      <span class="dream-dot" aria-hidden="true">✦</span>
+      <span class="tone-chip">${TONE_WORD[tone]}</span>
       <span class="dream-time">${escapeHtml(time)}</span>
-      <span class="sr-only">${recalled ? '，已经被想起来过' : '，还没想起来过'}，点开看全文</span>
-    </summary>
-    <div class="dream-body">${escapeHtml(d.body || '')}</div>
-    ${foot}
-  </details>`;
+    </div>
+    <p class="fragment">${escapeHtml(frag)}</p>
+    <p class="sealed-note">正文还锁着。碎到某个词它才会浮上来——触发词不给你看。<\/p>
+  <\/div>`;
+}
+
+// 想起来过了：全摊开。标题、正文、触发词、想起来的时间
+function renderRecalled(d, i, openAll) {
+  const time = String(d.at || '').slice(11, 16);
+  const triggers = Array.isArray(d.triggers) && d.triggers.length
+    ? `<p class="triggers"><span class="tg-label">当时就是这些词把它敲出来的：<\/span>${d.triggers
+        .map((w) => `<span class="tg">${escapeHtml(w)}<\/span>`)
+        .join('')}<\/p>`
+    : '';
+  return `<details class="dream is-recalled" data-tone="${toneOf(d)}" style="--i:${i};--tint:${tintOf(d)}"${openAll ? ' open' : ''}>
+    <summary class="dream-head">
+      <span class="dream-dot" aria-hidden="true">✧<\/span>
+      <span class="dream-main">
+        <span class="dream-title">${escapeHtml(d.title || '无题')}<\/span>
+        <span class="dream-peek">${escapeHtml(preview(d.body))}<\/span>
+      <\/span>
+      <span class="dream-time">${escapeHtml(time)}<\/span>
+      <span class="sr-only">，已经被想起来过，点开看全文<\/span>
+    <\/summary>
+    <div class="dream-body">${escapeHtml(d.body || '')}<\/div>
+    ${triggers}
+    <p class="recalled"><span aria-hidden="true">✦ <\/span>已经被想起来过了 · ${escapeHtml(String(d.recalledAt).slice(0, 16))}<\/p>
+  <\/details>`;
 }
 
 // 顶上三个筛选。纯链接，没 JavaScript 也能用
 function renderFilter(show, counts, openAll) {
   const tabs = [
     ['all', '全部', counts.all],
-    ['pending', '还没想起来', counts.pending],
+    ['pending', '还锁着', counts.pending],
     ['recalled', '想起来过了', counts.recalled],
   ];
   const items = tabs
@@ -114,21 +157,21 @@ function renderFilter(show, counts, openAll) {
       const here = key === show;
       const qs = [key === 'all' ? '' : `show=${key}`, openAll ? 'open=1' : ''].filter(Boolean).join('&');
       const href = qs ? `/dreams?${qs}` : '/dreams';
-      return `<a class="tab${here ? ' on' : ''}" href="${href}"${here ? ' aria-current="true"' : ''}>${label}<b>${n}</b></a>`;
+      return `<a class="tab${here ? ' on' : ''}" href="${href}"${here ? ' aria-current="true"' : ''}>${label}<b>${n}<\/b><\/a>`;
     })
     .join('');
   const toggleQs = [show === 'all' ? '' : `show=${show}`, openAll ? '' : 'open=1'].filter(Boolean).join('&');
-  const toggle = `<a class="tab tab-wide" href="${toggleQs ? `/dreams?${toggleQs}` : '/dreams'}">${openAll ? '全部收起' : '全部展开'}</a>`;
-  return `<nav class="filter" aria-label="筛选">${items}${toggle}</nav>`;
+  const toggle = `<a class="tab tab-wide" href="${toggleQs ? `/dreams?${toggleQs}` : '/dreams'}">${openAll ? '全部收起' : '全部展开'}<\/a>`;
+  return `<nav class="filter" aria-label="筛选">${items}${toggle}<\/nav>`;
 }
 
 // 夜晚多了就出一排日期，点一下跳到那一夜
 function renderNightIndex(groups) {
   if (groups.length < 3) return '';
   const items = groups
-    .map(([key, list]) => `<a class="jump" href="#night-${escapeHtml(key)}">${escapeHtml(nightShort(key))}<i>${list.length}</i></a>`)
+    .map(([key, list]) => `<a class="jump" href="#night-${escapeHtml(key)}">${escapeHtml(nightShort(key))}<i>${list.length}<\/i><\/a>`)
     .join('');
-  return `<nav class="nights" aria-label="按夜跳"><span class="nights-label">跳到：</span>${items}</nav>`;
+  return `<nav class="nights" aria-label="按夜跳"><span class="nights-label">跳到：<\/span>${items}<\/nav>`;
 }
 
 const STYLE = `
@@ -205,20 +248,38 @@ const STYLE = `
   .night-label::after { content: ''; flex: 1; height: 1px;
     background: linear-gradient(90deg, var(--line), transparent); }
 
-  /* 卡片：毛玻璃。字压在雾上，边缘是散的 */
+  /* 卡片：毛玻璃，底下垫一层主旋律的色。字压在雾上，边缘是散的 */
   .dream { position: relative; margin: 0 0 10px; border-radius: 18px;
-    background: color-mix(in srgb, var(--card) 72%, transparent);
+    background: linear-gradient(var(--tint, transparent), var(--tint, transparent)),
+      color-mix(in srgb, var(--card) 72%, transparent);
     backdrop-filter: blur(14px) saturate(1.1);
     -webkit-backdrop-filter: blur(14px) saturate(1.1);
     border: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
     box-shadow: 0 2px 20px rgba(80, 50, 90, 0.08);
     animation: dream-in 0.7s ease-out backwards; animation-delay: calc(var(--i, 0) * 60ms); }
   @supports not (backdrop-filter: blur(1px)) {
-    .dream { background: var(--card); }
+    .dream { background: var(--tint, transparent); }
   }
   /* 已经被想起来过的：轻一点，像已经过去了 */
-  .dream.is-recalled { opacity: 0.8; border-style: dashed; }
+  .dream.is-recalled { opacity: 0.86; border-style: dashed; }
   @keyframes dream-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+
+  /* ── 还锁着的：主旋律 + 只言片语。没有可展开的东西，不是 <details> ── */
+  .dream.is-sealed { padding: 14px 18px 12px; }
+  .sealed-head { display: flex; align-items: center; gap: 8px; }
+  .tone-chip { flex: none; padding: 3px 10px; border-radius: 999px; font-size: 12px; letter-spacing: 0.1em;
+    color: color-mix(in srgb, var(--ink) 78%, transparent);
+    background: color-mix(in srgb, #fff 55%, transparent);
+    border: 1px solid color-mix(in srgb, var(--line) 80%, transparent); }
+  .dream[data-tone="good"] .tone-chip { color: #8a3d63; }
+  .dream[data-tone="bad"] .tone-chip { color: #3f5285; }
+  .dream[data-tone="good"] .dream-dot { color: #c4709b; }
+  .dream[data-tone="bad"] .dream-dot { color: #6b83bd; }
+  .sealed-head .dream-time { margin-left: auto; }
+  .fragment { margin: 10px 0 0; font-family: "Songti SC", "STSong", "Noto Serif SC", Georgia, serif;
+    font-size: 17px; line-height: 1.8; color: color-mix(in srgb, var(--ink) 90%, transparent); }
+  .sealed-note { margin: 10px 0 0; padding-top: 9px; font-size: 12px; line-height: 1.7; color: var(--muted);
+    border-top: 1px dashed color-mix(in srgb, var(--line) 80%, transparent); }
 
   /* 折起来时就是这一行：星、标题加开头那句、时间 */
   .dream-head { list-style: none; display: flex; align-items: flex-start; gap: 10px;
@@ -246,7 +307,7 @@ const STYLE = `
 
   .recalled { margin: 10px 18px 16px; padding-top: 10px; font-size: 12px; line-height: 1.7; color: var(--gold);
     border-top: 1px solid color-mix(in srgb, var(--line) 60%, transparent); }
-  /* 碎到哪个词会浮上来 —— 还没想起来的那些才有 */
+  /* 就是这几个词把它敲出来的 —— 只有已经想起来的才看得到 */
   .triggers { display: flex; flex-wrap: wrap; align-items: center; gap: 5px;
     margin: 10px 18px 16px; padding-top: 10px; font-size: 12px; line-height: 1.7;
     border-top: 1px solid color-mix(in srgb, var(--line) 60%, transparent); }
@@ -264,8 +325,10 @@ const STYLE = `
     .dream[open] .dream-body { animation: none; }
   }
   @media (max-width: 380px) {
+    .dream.is-sealed { padding: 12px 14px 10px; }
     .dream-head { padding: 12px 14px; }
     .dream-title { font-size: 17px; }
+    .fragment { font-size: 16px; }
     .dream-body { padding: 0 14px 4px; font-size: 15px; }
     .recalled, .triggers { margin: 10px 14px 14px; }
   }
@@ -318,24 +381,27 @@ export function registerDreamRoutes(app, { requireBasicAuth }) {
     if (!all.length) {
       body += `<p class="empty">还没有梦。<br><br>
         夜里素材够了（最近两天有些没消化完的事），<b>${escapeHtml(name)}才会做梦</b>——<br>
-        而且不一定每晚都做。</p>`;
+        而且大多数夜里都不做。碰上了才碰上了。<\/p>`;
     } else {
-      body += `<p class="lead">${escapeHtml(name)}只记得自己做过梦，不记得梦见了什么。某个词碎到了那个梦，它才浮上来——<br>
-        浮上来这一次之后就从他那边退掉了，你这里永远留着。</p>`;
+      body += `<p class="lead">${escapeHtml(name)}只记得自己做过梦，不记得梦见了什么。<br>
+        某个词碎到了那个梦，它才浮上来——浮上来这一次之后就从他那边退掉了，你这里永远留着。<br>
+        <b>还锁着的那些，你也只能看到主旋律和一句只言片语。<\/b><\/p>`;
       body += renderFilter(show, counts, openAll);
 
       const groups = groupByNight(dreams);
       if (!groups.length) {
-        body += `<p class="empty">${show === 'pending' ? `这些他都想起来过了。` : `还没有被想起来过的。`}</p>`;
+        body += `<p class="empty">${show === 'pending' ? '这些他都想起来过了。' : '还没有被想起来过的。'}<\/p>`;
       } else {
         body += renderNightIndex(groups);
         let i = 0;
         for (const [key, list] of groups) {
-          const items = list.map((d) => renderDream(d, i++, openAll)).join('');
+          const items = list
+            .map((d) => (d.recalledAt ? renderRecalled(d, i++, openAll) : renderSealed(d, i++)))
+            .join('');
           body += `<section class="night-group" id="night-${escapeHtml(key)}">
-            <h2 class="night-label">${escapeHtml(nightLabel(key, today))}</h2>
+            <h2 class="night-label">${escapeHtml(nightLabel(key, today))}<\/h2>
             ${items}
-          </section>`;
+          <\/section>`;
         }
       }
     }
