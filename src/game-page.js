@@ -20,7 +20,18 @@
 // 转发的前缀是 /games/workkk/，而 workkk 的页面里写的是 /static/clawd.png、
 // fetch('/status') 这种绝对路径。不改写的话它们会打到 vesper 根上（404）。
 // 所以 HTML 响应过一遍 rewriteWorkkkHtml，只动这两类字符串，别的一字不改。
-import { renderMenu, CHROME_CSS, CHROME_SCRIPT, workkkEnabled } from './page-chrome.js';
+//
+// ── 2026-10-16：HEAD_SCRIPT 不能漏 ──
+//
+// 第一版的 layout() 里没有 <script>${HEAD_SCRIPT}</script>，其他几页都有。
+// 结果两个症状：「晨暮星」三个字整个看不见，早晚四张脸也不换。
+// 根因是同一个：FACE_PATCH_CSS 里 .title 用
+//   background: linear-gradient(var(--t1), var(--t2), var(--t3)) + color: transparent
+// 把字染成渐变的。--t1/--t2/--t3 由 FACE_SCRIPT（在 HEAD_SCRIPT 里）
+// 写到 <html> 的行内样式上；没那段脚本，变量没值，渐变整条声明失效，
+// 而 color: transparent 照旧生效——于是字是透明的。
+// 颜色还必须在 head 里最先跑：首屏绘制前就定好，不然天黑了会先亮一下再暗。
+import { renderMenu, HEAD_SCRIPT, CHROME_CSS, CHROME_SCRIPT, workkkEnabled } from './page-chrome.js';
 import { renderPageTitle, PAGE_TITLE_CSS } from './page-title.js';
 
 const WORKKK_BASE = () => String(process.env.WORKKK_PAGE_URL ?? '').trim().replace(/\/+$/, '');
@@ -118,6 +129,8 @@ const STYLE = `
   @media (prefers-reduced-motion: reduce) { .haze, .haze2, .clouds { animation: none; } .game { transition: none; } }
 ${PAGE_TITLE_CSS}`;
 
+// HEAD_SCRIPT 必须在 <head> 里、在 <style> 之前——早晚四张脸的颜色要在
+// 首屏绘制前定好，标题的文字渐变也靠它给的 --t1/--t2/--t3。
 function layout(title, body) {
   return `<!DOCTYPE html>
 <html lang="zh">
@@ -125,6 +138,7 @@ function layout(title, body) {
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>${escapeHtml(title)}</title>
+<script>${HEAD_SCRIPT}</script>
 <style>${STYLE}${CHROME_CSS}</style>
 </head>
 <body><div class="haze" aria-hidden="true"></div><div class="haze2" aria-hidden="true"></div><div class="clouds" aria-hidden="true"></div>
