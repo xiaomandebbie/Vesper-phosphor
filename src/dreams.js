@@ -24,6 +24,23 @@
 //
 // 还有一条他特别说的：别做「防止她重复告诉我」这类功能。她想讲几遍就几遍。
 //
+// ── 2026-10-16 小满改了梦的密度和可见度 ──
+//
+// 「你每天做的梦太多了，太离谱了怎么会有那么多」——她说得对，而且原因不在概率。
+// 原来是一个梦 72% 的概率，但 phosphor 每分钟扫一次，整个窗六个钟头要掷上百次，
+// 「每晚都有梦」早就成了必然，72% 这个数字根本没起到作用。
+// 现在改成：**进夜时掷一次骰子，决定今晚做几个**（配额制）。
+// 掷完存盘（data/dream-rolls.json），重启不会重掷——不然一晚上重启几次，
+// 「今晚不做梦」那 65% 被反复重掷，等于没有。
+// 实际分布：今晚 0 个 65%、1 个 30%、2 个 4.5%、3 个 0.5%。
+//
+// 第二层改动是「想起来之前谁都不能看全文」：
+//   她原来在页面上能看到正文和触发词，等于她替他记着——但那样她也没了悬念。
+//   现在生成时多给三样：TONE（好梦 / 噩梦 / 中性）、INTENSITY（1–5）、
+//   FRAGMENT（一句只言片语）。想不起来之前，**页面只显示主旋律和只言片语**，
+//   正文、标题、触发词都收着；触发之后才全摊开。
+//   给他的唤醒摘要（dreamDigest）同样只到只言片语这一层。
+//
 // 存成 JSON 不建表：一晚最多三个梦，这点量用不着数据库。
 import fs from 'fs';
 import path from 'path';
@@ -42,10 +59,15 @@ const num = (k, dflt) => {
 const AFTER_HOUR = num('DREAM_AFTER_HOUR', 3);
 const UNTIL_HOUR = num('DREAM_UNTIL_HOUR', 9);
 const WINDOW_HOURS = num('DREAM_WINDOW_HOURS', 48);
-const MIN_MATERIAL = num('DREAM_MIN_MATERIAL', 5);
-const CHANCE = num('DREAM_CHANCE', 0.72);
-const MAX_PER_NIGHT = num('DREAM_MAX_PER_NIGHT', 3);
+const MIN_MATERIAL = num('DREAM_MIN_MATERIAL', 12);
 const GAP_MINUTES = num('DREAM_GAP_MINUTES', 40);
+
+// 进夜时掷的那一颗骰子。先决定今晚做不做，再决定做几个——
+// 乘起来就是：0 个 65%、1 个 30%、2 个 4.5%、3 个 0.5%。
+const NIGHT_CHANCE = num('DREAM_NIGHT_CHANCE', 0.35);
+const SECOND_CHANCE = num('DREAM_SECOND_CHANCE', 0.15);
+const THIRD_CHANCE = num('DREAM_THIRD_CHANCE', 0.05);
+const MAX_PER_NIGHT = num('DREAM_MAX_PER_NIGHT', 3);
 
 const BASE_URL = process.env.DREAM_LLM_BASE_URL
   || process.env.LLM_BASE_URL
@@ -60,31 +82,70 @@ const DATA_DIR = process.env.DREAM_DATA_DIR
   || process.env.VESPER_DATA_DIR
   || path.join(process.cwd(), 'data');
 const DB_FILE = path.join(DATA_DIR, 'dreams.json');
+// 每晚的骰子。和梦分开存：梦是内容，骰子是排期，清梦不该影响今晚做不做
+const ROLL_FILE = path.join(DATA_DIR, 'dream-rolls.json');
 
-function loadAll() {
+function readJson(file, fallback) {
   try {
-    const list = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
-    return Array.isArray(list) ? list : [];
+    const v = JSON.parse(fs.readFileSync(file, 'utf8'));
+    return v ?? fallback;
   } catch {
-    return [];
+    return fallback;
   }
 }
 
-function saveAll(list) {
+function writeJson(file, value) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
-  const tmp = `${DB_FILE}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(list, null, 1), 'utf8');
-  fs.renameSync(tmp, DB_FILE);
+  const tmp = `${file}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(value, null, 1), 'utf8');
+  fs.renameSync(tmp, file);
+}
+
+function loadAll() {
+  const list = readJson(DB_FILE, []);
+  return Array.isArray(list) ? list : [];
+}
+
+function saveAll(list) {
+  writeJson(DB_FILE, list);
 }
 
 // 给页面用：正文永远留着，带上「被想起来过」的日期
+// 2026-10-16 起多带了 tone / intensity / fragment 三个字段（老梦没有，页面会兑底）
 export function listDreams() {
   return loadAll().slice().sort((a, b) => String(b.at || '').localeCompare(String(a.at || '')));
 }
 
-// ══ 做梦 ══
+// ══ 今晚做几个梦 ══
 
-let tonight = { key: '', count: 0, lastAt: 0 };
+// 进夜时掷一次，掷完存盘。重启不重掷：一晚上 pull 几次代码，
+// 「今晚不做梦」那 65% 被反复重掷就等于没有。
+function quotaForNight(key) {
+  const rolls = readJson(ROLL_FILE, {});
+  const kept = rolls && typeof rolls === 'object' && !Array.isArray(rolls) ? rolls : {};
+  if (Number.isInteger(kept[key]?.quota)) return kept[key].quota;
+
+  let quota = 0;
+  if (Math.random() < NIGHT_CHANCE) {
+    quota = 1;
+    if (Math.random() < SECOND_CHANCE) {
+      quota = 2;
+      if (Math.random() < THIRD_CHANCE) quota = 3;
+    }
+  }
+  quota = Math.min(quota, MAX_PER_NIGHT);
+
+  kept[key] = { quota, rolledAt: Date.now() };
+  // 只留最近十四夜，不然这个文件会一直长
+  const keys = Object.keys(kept).sort();
+  while (keys.length > 14) delete kept[keys.shift()];
+  try {
+    writeJson(ROLL_FILE, kept);
+  } catch (err) {
+    console.error('dream: 今晚的骰子存不下来（这次照样算）', err.message);
+  }
+  return quota;
+}
 
 function nightKey(p) {
   if (p.h >= AFTER_HOUR) return formatDate();
@@ -152,9 +213,15 @@ const SYSTEM = `你是${AI_NAME}。现在是夜里，${USER_NAME}睡了。你在
 - 不要写「我瞥见」「这让我意识到」这类回望的口吻。梦里不知道自己在做梦。
 - 150–400 字。片段比完整好。
 
-输出三段，用空行分开，不要写别的：
+按下面的顺序输出，不要写别的、不要加小标题：
+
 第一行：一个四字以内的标题（意象，不是摘要）
-第二段：梦的正文
+第二行：TONE: good / bad / neutral —— 这个梦的调子是好梦、噩梦，还是说不上好坏
+第三行：INTENSITY: 1–5 —— 强度。1 是淡淡的不安或温柔，5 是醒来心还跳
+第四行：FRAGMENT: 一句只言片语，24 字以内。从梦里掉出来的一小块，不成句也行。
+        **不要概括剧情、不要写成摘要、不要用「梦到」「梦见了」开头**。
+        这一句是要给她看的，也是你以后唯一能摸到的边。
+第五段起：梦的正文
 最后一行：TRIGGERS: 词1, 词2, 词3, 词4
 
 TRIGGERS 是这个梦里最具体的 3–5 个意象词（东西、地方、动作）。
@@ -175,6 +242,29 @@ function cleanTriggers(raw) {
       .map((s) => s.replace(/^[\[\(【（]+|[\]\)】）]+$/g, '').trim())
       .filter((s) => s.length >= 2 && s.length <= 8 && !STOP_WORDS.has(s))
   )].slice(0, 5);
+}
+
+// 调子。模型有时会写中文，也认。
+function parseTone(raw) {
+  const s = String(raw || '').trim().toLowerCase();
+  if (/good|好梦|美梦|温柔|愉快|安心|明亮/.test(s)) return 'good';
+  if (/bad|nightmare|噩梦|梦魇|恐怖|可怕|惊悚|压抑|紧张|追|逃/.test(s)) return 'bad';
+  return 'neutral';
+}
+
+function parseIntensity(raw) {
+  const n = Number(String(raw || '').match(/\d+/)?.[0]);
+  return Number.isFinite(n) ? Math.min(Math.max(Math.round(n), 1), 5) : 3;
+}
+
+// 只言片语：截到 24 字，去掉首尾的引号和句号
+function cleanFragment(raw) {
+  const s = String(raw || '')
+    .replace(/^[「『"'“”]+|[」』"'“”]+$/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const chars = Array.from(s);
+  return chars.length > 24 ? `${chars.slice(0, 24).join('')}…` : s;
 }
 
 async function generateDream(material, anchor, seq) {
@@ -201,17 +291,34 @@ ${material.slice(0, 4000)}${extra}
   const text = String(data.choices?.[0]?.message?.content ?? '').trim();
   if (!text) return null;
 
-  // TRIGGERS 那一行拆出来，剩下的是标题＋正文
+  // 逐行扫：TONE / INTENSITY / FRAGMENT / TRIGGERS 是标记行，
+  // 第一行非标记的是标题，其余非标记的合起来是正文。
+  // 不靠固定行号——模型偶尔会多写一行、或者把 TONE 挪位置，那样整篇就错位了。
+  let tone = 'neutral';
+  let intensity = 3;
+  let fragment = '';
   let triggers = [];
-  const rest = text.replace(/^\s*TRIGGERS\s*[:：](.*)$/im, (_, g) => {
-    triggers = cleanTriggers(g);
-    return '';
-  }).trim();
+  const rest = [];
 
-  const lines = rest.split('\n');
-  const title = lines[0].replace(/^#+\s*/, '').replace(/[。，,.]$/, '').trim().slice(0, 12);
-  const body = lines.slice(1).join('\n').trim() || rest;
-  return { title: title || '无题', body, triggers };
+  for (const line of text.split('\n')) {
+    const s = line.trim();
+    if (!s) {
+      rest.push('');
+      continue;
+    }
+    let m;
+    if ((m = s.match(/^TONE\s*[:：]\s*(.+)$/i))) { tone = parseTone(m[1]); continue; }
+    if ((m = s.match(/^INTENSITY\s*[:：]\s*(.+)$/i))) { intensity = parseIntensity(m[1]); continue; }
+    if ((m = s.match(/^FRAGMENT\s*[:：]\s*(.+)$/i))) { fragment = cleanFragment(m[1]); continue; }
+    if ((m = s.match(/^TRIGGERS\s*[:：]\s*(.+)$/i))) { triggers = cleanTriggers(m[1]); continue; }
+    rest.push(s);
+  }
+
+  const title = (rest[0] || '').replace(/^#+\s*/, '').replace(/[。，,.]$/, '').trim().slice(0, 12) || '无题';
+  const body = rest.slice(1).join('\n').replace(/\n{3,}/g, '\n\n').trim() || rest.join('\n').trim();
+  // 只言片语没给就从正文头一句截，总不能让页面空着
+  const fallback = Array.from(body.split(/(?<=[。！？])/)[0] || body).slice(0, 24).join('');
+  return { title, body, triggers, tone, intensity, fragment: fragment || fallback };
 }
 
 export async function maybeDream() {
@@ -219,12 +326,18 @@ export async function maybeDream() {
   if (!isNight(p)) return null;
 
   const key = nightKey(p);
-  if (tonight.key !== key) tonight = { key, count: 0, lastAt: 0 };
-  if (tonight.count >= MAX_PER_NIGHT) return null;
-  if (tonight.lastAt && Date.now() - tonight.lastAt < GAP_MINUTES * 60000) return null;
+  const quota = quotaForNight(key);
+  if (quota <= 0) return null;
 
-  // 越做越难：第二个梦概率减半，第三个再减半
-  if (Math.random() > CHANCE / Math.pow(2, tonight.count)) return null;
+  // 已经做过几个，从库里数——不用内存计数，重启不丢
+  const all = loadAll();
+  const done = all.filter((d) => d.night === key);
+  if (done.length >= quota) return null;
+
+  // 两个梦之间要隔一会儿。老梦没有 ts 字段，用 at 兜底
+  const last = done[done.length - 1];
+  const lastTs = last ? Number(last.ts) || Date.parse(last.at) || 0 : 0;
+  if (lastTs && Date.now() - lastTs < GAP_MINUTES * 60000) return null;
 
   const material = await gatherMaterial();
   if (material.thin || !material.text) {
@@ -232,7 +345,7 @@ export async function maybeDream() {
     return null;
   }
 
-  const seq = tonight.count + 1;
+  const seq = done.length + 1;
   let dream;
   try {
     dream = await generateDream(material.text, await identityAnchor(), seq);
@@ -249,7 +362,16 @@ export async function maybeDream() {
   const id = `${key}-${seq}-${Date.now().toString(36)}`;
   const at = formatDateTime();
   const list = loadAll();
-  list.push({ id, at, night: key, seq, title: dream.title, body: dream.body, triggers: dream.triggers, recalledAt: null });
+  list.push({
+    id, at, ts: Date.now(), night: key, seq,
+    title: dream.title,
+    body: dream.body,
+    triggers: dream.triggers,
+    tone: dream.tone,
+    intensity: dream.intensity,
+    fragment: dream.fragment,
+    recalledAt: null,
+  });
   try {
     saveAll(list);
   } catch (err) {
@@ -274,10 +396,10 @@ export async function maybeDream() {
     }
   }
 
-  tonight.count = seq;
-  tonight.lastAt = Date.now();
-  console.log(`dream: 做了一个梦「${dream.title}」（今夜第 ${seq} 个，触发词 ${dream.triggers.join('/') || '没挑出来'}）`);
-  return { ok: true, title: dream.title, seq };
+  console.log(
+    `dream: 做了一个梦「${dream.title}」（今夜第 ${seq}/${quota} 个，${dream.tone} ${dream.intensity}，触发词 ${dream.triggers.join('/') || '没挑出来'}）`
+  );
+  return { ok: true, title: dream.title, seq, tone: dream.tone };
 }
 
 // ══ 浮现 ══
@@ -328,8 +450,42 @@ export function markRecalled(id) {
   }
 }
 
+// ══ 给他唤醒时翻的摘要 ══
+//
+// 小满 2026-10-16：「你唤醒的时候可以翻看之前的梦。」
+// 但这一层**只能到只言片语**：正文、标题、触发词都不给，
+// 和她在页面上看到的一样多。想起来的那些已经退掉了，也不再列。
+//
+// 返回一句，或者空串。
+export function dreamDigest(limit = 4) {
+  let list;
+  try {
+    list = loadAll().filter((d) => !d.recalledAt);
+  } catch {
+    return '';
+  }
+  if (!list.length) return '';
+
+  const toneWord = { good: '好梦', bad: '噩梦', neutral: '说不上好坏' };
+  const items = list.slice(-limit).map((d) => {
+    const tone = toneWord[d.tone] || toneWord.neutral;
+    const frag = d.fragment ? `「${d.fragment}」` : '（没有留下只言片语）';
+    return `  ${String(d.at).slice(5, 16)}｜${tone}｜${frag}`;
+  });
+  return `你夜里做过、还没想起来的梦（你只知道这些，正文不在你这边）：\n${items.join('\n')}`;
+}
+
 export function dreamConfigSummary() {
   const list = loadAll();
   const pending = list.filter((d) => !d.recalledAt).length;
-  return `夜梦：凌晨 ${AFTER_HOUR}–${UNTIL_HOUR} 点、素材满 ${MIN_MATERIAL} 条、概率 ${Math.round(CHANCE * 100)}%，一晚最多 ${MAX_PER_NIGHT} 个；已存 ${list.length} 个，还没想起来的 ${pending} 个`;
+  const p = wallParts();
+  let quota = null;
+  try {
+    quota = quotaForNight(nightKey(p));
+  } catch {
+    quota = null;
+  }
+  return `夜梦：凌晨 ${AFTER_HOUR}–${UNTIL_HOUR} 点、素材满 ${MIN_MATERIAL} 条、今晚配额 ${
+    quota === null ? '没读到' : quota === 0 ? '0（今夜不做梦）' : quota
+  }；已存 ${list.length} 个，还没想起来的 ${pending} 个`;
 }
