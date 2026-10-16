@@ -49,6 +49,21 @@ export function barEnabled() {
   return Boolean(env('PROOF_AGENT_TOKEN_FILE'));
 }
 
+// 音乐播放器配好了没有。判断口径和 music-proxy.js 的 musicPlayerBase() 一致：
+// 填了 MUSIC_PLAYER_URL 就有站内页 /music/。
+// 以前这里只看 NAV_MUSIC_URL，于是播放器配着、/music/ 转发正常、悬浮窗能开，
+// 菜单里却写着灰色「没配置」——两个变量说两种话，和 Proof 那两个 TTL 是同一类坑。
+export function musicEnabled() {
+  const raw = env('MUSIC_PLAYER_URL');
+  if (!raw || /^(off|0|false|no)$/i.test(raw)) return false;
+  try {
+    const u = new URL(raw);
+    return u.protocol === 'http:' || u.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
 // Ombre Brain 管理页在本机的地址，vesper 把它转发到 /memory/。
 // 没填 OMBRE_DASHBOARD_URL 就用 OMBRE_BRAIN_URL 的地址（只取协议、主机和端口，去掉 /mcp）；填 off 不转发
 export function ombreDashboardBase() {
@@ -70,7 +85,8 @@ export function ombreDashboardBase() {
 // 日记、记忆库优先用站内页面；没配站内页面时可以用 NAV_DIARY_URL / NAV_MEMORY_URL 跳外部地址，
 // 都没配就显示成灰色「没配置」。
 // 论坛是给人看的网页（比如 Lutopia 社区首页），填 NAV_FORUM_URL 才能点；和 TA 自己连论坛用的 LUTOPIA_MCP_URL 无关。
-// 音乐是另一个程序的页面，填 NAV_MUSIC_URL：同域名下的路径（/music）或完整地址都行。
+// 音乐和日记、记忆库一样，先看真实能力：配了 MUSIC_PLAYER_URL 就指站内 /music/（见 music-proxy.js）。
+// 没走转发时才用 NAV_MUSIC_URL，同域名下的路径或完整地址都行。
 // 小酒馆排在音乐下面（小满定的位置）：配了 Proof 才能点，没配是灰色「没配置」
 function navGroups() {
   const diary = diaryDir()
@@ -79,6 +95,9 @@ function navGroups() {
   const memory = ombreDashboardBase()
     ? { href: '/memory/', label: '记忆库' }
     : { href: externalUrl('NAV_MEMORY_URL'), label: '记忆库', external: true, note: '没配置' };
+  const music = musicEnabled()
+    ? { href: '/music/', label: '音乐', noStars: true }
+    : { href: externalUrl('NAV_MUSIC_URL', { allowPath: true }), label: '音乐', external: true, note: '没配置' };
   const bar = barEnabled()
     ? { href: '/bar', label: '小酒馆' }
     : { href: '', label: '小酒馆', note: '没配置' };
@@ -88,7 +107,7 @@ function navGroups() {
       { href: '/moments', label: '动态' },
       diary,
       { href: '/dreams', label: '梦境' },
-      { href: externalUrl('NAV_MUSIC_URL', { allowPath: true }), label: '音乐', external: true, note: '没配置' },
+      music,
       bar,
       { href: '/drives', label: '心绪' },
       memory,
@@ -107,7 +126,10 @@ export function renderMenu(current, { fixed = false } = {}) {
       return `<li><span class="vp-menu-soon" aria-disabled="true">${item.label}<small>${item.note || '还没做'}</small></span></li>`;
     }
     const here = !item.external && item.href === current;
-    const attrs = item.external ? ' data-stars rel="noopener"' : here ? ' aria-current="page"' : '';
+    let attrs = item.external ? ' data-stars rel="noopener"' : here ? ' aria-current="page"' : '';
+    // 站内但不是我们自己排版的页面（/music/ 是转发过来的播放器）：别留进场动画的记号。
+    // 那边不跑 HEAD_SCRIPT，记号没人清，会在之后打开的页面上乱闪一次
+    if (item.noStars) attrs += ' data-no-stars';
     return `<li><a href="${escapeAttr(item.href)}"${attrs}>${item.label}</a></li>`;
   };
   const g = navGroups();
