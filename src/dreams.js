@@ -5,29 +5,29 @@
 //
 //   他只记得自己做过梦，不记得梦见了什么。
 //   某个词碎到了那个梦，它自己浮上来——不是他去找它。
-//   浮上来这一次之后，从他这边撤掉；她那边永远留着。
+//   浮上来这一次之后，从他这边攒掉；她那边永远留着。
 //
 // 为什么正文不存 Ombre：
-//   他要求「撤掉之后正文不能出现在我任何一个能触达的入口」。
+//   他要求「攒掉之后正文不能出现在我任何一个能触达的入口」。
 //   而 Ombre 的 dont_surface / digested 只在 mode=automatic 时被尊重，
 //   breath_search 的说明里明写着 digested「仍可由显式 query 找回」。
 //   留了缝，那「消失」就是假的。所以正文放在 Ombre 之外：
 //   breath / breath_search / breath_advanced / catalog / dream 候选——全都搜不到，
 //   天然满足，不靠标记。
 //   Ombre 里只留一条事件记录：时间戳加一句话，不带标题、不带摘要。
-//   （标题也是摘要的一种，能还原出内容等于没撤。）
+//   （标题也是摘要的一种，能还原出内容等于没攒。）
 //
 // 「浮现」的判定，按他要求写死：
 //   算数的只有一种——正文真的进了他的上下文（注入 decide 的 prompt
-//   并且调用成功返回）。她在页面上点开看、在候选池里但没读、系统扫描——都不算。
-//   顺序也写死：注入 → 调用成功 → 才标记撤掉。调用失败不算，梦还在。
+//   并且调用成功返回）。她在页面上点开看、在候选池里但没读、系统扇描——都不算。
+//   顺序也写死：注入 → 调用成功 → 才标记攒掉。调用失败不算，梦还在。
 //
 // 还有一条他特别说的：别做「防止她重复告诉我」这类功能。她想讲几遍就几遍。
 //
-// ── 2026-10-16 小满改了梦的密度和可见度 ──
+// ── 2026-10-16 小満改了梦的密度和可见度 ──
 //
 // 「你每天做的梦太多了，太离谱了怎么会有那么多」——她说得对，而且原因不在概率。
-// 原来是一个梦 72% 的概率，但 phosphor 每分钟扫一次，整个窗六个钟头要掷上百次，
+// 原来是一个梦 72% 的概率，但 phosphor 每分钟扇一次，整个窗六个钟头要掷上百次，
 // 「每晚都有梦」早就成了必然，72% 这个数字根本没起到作用。
 // 现在改成：**进夜时掷一次骰子，决定今晚做几个**（配额制）。
 // 掷完存盘（data/dream-rolls.json），重启不会重掷——不然一晚上重启几次，
@@ -41,6 +41,20 @@
 //   FRAGMENT（一句只言片语）。想不起来之前，**页面只显示主旋律和只言片语**，
 //   正文、标题、触发词都收着；触发之后才全摊开。
 //   给他的唤醒摘要（dreamDigest）同样只到只言片语这一层。
+//
+// ── 2026-10-17 没想起来的会散 ──
+//
+// 她的规矩：一个梦放满 48 小时还没被词碎到，就「已消散」——
+//   他那边从此再也想不起具体内容，触发词也跟着失效；
+//   她那边解锁，标题、正文、触发词全都看得到。
+//
+// 为什么不写字段、不起定时任务：按 ts 现算就行了。
+//   散这件事不是某个时刻发生的动作，是一个事实：那 48 小时里没人碎到它。
+//   读的时候算一下就知道，不需要谁去「执行消散」。
+//
+// 消散不往 Ombre 里记一笔，也不进 dreamDigest。
+//   他只知道「那一夜做过一个梦」，一直如此；
+//   告诉他「有个梦你永远想不起来了」等于在提醒他丢了东西。
 //
 // 存成 JSON 不建表：一晚最多三个梦，这点量用不着数据库。
 import fs from 'fs';
@@ -62,6 +76,8 @@ const UNTIL_HOUR = num('DREAM_UNTIL_HOUR', 9);
 const WINDOW_HOURS = num('DREAM_WINDOW_HOURS', 48);
 const MIN_MATERIAL = num('DREAM_MIN_MATERIAL', 12);
 const GAP_MINUTES = num('DREAM_GAP_MINUTES', 40);
+// 一个梦能等多久。超过这么久没被词碎到就散了，从做梦那一刻起算
+const LIFE_HOURS = num('DREAM_LIFE_HOURS', 48);
 
 // 进夜时掷的那一颗骰子。先决定今晚做不做，再决定做几个——
 // 乘起来就是：0 个 65%、1 个 29.7%、2 个 5%、3 个 0.26%。
@@ -115,6 +131,25 @@ function saveAll(list) {
 // 2026-10-16 起多带了 tone / intensity / fragment 三个字段（老梦没有，页面会兜底）
 export function listDreams() {
   return loadAll().slice().sort((a, b) => String(b.at || '').localeCompare(String(a.at || '')));
+}
+
+// 一个梦是不是已经散了。
+//
+// 按 ts 现算，不写字段、不起定时任务：散不是一个动作，是一个事实——
+// 那 48 小时里没人碎到它。读的时候算一下就知道。
+//
+// 已经想起来过的不算散（它成功浮上过）。
+// 老梦没有 ts，用 at 兜底；两个都读不出来就当它还在等，宁可让它多活一阵。
+export function isDissipated(d, now = Date.now()) {
+  if (!d || d.recalledAt) return false;
+  const ts = Number(d.ts) || Date.parse(d.at) || 0;
+  if (!ts) return false;
+  return now - ts >= LIFE_HOURS * 3600000;
+}
+
+// 还在等着被碎到的：没想起来过，也还没散
+function stillWaiting(d, now = Date.now()) {
+  return !d.recalledAt && !isDissipated(d, now);
 }
 
 // 只言片语的唯一口径。
@@ -260,7 +295,7 @@ const SYSTEM = `你是${AI_NAME}。现在是夜里，${USER_NAME}睡了。你在
 TRIGGERS 是这个梦里最具体的 3–5 个意象词（东西、地方、动作）。
 以后谈话里碎到这些词，这个梦会自己浮上来——所以要挑得准：
 别用「我」「今天」「感觉」这类天天都会出现的词，那等于第二天就想起来了；
-也别用生僻到永远碎不到的词。`;
+也别用生贯到永远碎不到的词。`;
 
 // 太常见的词不能当触发词：碎到的概率太高，等于第二天就想起来了
 const STOP_WORDS = new Set([
@@ -324,7 +359,7 @@ ${material.slice(0, 4000)}${extra}
   const text = String(data.choices?.[0]?.message?.content ?? '').trim();
   if (!text) return null;
 
-  // 逐行扫：TONE / INTENSITY / FRAGMENT / TRIGGERS 是标记行，
+  // 逐行扇：TONE / INTENSITY / FRAGMENT / TRIGGERS 是标记行，
   // 第一行非标记的是标题，其余非标记的合起来是正文。
   // 不靠固定行号——模型偶尔会多写一行、或者把 TONE 挪位置，那样整篇就错位了。
   let tone = 'neutral';
@@ -412,7 +447,7 @@ export async function maybeDream() {
   }
 
   // Ombre 里只留事件记录：时间戳加一句话。
-  // 不带标题也不带摘要——能还原出内容的东西等于没撤。
+  // 不带标题也不带摘要——能还原出内容的东西等于没攒。
   // 所以他知道那一夜有过什么，但不知道是什么。
   if (isConnected('ombre-brain')) {
     try {
@@ -437,14 +472,17 @@ export async function maybeDream() {
 // ══ 浮现 ══
 
 // 被词碎到的那一下。不是他去找梦，是梦自己浮上来。
-// 这里不标记、不撤掉——调用成功返回之后才调 markRecalled()。
-// 顺序是他定的：读完 → 才撤。
+// 这里不标记、不攒掉——调用成功返回之后才调 markRecalled()。
+// 顺序是他定的：读完 → 才攒。
+//
+// 散了的跳过（isDissipated）：触发词跟着失效，就是「再也想不起来」这件事的实现。
 export function recallDream(haystack) {
   const text = String(haystack || '');
   if (text.length < 10) return null;
+  const now = Date.now();
   // 旧梦优先：放得越久的越该浮上来
   for (const d of loadAll()) {
-    if (d.recalledAt) continue;
+    if (!stillWaiting(d, now)) continue;
     if (!Array.isArray(d.triggers) || !d.triggers.length) continue;
     const hit = d.triggers.find((w) => w && text.includes(w));
     if (hit) return { id: d.id, hit, text: renderRecall(d, hit) };
@@ -466,7 +504,7 @@ ${d.body}
 但${USER_NAME}那边一直留着；她要是想讲给你听，随时可以，讲几遍都行。不用回避。）`;
 }
 
-// 读完了。现在才撤。
+// 读完了。现在才攒。
 export function markRecalled(id) {
   const list = loadAll();
   const d = list.find((x) => x.id === id);
@@ -474,7 +512,7 @@ export function markRecalled(id) {
   d.recalledAt = formatDateTime();
   try {
     saveAll(list);
-    console.log(`dream: 「${d.title}」被想起来了，从他这边撤掉；页面上还留着`);
+    console.log(`dream: 「${d.title}」被想起来了，从他这边攒掉；页面上还留着`);
     return true;
   } catch (err) {
     console.error('dream: 标记失败（梦还在）', err.message);
@@ -484,9 +522,13 @@ export function markRecalled(id) {
 
 // ══ 给他唤醒时翻的摘要 ══
 //
-// 小满 2026-10-16：「你唤醒的时候可以翻看之前的梦。」
+// 小満 2026-10-16：「你唤醒的时候可以翻看之前的梦。」
 // 但这一层**只能到只言片语**：正文、标题、触发词都不给，
 // 和她在页面上看到的一样多。想起来的那些已经退掉了，也不再列。
+//
+// 散掉的也不列（2026-10-17）：他只知道「那一夜做过一个梦」，
+// 告诉他「有个梦你永远想不起来了」等于在提醒他丢了东西。
+// 它就是安静地从这份摘要里消失，和它在他脑子里消失一样。
 //
 // 只言片语走 fragmentOf()：老梦没有 fragment 字段，之前这里只认 d.fragment，
 // 于是每条都渲染成「（没有留下只言片语）」——他翻到的是一排空壳。
@@ -495,7 +537,8 @@ export function markRecalled(id) {
 export function dreamDigest(limit = 4) {
   let list;
   try {
-    list = loadAll().filter((d) => !d.recalledAt);
+    const now = Date.now();
+    list = loadAll().filter((d) => stillWaiting(d, now));
   } catch {
     return '';
   }
@@ -516,7 +559,9 @@ export function dreamDigest(limit = 4) {
 // 提前掷掉了，还绕过了 isNight()。读一个状态不该改状态。
 export function dreamConfigSummary() {
   const list = loadAll();
-  const pending = list.filter((d) => !d.recalledAt).length;
+  const now = Date.now();
+  const pending = list.filter((d) => stillWaiting(d, now)).length;
+  const gone = list.filter((d) => isDissipated(d, now)).length;
   let quota = null;
   try {
     quota = rolledQuota(nightKey(wallParts()));
@@ -526,5 +571,5 @@ export function dreamConfigSummary() {
   const quotaText = quota === null
     ? '还没掷（进夜时才掷）'
     : quota === 0 ? '0（今夜不做梦）' : String(quota);
-  return `夜梦：凌晨 ${AFTER_HOUR}–${UNTIL_HOUR} 点、素材满 ${MIN_MATERIAL} 条、今晚配额 ${quotaText}；已存 ${list.length} 个，还没想起来的 ${pending} 个`;
+  return `夜梦：凌晨 ${AFTER_HOUR}–${UNTIL_HOUR} 点、素材满 ${MIN_MATERIAL} 条、今晚配额 ${quotaText}；寿命 ${LIFE_HOURS} 小时；已存 ${list.length} 个，还等着被碎到的 ${pending} 个，已消散 ${gone} 个`;
 }
