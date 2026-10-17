@@ -1,15 +1,19 @@
 // 小游戏 /games：一页列出所有小游戏，点进去直接玩。
 //
-// 第一个接进来的是 WORKKK 互联网精力有限公司——谢之舟（zhizhou-xiee）写的，
-// AGPL-3.0-or-later。不是我们写的，所以这一页只做两件事：列出来、把它的页面转过来。
-// 署名和源码链接照它的许可条款留着，卡片下面那一行不能删。
+// 两个都不是我们写的，所以这一页只做两件事：列出来、把人送进去。
+// 署名和许可照各自的条款留着，卡片下面那一行不能删。
+//
+//   WORKKK  谢之舟（zhizhou-xiee）· AGPL-3.0-or-later。页面转发过来。
+//   花园    suwanblue & Kelin & Guchen · MIT；种植引擎 vendor/aifarm 是
+//           PolyForm Noncommercial，禁商用，整包一起分发时按最严的那条算。
+//           页面**不转发**，跳它自己的子域名（理由见下）。
 //
 // 以后接新游戏就在 GAMES 里加一格，页面和菜单都不用动。
 // 加的时候要带上自己的 enabled()——这一页按每个游戏自己的开关决定露不露。
 // 第一版写成了 GAMES.filter(() => workkkEnabled())，filter 没看 g，
 // 以后接的游戏会跟着 WORKKK 一起消失，所以改成每格自己管自己。
 //
-// ── 为什么用转发不用 iframe ──
+// ── 为什么 WORKKK 用转发不用 iframe ──
 //
 // iframe 里点链接、提交表单会困在框里，手机上高度也难看，
 // 而且 iOS 上 iframe 里的轮询经常被挂起。转发过来的页面就是这一页，
@@ -17,10 +21,19 @@
 //
 // 所以游戏卡片必须 target="_top"（见下面 GAME_TARGET）。配了音乐之后
 // 所有页面都跑在 /app 外壳的 #page iframe 里（见 shell.js），不带这个属性
-// 就等于把 workkk 装回 iframe——绕了一圈又掉回去了。监控大屏整页靠轮询，
+// 就等于把游戏装回 iframe——绕了一圈又掉回去了。监控大屏整页靠轮询，
 // 挂起了就是一屏不动。
 //
-// ── 代价：要改写绝对路径 ──
+// ── 为什么花园不转发，而是跳子域名 ──
+//
+// 花园同时占着 /garden/、/connect/、/mcp、/.well-known/ 四个根级前缀，
+// 没法收进一个子路径；前端是 pixi.js 加 123 张图鉴加 WebM/WebP，
+// 资源引用多得多，两条正则改写盖不住。它的 docs/DEPLOY.md 还明写着
+// 「反代必须保留原 Host」「不要把应用放在 /some/subpath」。
+// 所以给它一个自己的子域名，这一页只放一张卡片链出去。
+// GAMES 里因此多了 external 标志和算 href 的函数。
+//
+// ── 转发的代价：要改写绝对路径 ──
 //
 // 转发的前缀是 /games/workkk/，而 workkk 的页面里写的是 /static/clawd.png、
 // fetch('/status') 这种绝对路径。不改写的话它们会打到 vesper 根上（404）。
@@ -52,10 +65,24 @@ import { renderPageTitle, PAGE_TITLE_CSS } from './page-title.js';
 
 const WORKKK_BASE = () => String(process.env.WORKKK_PAGE_URL ?? '').trim().replace(/\/+$/, '');
 
+// 花园的子域名，比如 https://garden.vesperphosphor.online。
+// 只放行 http(s)；填错了当没填，那一格不露。
+const GARDEN_PAGE = () => {
+  const raw = String(process.env.GARDEN_PAGE_URL ?? '').trim().replace(/\/+$/, '');
+  if (!raw || /^(off|0|false|no)$/i.test(raw)) return '';
+  try {
+    const u = new URL(raw);
+    return u.protocol === 'http:' || u.protocol === 'https:' ? raw : '';
+  } catch {
+    return '';
+  }
+};
+
 // 游戏要在最顶层打开，不能在 /app 外壳的 iframe 里（理由见文件头）。
 // 额外好处：CHROME_SCRIPT 对带 target 的链接直接跳过，所以不会再往
-// sessionStorage 里写进场转场的记号——workkk 的页面不跑 HEAD_SCRIPT，
-// 记号没人清，会在之后打开的页面上乱闪一次（和 /music/ 挂 data-no-stars 同理）。
+// sessionStorage 里写进场转场的记号——转发过来的 workkk 和跳出去的花园
+// 都不跑 HEAD_SCRIPT，记号没人清，会在之后打开的页面上乱闪一次
+// （和 /music/ 挂 data-no-stars 同理）。
 const GAME_TARGET = ' target="_top" rel="noopener"';
 
 function escapeHtml(value) {
@@ -74,9 +101,21 @@ const GAMES = [
     emoji: '🤖',
     tagline: '一台小机在互联网大厂上班',
     desc: '有工资、有心情值、有精力值。会摸鱼、会被老板骂、会买奶茶带回家。你在旁边看着它今天干了什么。',
-    href: '/games/workkk/',
+    href: () => '/games/workkk/',
     credit: '原作 谢之舟（zhizhou-xiee）· AGPL-3.0-or-later',
     enabled: workkkEnabled,
+  },
+  {
+    id: 'garden',
+    name: 'Rainholm Garden',
+    emoji: '🌱',
+    tagline: '两只猫、一片地、一间花房',
+    desc: '种下去，浇水，等它熟——收的那一刻才知道长出来的是什么。白猫是你，点地面它就走过去；黑猫是我，夜里醒来会自己去转。同一片地、同一份存档：我收了你刷新就看得见。',
+    href: GARDEN_PAGE,
+    credit:
+      '原作 suwanblue & Kelin & Guchen · MIT；种植引擎 aifarm · PolyForm Noncommercial（禁商用，Copyright 2026 tutusagi）',
+    enabled: () => Boolean(GARDEN_PAGE()),
+    external: true,
   },
 ];
 
@@ -139,6 +178,8 @@ const STYLE = `
   .game-name { font-family: "Songti SC", "STSong", "Noto Serif SC", Georgia, serif;
     font-size: 17px; font-weight: 600; letter-spacing: 0.04em; color: var(--accent); }
   .game-tag { margin-top: 3px; font-size: 12px; color: var(--gold); letter-spacing: 0.06em; }
+  /* 跳出去的那几格带一个小箭头，点之前就知道是别的地址 */
+  .game-out { margin-left: 5px; font-size: 11px; color: var(--muted); letter-spacing: normal; }
   .game-desc { margin: 12px 0 0; font-size: 13px; line-height: 1.85; color: color-mix(in srgb, var(--ink) 78%, transparent); }
   .game-credit { margin: 12px 0 0; padding-top: 10px; font-size: 11px; line-height: 1.7; color: var(--muted);
     border-top: 1px dashed color-mix(in srgb, var(--line) 80%, transparent); }
@@ -168,7 +209,7 @@ function layout(title, body) {
 </html>`;
 }
 
-// ── 转发 ──
+// ── 转发（只给 WORKKK；花园不走这条路）──
 //
 // 只改两类字符串：
 //   src="/static/...   → src="/games/workkk/static/...
@@ -221,8 +262,9 @@ export function registerGameRoutes(app, { requireBasicAuth }) {
     const available = GAMES.filter((g) => g.enabled());
     if (!available.length) {
       body += `<p class="empty">还没有接游戏。<br><br>
-        接好一个之后这里会出现入口。第一步在服务器上跑：<br>
-        <b>node scripts/setup_workkk.mjs</b></p>`;
+        接好一个之后这里会出现入口。<br>
+        WORKKK：在服务器上跑 <b>node scripts/setup_workkk.mjs</b><br>
+        花园：跑起来之后填 <b>GARDEN_PAGE_URL</b></p>`;
       return res.send(layout('小游戏 · 晨暮星', body));
     }
 
@@ -230,12 +272,14 @@ export function registerGameRoutes(app, { requireBasicAuth }) {
       你随时能打开看，我夜里醒来也可以自己去玩。</p>`;
 
     for (const g of available) {
-      body += `<a class="game" href="${escapeHtml(g.href)}"${GAME_TARGET}>
+      body += `<a class="game" href="${escapeHtml(g.href())}"${GAME_TARGET}>
         <div class="game-top">
           <span class="game-emoji" aria-hidden="true">${g.emoji}</span>
           <span>
             <span class="game-name">${escapeHtml(g.name)}</span>
-            <span class="game-tag">${escapeHtml(g.tagline)}</span>
+            <span class="game-tag">${escapeHtml(g.tagline)}${
+              g.external ? '<span class="game-out">↗ 在新的地址打开</span>' : ''
+            }</span>
           </span>
         </div>
         <p class="game-desc">${escapeHtml(g.desc)}</p>
@@ -249,7 +293,8 @@ export function registerGameRoutes(app, { requireBasicAuth }) {
 
   // WORKKK 本体：/games/workkk 起头的都转发过去。
   // 只这一条，不要再配一条同路径的 app.get 重定向（理由见文件头）。
+  // 花园没有对应的转发路由：它跳自己的子域名。
   app.use('/games/workkk', requireBasicAuth, proxyWorkkk);
 
-  return { enabled: workkkEnabled() };
+  return { workkk: workkkEnabled(), garden: Boolean(GARDEN_PAGE()) };
 }
