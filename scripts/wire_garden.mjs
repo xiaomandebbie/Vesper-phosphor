@@ -29,6 +29,16 @@
 // callTool 是它们唯一的共同入口，所以补在那里，模型根本不用知道有这个字段。
 // 模型自己给了合法的就尊重它的（它可能真在重试）。
 //
+// ── 锚点要挑两边都不会变的那一行 ──
+//
+// 第一版 decide.js 的 import 锚点用的是
+//   import { dreamDigest } from './dreams.js';
+// 那是仓库里的样子。但服务器上那份 decide.js 是从 .bak 恢复的（比梅境接线
+// 更早），根本没有这一行——锚点找到 0 处，整个脚本停下。
+// 现在改用 doing.js 的 import 行：两个版本里都在，而且 wire_workkk_play
+// 那次就是拿它做锚点跑成的。
+// decide.js 是本地和远端都会改的文件，不能拿仓库当准。
+//
 // ── 两阶段：先全查，再全写 ──
 //
 // 任何一处锚点对不上就一处都不改。半成品比不改更麻烦：
@@ -165,9 +175,10 @@ const changes = [
     file: 'decide.js',
     name: 'import 花园那一段话',
     marker: "from './garden.js'",
-    anchor: "import { dreamDigest } from './dreams.js';",
+    // 用 doing.js 那一行：仓库版和本地版里都在（见文件头的说明）
+    anchor: "import { doingSection, doingStatusLine } from './doing.js';",
     replacement: [
-      "import { dreamDigest } from './dreams.js';",
+      "import { doingSection, doingStatusLine } from './doing.js';",
       "import { gardenSection } from './garden.js';",
     ].join('\n'),
   },
@@ -275,9 +286,6 @@ for (const c of changes) {
 log('──────────────────────────────');
 if (touched.size) log(`\n备份：${[...touched].map((f) => `src/${f}.bak`).join('、')}`);
 log('\n接着：');
-log('  把这两行加进 .env（AI 钥匙用 cd /opt/garden && node start.mjs --show-access 拿）：');
-log('    GARDEN_MCP_URL=http://127.0.0.1:5173/mcp');
-log('    GARDEN_MCP_TOKEN=<AI 钥匙>');
 log('  node --check src/garden.js && node --check src/garden-steps.js \\');
 log('    && node --check src/mcp-manager.js && node --check src/phosphor.js \\');
 log('    && node --check src/decide.js && node --check src/actions/activity.js && echo 语法OK');
