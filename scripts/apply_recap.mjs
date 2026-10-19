@@ -1,11 +1,14 @@
 #!/usr/bin/env node
-// 把 scripts/recap-parts/patches.txt 里的补丁打到 src/ 下的三个文件上。
+// 把 scripts/recap-parts/ 下的补丁打到 src/ 的文件上。
 //
 // 用法（在 Vesper-phosphor 目录下）：
-//   node scripts/apply_recap.mjs          ← 先看会改什么，不写文件
-//   node scripts/apply_recap.mjs --write  ← 真的写进去
+//   node scripts/apply_recap.mjs                              ← 试算 patches.txt
+//   node scripts/apply_recap.mjs --write                       ← 真写
+//   node scripts/apply_recap.mjs --file mcp-patches.txt        ← 试算另一份
+//   node scripts/apply_recap.mjs --file mcp-patches.txt --write
 //
 // 幂等：每条补丁先看替换后的文字在不在，在就跳过。
+// 有一条没命中就一个字都不写，不会改一半停在中间。
 //
 // ── 为什么要分成两个文件 ──
 //
@@ -17,29 +20,37 @@
 // 每一次都不是逻辑难，是我用字符串拼接生成代码——单引号套双引号套反引号
 // 再加转义，层数一多就出错，而且我推上去之前没法运行它。
 //
-// 所以分开：要注入的代码是 patches.txt 里的字面文本，这个脚本只做读取和
+// 所以分开：要注入的代码是补丁文件里的字面文本，这个脚本只做读取和
 // 替换，本身一行被注入的代码都没有，没有引号层级可以弄错。
 
 import fs from 'fs';
 import path from 'path';
 
 const ROOT = process.cwd();
-const PATCHES = path.join(ROOT, 'scripts', 'recap-parts', 'patches.txt');
 const WRITE = process.argv.includes('--write');
+
+const FILE_NAME = (() => {
+  const i = process.argv.indexOf('--file');
+  const v = i >= 0 ? process.argv[i + 1] : null;
+  return v && !v.startsWith('--') ? v : 'patches.txt';
+})();
+
+const PATCHES = path.join(ROOT, 'scripts', 'recap-parts', FILE_NAME);
 
 const TARGETS = {
   books: path.join(ROOT, 'src', 'books.js'),
   steps: path.join(ROOT, 'src', 'books-steps.js'),
   page: path.join(ROOT, 'src', 'books-page.js'),
+  mcp: path.join(ROOT, 'src', 'books-mcp.js'),
 };
 
 if (!fs.existsSync(PATCHES)) {
   console.error('没找到 ' + PATCHES);
-  console.error('先 git pull 把 scripts/recap-parts/patches.txt 拉下来。');
+  console.error('先 git pull 把 scripts/recap-parts/ 下的补丁文件拉下来。');
   process.exit(1);
 }
 
-// ── 解析 patches.txt ──
+// ── 解析补丁文件 ──
 //
 // <<<PATCH <目标> <说明>
 // <<<FIND
@@ -114,7 +125,7 @@ let patches;
 try {
   patches = parsePatches(fs.readFileSync(PATCHES, 'utf8'));
 } catch (err) {
-  console.error('patches.txt 读不动：' + err.message);
+  console.error(FILE_NAME + ' 读不动：' + err.message);
   process.exit(1);
 }
 
@@ -167,7 +178,7 @@ for (const p of patches) {
 }
 
 console.log('');
-console.log('共 ' + patches.length + ' 条补丁：');
+console.log(FILE_NAME + '，共 ' + patches.length + ' 条补丁：');
 for (const [kind, msg] of report) {
   const tag = kind === 'ok' ? '可以改' : kind === 'skip' ? '已经有' : '没命中';
   console.log('  ' + tag + '  ' + msg);
@@ -188,7 +199,7 @@ if (!touched.size) {
 
 if (!WRITE) {
   console.log('这是试算，文件没动。全部命中了，真写：');
-  console.log('  node scripts/apply_recap.mjs --write');
+  console.log('  node scripts/apply_recap.mjs --file ' + FILE_NAME + ' --write');
   console.log('');
   process.exit(0);
 }
@@ -202,10 +213,7 @@ for (const key of touched) {
 
 console.log('已写回：' + [...touched].join('、') + '，改前那份备在 .bak-recap');
 console.log('');
-console.log('接下来：');
-console.log("  sed -i 's/^BOOKS_CHUNK=.*/BOOKS_CHUNK=15/' .env");
-console.log('  node --check src/books.js && node --check src/books-steps.js && node --check src/books-page.js && echo 语法 OK');
+console.log('接下来记得验语法再重启：');
+console.log('  node --check src/books.js && node --check src/books-steps.js && node --check src/books-page.js && node --check src/books-mcp.js && echo 语法 OK');
 console.log('  pm2 restart vesper phosphor --update-env');
-console.log('');
-console.log('前情是读完一次才写的，所以他下次读书时还没有；再下一次就接得上了。');
 console.log('');
