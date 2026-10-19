@@ -3,13 +3,25 @@
 // 前端原作：NEST 书架 UI · nonchaiovo
 // https://github.com/nonchaiovo/nest-bookshelf-ui
 // 个人非商业使用许可：不得商用、不得打包再发布；公开展示必须署名并链接原仓库。
-// 下面那一行署名是许可要求的，不能删。
+// 上面那一行署名是许可要求的，不能删。
+//
+// ── 为什么两台设备会各看各的（2026-10-19 真撞上了）──
+//
+// 她在手机上导了两本书，iPad 打开却是六本示例文集。不是延迟：
+// 我接转接层时**猜**了它存书架的 localStorage 键名，猜错了。
+//   我写的： nest_bookshelf_demo_books_v1
+//   真实的： nest_bookshelf_demo_library_v1   ← bookshelf.jsx 的 DEMO_STORAGE
+// library 不是 books。于是 getItem 从没把服务器的书返回给它、setItem 也从没
+// 往服务器写，两边各读自己浏览器的那份，iPad 自然退回出厂的 DEFAULT_BOOKS。
+//
+// 教训：这种靠「约定键名」对接的地方，不能猜，要把源码读到那一行。
+// 下面每个键名和字段都从 bookshelf.jsx 里抄的，改它的版本时要重新核一遍。
 //
 // ── 这页和 /music、/games/workkk 不同 ──
 //
 // 那两个是转发别的进程。书架是静态文件：一份 index.html 加一份 bookshelf.jsx，
-// 没有服务端。所以这边是「发文件 + 注入一层转接层」：把它原本写进
-// localStorage 的那几个函数指到 /books/api/*，于是书、批注、进度落在服务器上。
+// 没有服务端。所以这边是「发文件 + 注入一层转接层」：把它写进 localStorage
+// 的那几个动作接到 /books/api/*，于是书、批注、进度落在服务器上。
 //
 // 为什么非得这样：小满说「晨暮星和 aru 他都要记得读了什么」。localStorage 在
 // 她手机的浏览器里，哪边都读不到；只有落到同一张表上，两边才真的记得。
@@ -17,22 +29,15 @@
 // ── 导书仍由前端解析 ──
 //
 // EPUB / PDF / TXT 的解析代码在 index.html 里，在浏览器里跑，文件不上传。
-// 解析完得到段落数组，那个数组 POST 到 /books/api/books。
-// 所以服务器上存的是正文段落，不是原始书文件——这是她知道并同意的代价。
+// 解析完得到段落数组，跟着整份书架 PUT 上来。所以服务器上存的是正文段落，
+// 不是原始书文件——这是她知道并同意的代价。
 //
 // ── 早晚两套怎么套 ──
 //
-// 书架自己有浅色 / 深色两套，文档里写着用 ?theme=light|dark 选。
+// 书架自己有浅色/深色两套，用 ?theme=light|dark 选（它文档里写的）。
 // 所以主路是：早晚四张脸（sun-time.js 按长沙真实的日出日落算）映到这两套——
 // dawn/day 走 light，dusk/night 走 dark。这条是它自己支持的，一定生效。
-//
-// 再叠一层 SKIN_CSS 做贴色（按晨暮星的 --ink / --accent 这几个跟着脸走的变量）。
-// 诚实说一句：我没能远程读完它那份 445KB 的 index.html（沙箱抓取被截断），
-// 所以里面具体叫什么变量名我不确定。这层写成「命中就更贴，没命中也不坏」：
-// 只追加覆盖，不改它的布局和交互。哪天在手机上看着颜色不对，改这一段就行。
-//
-// 菜单：和 /music/ 同理挂 data-no-stars——这页不跑 HEAD_SCRIPT（它是别人的
-// 排版），进场动画的记号留着没人清，会在之后打开的页面上乱闪一次。
+// 再叠一层 SKIN_CSS 做贴色：只追加覆盖，不改它的布局和交互。
 
 import fs from 'fs';
 import path from 'path';
@@ -56,11 +61,33 @@ import {
 } from './books.js';
 import { renderMenu, CHROME_CSS, CHROME_SCRIPT } from './page-chrome.js';
 import { faceAt } from './sun-time.js';
+import { formatDate } from './wall-time.js';
 
 const PREFIX = '/books';
 
+// ── 下面这些全部照抄 bookshelf.jsx，不要凭印象改 ──
+
+// 它存整份书架的键（DEMO_STORAGE）
+const SHELF_KEY = 'nest_bookshelf_demo_library_v1';
+// 高亮颜色只有这四个。给了别的，它取 HIGHLIGHTS[color].dot 会抛错，整页白屏
+const COLORS = new Set(['yellow', 'pink', 'green', 'blue']);
+// 书封只有这八个（COVERS）
+const COVERS = ['ink', 'sage', 'rose', 'cream', 'night', 'rust', 'bone', 'slate'];
+
+const safeColor = (c) => (COLORS.has(String(c)) ? String(c) : 'yellow');
+// 没指定书封时按 id 稳定地挑一个，别每次刷新都换颜色
+const safeCover = (c, id) => {
+  if (COVERS.includes(String(c))) return String(c);
+  let h = 0;
+  for (const ch of String(id ?? '')) h = (h * 31 + ch.codePointAt(0)) % 997;
+  return COVERS[h % COVERS.length];
+};
+const hhmm = (ms) => {
+  const d = new Date(ms);
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+};
+
 // 书架前端所在的目录（里面要有 index.html）。
-// 在服务器上 git clone nest-bookshelf-ui 之后把路径填进 BOOKS_UI_DIR。
 // 没配就不挂这一页，菜单里显示灰色「没配置」。
 export function booksUiDir() {
   const raw = String(process.env.BOOKS_UI_DIR ?? '').trim();
@@ -74,55 +101,64 @@ export function booksUiDir() {
 
 // 晨暮星的配色盖到书架上。只改颜色，不动布局、字体、圆角和动效——
 // 那些是原作调好的，按它 README 的说法该原样用。
-// 变量名按常见写法都写一遍，哪个存在哪个生效。
 const SKIN_CSS = `
   html:root {
-    --ink: #2b2233; --ink-soft: #4a3d52; --text: #2b2233; --fg: #2b2233;
-    --muted: #665a70; --sub: #665a70; --faint: #b9adbf;
-    --accent: #7a3e5d; --accent-soft: #9b4a7a; --primary: #7a3e5d; --brand: #7a3e5d;
-    --gold: #b7792f; --rose: #9b4a7a;
-    --bg: #f9f0ee; --page: #f9f0ee; --surface: #fffdfb; --card: #fffdfb; --paper: #fffdfb;
-    --line: #eadfe6; --border: #eadfe6; --hairline: rgba(122, 62, 93, 0.14);
+    --text: #2b2233; --text2: #665a70; --text3: #9b8fa6;
+    --accent: #7a3e5d; --on-accent: #fffdfb;
+    --bg: #f9f0ee; --bg2: #f1e7ee; --card: #fffdfb;
+    --line: #eadfe6; --line-strong: #d9c9d4; --card-line: #eadfe6;
   }
-  html[data-dark]:root {
-    --ink: #f3eefa; --ink-soft: #ded4ea; --text: #f3eefa; --fg: #f3eefa;
-    --muted: #c4b8d4; --sub: #c4b8d4; --faint: #9a8ead;
-    --accent: #ecb0ce; --accent-soft: #d7799f; --primary: #ecb0ce; --brand: #ecb0ce;
-    --gold: #f0c880; --rose: #ecb0ce;
-    --bg: #231c3c; --page: #231c3c; --surface: #3c2f52; --card: #3c2f52; --paper: #3c2f52;
-    --line: #604e76; --border: #604e76; --hairline: rgba(236, 176, 206, 0.18);
+  html[data-theme="dark"]:root {
+    --text: #f3eefa; --text2: #c4b8d4; --text3: #9a8ead;
+    --accent: #ecb0ce; --on-accent: #231c3c;
+    --bg: #231c3c; --bg2: #2e2548; --card: #3c2f52;
+    --line: #4b3d63; --line-strong: #604e76; --card-line: #4b3d63;
   }
-  /* 书架自己的底色跟晨暮星的渐变走 */
-  html, html body { background: linear-gradient(180deg, var(--bg1, #efe7f4) 0%, var(--bg2, #f9f0ee) 55%, var(--bg3, #fdf8f2) 100%) fixed; }
 `;
 
-// 把它写进 localStorage 的那几个函数指到我们的 API。
+// ── 转接层 ──
 //
-// 为什么用 fetch 拦而不是改 bookshelf.jsx：改源码要重新 npm run build，
-// 而且原作每次更新都要再改一遍。拦 fetch 让它的代码一行不动，
-// 能跟着原作升级。代价是要跟它的 localStorage key 约定（nest_bookshelf_demo_*）。
-//
-// 具体做法：把 localStorage 的读写挂钩。它读 DEMO_STORAGE 时给服务器上的书，
-// 它写时同步回服务器。这样导书、写批注、改进度都自动落库。
+// 为什么挂 localStorage 而不是改 bookshelf.jsx：改源码要重新 npm run build，
+// 而且原作每次更新都要再改一遍。挂住让它的代码一行不动，能跟着原作升级。
+// 代价就是必须跟它的键名约定——也正是上面那个坑。
 const BRIDGE_SCRIPT = `(function () {
   var API = '${PREFIX}/api';
-  var SHELF_KEY = 'nest_bookshelf_demo_books_v1';
+  var SHELF_KEY = '${SHELF_KEY}';
+  var ANCHOR = /^nest_bookshelf_demo_reader_anchor_(.+)$/;
   var LS = window.localStorage;
   var origGet = LS.getItem.bind(LS);
   var origSet = LS.setItem.bind(LS);
 
-  // 同步读一次服务器上的书架。它的 loadDemoBooks() 是同步的，所以这里只能同步——
-  // 页面初始化就这么一下，之后都是异步。
-  function shelfSync() {
+  function xhr(method, url, body) {
     try {
       var x = new XMLHttpRequest();
-      x.open('GET', API + '/shelf', false);
-      x.send(null);
-      return x.status === 200 ? x.responseText : null;
+      x.open(method, url, false);
+      if (body != null) x.setRequestHeader('content-type', 'application/json');
+      x.send(body == null ? null : body);
+      return x.status >= 200 && x.status < 300 ? x.responseText : null;
     } catch (e) { return null; }
   }
 
-  var cached = shelfSync();
+  // 它的 loadDemoBooks() 是同步读的，所以开页这一下只能同步。之后都异步。
+  var serverText = xhr('GET', API + '/shelf');
+  var server = null;
+  try { server = JSON.parse(serverText); } catch (e) {}
+
+  // 迁移：服务器还空着、而这台设备本地已经有书，先把本地那份推上去。
+  // 不做这一步，她手机上已有的书会被服务器的空书架盖掉。
+  if (Array.isArray(server) && !server.length) {
+    var localText = origGet(SHELF_KEY);
+    var local = null;
+    try { local = JSON.parse(localText); } catch (e) {}
+    if (Array.isArray(local) && local.length) {
+      console.log('books: 服务器书架是空的，把本地这', local.length, '本推上去');
+      if (xhr('PUT', API + '/shelf', localText) != null) {
+        serverText = xhr('GET', API + '/shelf');
+      }
+    }
+  }
+
+  var cached = serverText;
 
   LS.getItem = function (k) {
     if (k === SHELF_KEY && cached) return cached;
@@ -131,25 +167,20 @@ const BRIDGE_SCRIPT = `(function () {
 
   LS.setItem = function (k, v) {
     origSet(k, v);
-    if (k !== SHELF_KEY) return;
-    cached = v;
-    // 整份书架回写服务器。不阻塞页面；失败只在控制台报一声，
-    // localStorage 里那份还在，不会因为网络丢东西
-    try {
-      fetch(API + '/shelf', {
-        method: 'PUT',
-        headers: { 'content-type': 'application/json' },
-        body: v
-      }).catch(function (e) { console.error('books: 同步到服务器失败', e); });
-    } catch (e) { console.error('books: 同步到服务器失败', e); }
-  };
-
-  // 进度：它把每本书的阅读位置单独存成 nest_bookshelf_demo_reader_anchor_<id>。
-  // 这个要单独同步，因为他和她各自一条线（这边是她那条）。
-  var ANCHOR = /^nest_bookshelf_demo_reader_anchor_(.+)$/;
-  var origSet2 = LS.setItem;
-  LS.setItem = function (k, v) {
-    origSet2(k, v);
+    if (k === SHELF_KEY) {
+      cached = v;
+      // 整份回写。不阻塞页面；失败只在控制台报一声，本地那份还在，不会丢东西
+      try {
+        fetch(API + '/shelf', {
+          method: 'PUT',
+          headers: { 'content-type': 'application/json' },
+          body: v,
+        }).catch(function (e) { console.error('books: 同步到服务器失败', e); });
+      } catch (e) { console.error('books: 同步到服务器失败', e); }
+      return;
+    }
+    // 阅读位置：它每本书单独存一条 reader_anchor_<id>，形状 {paraIdx, offset}。
+    // 单独同步，因为他和她各自一条线（这边是她那条）
     var m = ANCHOR.exec(k);
     if (!m) return;
     try {
@@ -158,35 +189,29 @@ const BRIDGE_SCRIPT = `(function () {
       fetch(API + '/progress', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ book: m[1], paraIdx: a.paraIdx, offset: a.offset || 0 })
+        body: JSON.stringify({ book: m[1], paraIdx: a.paraIdx, offset: a.offset || 0 }),
       }).catch(function () {});
     } catch (e) {}
   };
 })();`;
 
-function escapeHtml(v) {
-  return String(v ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
-
-// 把晨暮星的外框、配色和转接层注进它的 index.html。
-// 它的代码一行不改，只往 head 和 body 里添东西。
+// 把晨暮星的外框、配色和转接层注进它的 index.html。它的代码一行不改。
 function renderShell(html) {
   const f = faceAt();
   const dark = f.face === 'night' || f.face === 'dusk';
-  // 主路：用它自己文档化的 theme 参数。早晚四张脸 → 浅色/深色两套
-  const themeInit = `<script>try{var u=new URL(location.href);if(!u.searchParams.get('theme')){u.searchParams.set('theme','${dark ? 'dark' : 'light'}');location.replace(u.href);}}catch(e){}</script>`;
+  // 主路：用它自己文档化的 theme 参数。早晚四张脸 → 浅色/深色两套。
+  // 它读的是 document.documentElement.dataset.theme，所以直接设 data-theme，
+  // 不改地址栏、也不触发跳转（原来用 location.replace 会把 #hash 路由搞乱）
+  const themeInit =
+    `<script>try{var p=new URLSearchParams(location.search).get('theme');` +
+    `document.documentElement.dataset.theme=p==='light'||p==='dark'?p:'${dark ? 'dark' : 'light'}';}catch(e){}</script>`;
 
   let out = html;
   const style = `<style id="vesper-skin">${CHROME_CSS}${SKIN_CSS}</style>`;
   const headEnd = out.search(/<\/head>/i);
-  const headInject = `${themeInit}${style}`;
-  out = headEnd >= 0 ? out.slice(0, headEnd) + headInject + out.slice(headEnd) : headInject + out;
+  out = headEnd >= 0 ? out.slice(0, headEnd) + themeInit + style + out.slice(headEnd) : themeInit + style + out;
 
-  // 转接层要在它自己的脚本跑之前装好（它 loadDemoBooks() 是初始化时同步读的），
+  // 转接层要在它自己的脚本跑之前装好（loadDemoBooks() 是初始化时同步读的），
   // 所以挤在 body 开头，不是 </body> 前
   const menu = renderMenu(`${PREFIX}`, { fixed: true });
   const bridge = `<script id="vesper-books-bridge">${BRIDGE_SCRIPT}</script>`;
@@ -200,62 +225,81 @@ function renderShell(html) {
 
 // ── 把库里的书排成它认的形状 ──
 //
-// 它的约定（README）：正文在 text[0].paragraphs，目录项的 paraIdx 指段落索引，
-// 批注带段落索引、段内字符范围、颜色、作者、日期和回复列表。
+// 字段照抄 bookshelf.jsx 的 demoBook()。少给字段会出事：loadDemoBooks() 校验
+// 每本书都要有 id/title/annotations/text，有一本不合格就整份判为无效、
+// 退回 DEFAULT_BOOKS——也就是又看见那六本示例。
 function toShelfJson() {
   return listBooks().map((b) => {
     const total = paragraphCount(b.id);
-    const paras = paragraphs(b.id, 0, Math.max(1, total)).map((p) => p.text);
+    const paras = total ? paragraphs(b.id, 0, total).map((p) => p.text) : [];
     const hers = progressOf(b.id, 'user');
+    const read = Math.min(hers.para_idx, Math.max(0, total));
     const anns = annotationsIn(b.id, 0, Math.max(0, total - 1)).map((a) => ({
       id: String(a.id),
+      author: a.author === 'assistant' ? 'ai' : 'me',
+      chapter: 1,
+      page: Math.floor(a.para_idx / 30) + 1,
       paraIdx: a.para_idx,
       rangeStart: a.range_start ?? 0,
-      rangeEnd: a.range_end ?? 0,
-      quote: a.quote ?? '',
+      rangeEnd: a.range_end ?? (a.quote ? Array.from(a.quote).length : 0),
+      color: safeColor(a.color),
+      text: a.quote ?? '',
       note: a.note ?? '',
-      color: a.color ?? 'amber',
-      author: a.author === 'assistant' ? 'ai' : 'me',
-      date: new Date(a.created_at).toISOString().slice(0, 10),
-      replies: repliesOf(a.id).map((r) => ({
-        id: String(r.id),
+      date: formatDate(a.created_at),
+      createdAt: a.created_at,
+      comments: repliesOf(a.id).map((r) => ({
         author: r.author === 'assistant' ? 'ai' : 'me',
-        content: r.content,
-        date: new Date(r.created_at).toISOString().slice(0, 10),
+        date: formatDate(r.created_at),
+        time: hhmm(r.created_at),
+        text: r.content,
       })),
     }));
     return {
       id: b.id,
       title: b.title,
       author: b.author ?? '',
-      cover: b.cover ?? 'slate',
-      status: b.status,
+      description: '',
+      cover: safeCover(b.cover, b.id),
+      status: b.status === 'finished' ? 'finished' : 'reading',
+      progress: b.status === 'finished' ? 1 : total ? Math.min(1, read / total) : 0,
+      currentPage: Math.max(1, Math.floor(read / 30) + 1),
+      totalPages: Math.max(1, Math.ceil(total / 30)),
+      addedAt: formatDate(b.added_at),
+      lastReadAt: formatDate(hers.updated_at ?? b.added_at),
+      _lastReadMs: hers.updated_at ?? b.added_at,
+      finishedAt: b.finished_at ? formatDate(b.finished_at) : null,
+      toc: tocOf(b.id).map((t) => ({
+        title: t.title,
+        page: Math.floor(t.para_idx / 30) + 1,
+        paraIdx: t.para_idx,
+      })),
       annotations: anns,
-      text: [{ paragraphs: paras }],
-      toc: tocOf(b.id).map((t) => ({ title: t.title, paraIdx: t.para_idx })),
-      lastRead: hers.updated_at ?? null,
-      readerAnchor: { paraIdx: hers.para_idx, offset: hers.offset },
+      text: [{ chapter: 1, page: 1, paragraphs: paras }],
     };
   });
 }
 
 // 整份书架回写。它每次 persistShelf() 都是整份写，所以这边做差分：
-// 新的书加进来、改过名的改名、没了的删掉、新批注写进去。
+// 新书加进来、改过名的改名、没了的删掉、新批注和新回复写进去。
 //
-// 为什么不简单全删重建：那样他的阅读进度和批注 id 每次都会变，
-// 而他的进度是按 book_id 存的——她在网页上随便动一下就把他读到哪里洗掉了。
+// 为什么不简单全删重建：那样批注 id 每次都变，而他的阅读进度按 book_id 存——
+// 她在网页上随便动一下就把他读到哪里洗掉了。
 function applyShelfJson(list) {
   if (!Array.isArray(list)) throw new Error('书架要是一个数组');
   const seen = new Set();
   let added = 0;
   let notes = 0;
+  let replies = 0;
 
   for (const b of list) {
     const id = String(b?.id ?? '').trim();
     if (!id) continue;
     seen.add(id);
     const existing = getBook(id);
-    const paras = Array.isArray(b?.text?.[0]?.paragraphs) ? b.text[0].paragraphs : [];
+    // 正文在 text[0].paragraphs；它的段落是字符串数组
+    const paras = (Array.isArray(b?.text?.[0]?.paragraphs) ? b.text[0].paragraphs : []).map((p) =>
+      typeof p === 'string' ? p : String(p?.text ?? '')
+    );
 
     if (!existing) {
       if (!paras.length) continue; // 没正文的不收
@@ -276,35 +320,57 @@ function applyShelfJson(list) {
       if (want !== existing.status) setBookStatus(id, want);
     }
 
-    // 批注：没有数字 id 的是她刚在网页上新建的
     const total = paragraphCount(id);
-    const known = new Set(annotationsIn(id, 0, Math.max(0, total - 1)).map((a) => a.id));
+    const mine = new Map(annotationsIn(id, 0, Math.max(0, total - 1)).map((a) => [a.id, a]));
+
     for (const a of Array.isArray(b.annotations) ? b.annotations : []) {
       const numeric = Number(a?.id);
-      if (Number.isInteger(numeric) && known.has(numeric)) {
-        // 已有的：只看回复里有没有新的
+      // 数字 id 是我们发下去的；它新建的是 "an_1760..." 这种
+      if (Number.isInteger(numeric) && mine.has(numeric)) {
+        // 已有的：只补新回复。comments 是它的字段名，不是 replies
         const have = repliesOf(numeric).length;
-        const incoming = Array.isArray(a.replies) ? a.replies : [];
-        for (const r of incoming.slice(have)) {
+        const incoming = Array.isArray(a.comments) ? a.comments : [];
+        for (const c of incoming.slice(have)) {
+          const text = String(c?.text ?? '').trim();
+          if (!text) continue;
           addReply({
             annotationId: numeric,
-            author: r?.author === 'ai' ? 'assistant' : 'user',
-            content: String(r?.content ?? ''),
+            author: c?.author === 'ai' ? 'assistant' : 'user',
+            content: text,
           });
+          replies++;
         }
         continue;
       }
-      addAnnotation({
+      const newId = addAnnotation({
         bookId: id,
         paraIdx: Number(a?.paraIdx) || 0,
         rangeStart: Number.isInteger(Number(a?.rangeStart)) ? Number(a.rangeStart) : null,
         rangeEnd: Number.isInteger(Number(a?.rangeEnd)) ? Number(a.rangeEnd) : null,
-        quote: a?.quote ?? null,
+        quote: a?.text ?? null, // 它的引文字段叫 text
         note: a?.note ?? null,
-        color: a?.color ?? null,
+        color: safeColor(a?.color),
         author: a?.author === 'ai' ? 'assistant' : 'user',
       });
       notes++;
+      for (const c of Array.isArray(a?.comments) ? a.comments : []) {
+        const text = String(c?.text ?? '').trim();
+        if (!text) continue;
+        addReply({
+          annotationId: newId,
+          author: c?.author === 'ai' ? 'assistant' : 'user',
+          content: text,
+        });
+        replies++;
+      }
+    }
+
+    // 她在网页上读到哪了：阅读器会把 progress 写进书对象再整份回写
+    const progress = Number(b?.progress);
+    if (total && Number.isFinite(progress) && progress > 0) {
+      const para = Math.max(0, Math.min(total, Math.round(progress * total)));
+      const now = progressOf(id, 'user');
+      if (para > now.para_idx) setProgress(id, 'user', para, 0);
     }
   }
 
@@ -316,7 +382,7 @@ function applyShelfJson(list) {
       removed++;
     }
   }
-  return { added, notes, removed };
+  return { added, notes, replies, removed };
 }
 
 export function registerBookRoutes(app, { requireBasicAuth }) {
@@ -335,8 +401,10 @@ export function registerBookRoutes(app, { requireBasicAuth }) {
   app.put(`${PREFIX}/api/shelf`, requireBasicAuth, (req, res) => {
     try {
       const out = applyShelfJson(req.body);
-      if (out.added || out.notes || out.removed) {
-        console.log(`books: 书架同步——新书 ${out.added}、新批注 ${out.notes}、删了 ${out.removed}`);
+      if (out.added || out.notes || out.replies || out.removed) {
+        console.log(
+          `books: 书架同步——新书 ${out.added}、新批注 ${out.notes}、新回复 ${out.replies}、删了 ${out.removed}`
+        );
       }
       res.json({ ok: true, ...out });
     } catch (err) {
@@ -355,7 +423,7 @@ export function registerBookRoutes(app, { requireBasicAuth }) {
     res.json({ ok: true });
   });
 
-  // 单条批注删除（它的 removeUserAnnotation 会走整份回写，这条是给以后用的）
+  // 单条批注删除（它的 removeUserAnnotation 走整份回写，这条是给以后用的）
   app.delete(`${PREFIX}/api/annotations/:id`, requireBasicAuth, (req, res) => {
     const id = Number(req.params.id);
     if (!Number.isInteger(id)) return res.status(400).json({ error: 'id 要是数字' });
@@ -378,17 +446,22 @@ export function registerBookRoutes(app, { requireBasicAuth }) {
     }
   });
 
-  // 它的其他静态文件（头像、preview.png 这些）。index.html 不走这条，
-  // 上面那条已经接走了；这边排在后面，只服务剩下的
-  app.use(PREFIX, requireBasicAuth, (req, res, next) => {
-    if (/^\/api(\/|$)/.test(req.path)) return next();
-    if (/^\/?index\.html$/i.test(req.path)) return res.redirect(302, PREFIX);
-    return next();
-  }, (() => {
-    // express.static 在这个模块里没直接 import express，从 app 上取
-    const expressStatic = app.get('books:static');
-    return expressStatic || ((req, res) => res.status(404).send('没有这个文件'));
-  })());
+  // 它的其他静态文件（preview.png 这些）。index.html 不走这条，上面已经接走了
+  app.use(
+    PREFIX,
+    requireBasicAuth,
+    (req, res, next) => {
+      if (/^\/api(\/|$)/.test(req.path)) return next();
+      if (/^\/?index\.html$/i.test(req.path)) return res.redirect(302, PREFIX);
+      return next();
+    },
+    (req, res, next) => {
+      // express.static 在这个模块里没直接 import express，从 app 上取
+      const serve = app.get('books:static');
+      if (typeof serve === 'function') return serve(req, res, next);
+      return res.status(404).send('没有这个文件');
+    }
+  );
 
   console.log(`books: 书架页面 ${PREFIX}，前端目录 ${dir}`);
   return { enabled: true, api: true, dir };
