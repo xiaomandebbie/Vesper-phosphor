@@ -194,8 +194,7 @@ try {
   console.log(`  现在库里有 ${left} 条批注、${lr} 条回复。`);
 } catch (err) {
   console.error('  清理没做成：' + err.message);
-  console.error('  要是报数据库锁住，先 pm2 stop vesper，跑完这个脚本再 
-pm2 start vesper。');
+  console.error('  要是报数据库锁住，先 pm2 stop vesper，跑完这个脚本再 pm2 start vesper。');
 }
 
 console.log('');
