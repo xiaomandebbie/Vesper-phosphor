@@ -12,13 +12,18 @@
 // 顺序就退回数组原序。后端已经按 created_at 倒序给了，所以现在不会乱；
 // 但把 time 加进比较，这一层自己也站得住，不再依赖上游顺序。
 //
+// 2026-10-19 第二版：1810 行那个锚点我写错了。它的 kind 是
+//   kind: annotation.note ? "批注" : "高亮"
+// 两种都走这一行，不是固定字串「批注」。上一版找不到原文，按设计把
+// 前三处也一起还原了，所以文件是干净的，这版直接跑就行。
+//
 // 改完要重新 build：页面实际加载的是 index.html（build 产物），bookshelf.jsx 是源码。
 // 不用重启 vesper——books-page.js 每次请求都重新 readFileSync 读 index.html，
 // build 完刷页就生效。
 //
 // 跑法（在 /root/vesper-phosphor 下）：
 //   node scripts/show_annotation_time.mjs
-//   然后刷一下 /books（强刷，或者关掉标签页重开）
+//   然后强刷 /books（或者关掉标签页重开）
 
 import fs from 'fs';
 import path from 'path';
@@ -61,11 +66,12 @@ const EDITS = [
       '· {relDate(existing.date)}{existing.time ? " " + existing.time : ""}{isMine && !editingNote ? " · 双击修改" : ""}',
   },
   {
+    // 上一版这里写成了 kind: "批注"，实际是三元表达式（批注/高亮）
     what: '「我的批注」列表：把 time 带过去（1940 行本来就会拼）',
-    done: 'kind: "批注", date: annotation.date || "", time: annotation.time',
-    find: 'kind: "批注", date: annotation.date || "" });',
+    done: 'date: annotation.date || "", time: annotation.time',
+    find: 'kind: annotation.note ? "批注" : "高亮", date: annotation.date || "" });',
     replacement:
-      'kind: "批注", date: annotation.date || "", time: annotation.time || "" });',
+      'kind: annotation.note ? "批注" : "高亮", date: annotation.date || "", time: annotation.time || "" });',
   },
   {
     what: '排序把时分算进去（同一天不再比出 0）',
