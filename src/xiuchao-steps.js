@@ -14,8 +14,8 @@
 // 战斗里连着两次「近战主武器攻击 方位一」是正常打法，所以重复判定带上参数，
 // 不是只看工具名——参数一样才算转圈，而战斗每一步的方位通常会变。
 //
-// 行为卡片在这里记：锈潮是 mcp_call，走 activity.js 的 describeActivity，
-// 那边认得 xiuchao 这个 server（见 wire 脚本给它加的那几行说法）。
+// 行为卡片全在这边记，包括醒来选的那第一步：activity.js 对 xiuchao 返回 null
+// （否则卡片上就是「用了 xiuchao 的 panel」这种说不清干了什么的话）。
 
 import { askJson } from './decide.js';
 import { callTool } from './mcp-manager.js';
@@ -51,7 +51,9 @@ function clip(value, n) {
 function label(tool, args) {
   const a = args && typeof args === 'object' ? args : {};
   if (tool === 'join') return a['名字'] ? '在锈潮报了名字' : '在锈潮的门口站了一会儿';
-  if (tool === 'panel') return a['动作'] ? `在锈潮${a['动作']}了「${a['物品'] ?? ''}」` : '看了一眼自己在锈潮的样子';
+  if (tool === 'panel') {
+    return a['动作'] ? `在锈潮${a['动作']}了「${a['物品'] ?? ''}」` : '看了一眼自己在锈潮的样子';
+  }
   if (tool === 'home') {
     if (a['种子']) return `在院子里种下了${a['种子']}`;
     if (a['收割']) return '把院子里长熟的收了';
@@ -105,6 +107,9 @@ async function nextStep(messages, { tool, resultText, isError, remaining }) {
 export async function continueXiuchao(decision, firstResult, messages) {
   const call = xiuchaoCallOf(decision);
   if (!call) return;
+
+  // 醒来选的那第一步也在这里记卡片（activity.js 对 xiuchao 不记）
+  card(call.tool, call.args, firstResult);
   if (!XIUCHAO_MAX_STEPS || !messages) return;
 
   const key = (tool, args) => `${tool}|${JSON.stringify(args ?? {})}`;
