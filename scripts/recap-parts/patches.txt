@@ -208,14 +208,24 @@ export async function continueBooks(decision, firstResult, messages) {
     finishCard({ title, fromIdx, toIdx, steps });
 <<<END
 
+# 这一条的锚点按服务器实际文本改过（2026-10-19 17:07）。
+# fix_books_sitting.mjs 已经在位，收尾那段现在是：
+#   finishCard(...);
+#   const done = readSoFar();
+#   if (done >= BOOKS_SITTING_MAX) { … }
+#   console.log(`books: 这次翻了 ${steps} 小段、共 ${done} 段`);
+# 所以不能再拿「finishCard 紧跟 这次翻了」做锚点。
+# 改用 finishCard + const done 这两行：它在文件里只有一处
+# （读到尾那条路的 finishCard 后面跟的是 console.log，不是 const done）。
+# writeRecap 摆在 finishCard 之后：卡片先落地，写前情要调一次模型，慢几秒。
 <<<PATCH steps 收尾写前情
 <<<FIND
   finishCard({ title, fromIdx, toIdx, steps });
-  console.log(`books: 这次翻了 ${steps} 小段`);
+  const done = readSoFar();
 <<<REPLACE
-  await writeRecap(firstResult.bookId, fromIdx, toIdx);
   finishCard({ title, fromIdx, toIdx, steps });
-  console.log(`books: 这次翻了 ${steps} 小段`);
+  await writeRecap(firstResult.bookId, fromIdx, toIdx);
+  const done = readSoFar();
 <<<END
 
 <<<PATCH page 他的名字
