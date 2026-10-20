@@ -4,35 +4,45 @@
 
 ## 本项目负责什么
 
-晨暮星负责醒来、做决定、执行动作、那些页面，以及把下面这些独立项目接进来的那部分代码和步骤。它们本身怎么安装、怎么配置、原理是什么，看各自的仓库。
+晨暮星负责醒来、做决定、执行动作、那些页面，以及把下面这些**别人写的**项目接进来的那部分代码和步骤。它们本身怎么安装、怎么配置、原理是什么，看各自的仓库。
 
-### 别人的项目（原作者与原库）
+> ⚠️ **下面列的全部不是本项目的作品。** 本仓库所有者只是 fork 或接入了它们。每一个都有自己的作者和许可证，署名和条款以它们仓库里的为准。用之前请自己读一遍对应的 LICENSE / NOTICE。
 
-| 项目 | 原作者 | 是什么 | 接进晨暮星之后 | 接法 |
-|---|---|---|---|---|
-| [Ombre Brain](https://github.com/P0luz/Ombre-Brain) | [@P0luz](https://github.com/P0luz) | 长期记忆 | 醒来时先读记忆；TA 可以自己搜、自己存；管理页转发成记忆库 `/memory/` | [07](docs/07-mcp.md) |
-| [Drivesoid](https://github.com/A1batr055/Drivesoid) | [@A1batr055](https://github.com/A1batr055) | 情绪状态 | 聊天自动上报；醒来时参考当前情绪；心绪页 `/drives` | [09](docs/09-drivesoid.md) |
-| [dylan-heartbeat](https://github.com/callie0313/dylan-heartbeat) | [@callie0313](https://github.com/callie0313) | 另一个唤醒项目 | 两边共享「做过什么」的事件；它写的日记在日记页 `/diary` 看 | [08](docs/08-heartbeat.md) |
-| [Music-Mcp-Netease](https://github.com/Anko3o/Music-Mcp-Netease) | [@Anko3o](https://github.com/Anko3o) | 网易云播放器 + 点歌台 MCP | 菜单里的「音乐」跳到播放器；TA 醒来能看你在听什么、收歌、写批注（不会放歌） | [下面](#-音乐) |
-| [NEST 书架 UI](https://github.com/nonchaiovo/nest-bookshelf-ui) | [@nonchaiovo](https://github.com/nonchaiovo) | 书架 / 阅读器前端 | 共读书架 `/books` 的界面；晨暮星给它接了真的后端，两个人共用一份进度和批注 | [下面](#-共读书架-books) |
+### 接进来的项目
 
-> NEST 书架 UI 是**个人非商业使用许可**：不得商用、不得打包再发布，公开展示必须署名并链接原仓库。`/books` 页面和 `src/books-page.js` 顶部的署名是许可要求的，不要删。
+| 项目 | 作者 | 许可证 | 是什么 / 接进来之后 |
+|---|---|---|---|
+| [Ombre Brain](https://github.com/P0luz/Ombre-Brain) | [@P0luz](https://github.com/P0luz) | 见其仓库 | 长期记忆。醒来时先读记忆；TA 可以自己搜、自己存；管理页转发成 `/memory/` |
+| [Drivesoid](https://github.com/A1batr055/Drivesoid) | [@A1batr055](https://github.com/A1batr055) | 见其仓库 | 情绪状态。聊天自动上报；醒来时参考当前情绪；心绪页 `/drives` |
+| [dylan-heartbeat](https://github.com/callie0313/dylan-heartbeat) | [@callie0313](https://github.com/callie0313) | 见其仓库 | 另一个唤醒项目。两边共享「做过什么」的事件；它写的日记在 `/diary` 看 |
+| [Music-Mcp-Netease](https://github.com/Anko3o/Music-Mcp-Netease) | [@Anko3o](https://github.com/Anko3o) | 见其仓库 | 网易云播放器 + 点歌台 MCP。菜单里的「音乐」跳到播放器；TA 醒来能看你在听什么、收歌、写批注（不放歌） |
+| [NEST 书架 UI](https://github.com/nonchaiovo/nest-bookshelf-ui) | [@nonchaiovo](https://github.com/nonchaiovo) | **个人非商业使用许可** | 书架 / 阅读器前端。共读 `/books` 的界面；晨暮星给它接了后端，两个人共用一份进度和批注 |
+| [Proof](https://github.com/lumingye/Proof) | [@lumingye](https://github.com/lumingye) | **PolyForm Noncommercial 1.0.0**（含附加条款） | 给 AI 角色用的吧台状态引擎。TA 醒来能给自己斟一杯，也能递一杯给你；时间轴在 `/bar` |
+| [WORKKK / AI 上班模拟器](https://github.com/zhizhou-xiee/workkk) | 谢之舟 [@zhizhou-xiee](https://github.com/zhizhou-xiee) | **AGPL-3.0-or-later**（含 §7 附加条款） | 小游戏。TA 可以去上班，一次上完游戏里的一天 |
+| [rainholm-garden](https://github.com/wuxuyun0606-collab/rainholm-garden) | suwanblue & Kelin & Guchen | MIT（自写代码）＋**随包引擎禁商用** | 小游戏。TA 可以去照看花园，动了土就结束这一轮 |
+| [Night-Fall](https://github.com/ysuu525/Night-Fall) | [@ysuu525](https://github.com/ysuu525) | MIT | 夜梦。TA 夜里会做梦，醒来只记得主旋律和一句只言片语 |
+| Serein | ChiYouyu | MIT | 夜梦的另一半（原库地址待补，署名取自其 LICENSE） |
+| [cove-sticker-mcp](https://github.com/moonlin1213/cove-sticker-mcp) | [@moonlin1213](https://github.com/moonlin1213) | MIT | 表情包。聊天里能发表情包 |
+| [ios-web-push](https://github.com/Cheiineeey/ios-web-push) | [@Cheiineeey](https://github.com/Cheiineeey) | **AGPL-3.0** | PWA 通知。iOS 上不装 App 也能收推送 |
+| [cove-resonance](https://github.com/yanceydaisy/cove-resonance) | [@yanceydaisy](https://github.com/yanceydaisy) | 见其仓库 | 一起听 |
 
-### 周边项目（同一个人写的，可选）
-
-| 项目 | 是什么 | 接进来之后 |
-|---|---|---|
-| [Proof](https://github.com/xiaomandebbie/Proof) | 小酒馆 | TA 醒来能给自己斟一杯，也能递一杯给你；时间轴在 `/bar` |
-| [Serein](https://github.com/xiaomandebbie/Serein) · [Night-Fall](https://github.com/xiaomandebbie/Night-Fall) | 夜梦 | TA 夜里会做梦；醒来只记得主旋律和一句只言片语 |
-| [work-game](https://github.com/xiaomandebbie/work-game) | 小游戏「workkkk」 | TA 可以去上班，一次上完游戏里的一天 |
-| [rainholm-garden](https://github.com/xiaomandebbie/rainholm-garden) | 小游戏「花园」 | TA 可以去照看花园，动了土就结束这一轮 |
-| [cove-sticker-mcp](https://github.com/xiaomandebbie/cove-sticker-mcp) | 表情包 | 聊天里能发表情包 |
-| [netease-music-mcp](https://github.com/xiaomandebbie/netease-music-mcp) · [cove-resonance](https://github.com/yanceydaisy/cove-resonance) | 共用账号 / 一起听 | 音乐那一套的另外两块 |
-| [ios-web-push](https://github.com/xiaomandebbie/ios-web-push) | PWA 通知 | iOS 上不装 App 也能收推送 |
-
-还有一个「锈潮」通过 MCP 接进来，一次最多再走 8 步。
+还有「锈潮」通过 MCP 接进来，一次最多再走 8 步。
 
 **全都是可选的，一个都不接也能跑。**
+
+### 几个必须照做的条款
+
+这几条不是建议，是上游许可写明的义务：
+
+- **NEST 书架 UI**：不得商用、不得打包再发布，**公开展示必须署名并链接原仓库**。`/books` 页面和 `src/books-page.js` 顶部的署名是许可要求的，不要删
+- **WORKKK**：AGPL-3.0-or-later。NOTICE 里按 GPLv3 §7(b) 要求，**运行界面必须保留可见的作者署名和取得对应源码的链接**；§7(c) 要求修改版醒目标明「基于 WORKKK 修改」、修改日期和主要修改内容，不得谎称来源；§13 要求通过网络供他人使用时向远程用户提供那一版源码
+- **ios-web-push**：AGPL-3.0，同样有 §13 的网络条款
+- **Proof**：PolyForm Noncommercial，**非商用**；再分发时必须带上 `Required Notice: Copyright (c) 2026 lumingye`。另有「不得用于恶意用途 / 不得发布恶意修改版」的附加条款
+- **rainholm-garden**：它自写的代码是 MIT，但**随包的游戏引擎（vendor/aifarm）禁商用**，美术、字体、图标、猫角色形象各有各的许可 —— 整包合起来按禁商用算，逐项见它的 NOTICE
+
+> 合起来的结论：**这套东西整体只能非商用**，而且 WORKKK 和 ios-web-push 那两条 AGPL 意味着你改过的版本如果让别人通过网络用，得能把源码给到对方。
+>
+> **待办**：`/games/workkk` 那个页面得检查一遍，有没有保留 WORKKK 的可见作者署名和源码链接 —— 这是 §7(b) 的硬要求，不是可选项。
 
 ## 三个进程
 
@@ -44,7 +54,7 @@
 
 三个进程共用一个数据库 `data/state.db`。
 
-> **改完代码别重启错进程。** 唤醒链（`decide.js`、`budget.js`、`run-actions.js`、`actions/`）跑在 **phosphor** 里；页面（`*-page.js`、`books.js` 这些）跑在 **vesper** 里。改了唤醒逻辑却只重启 vesper，等于什么都没做——建表语句和提示词都还是旧的。
+> **改完代码别重启错进程。** 唤醒链（`decide.js`、`budget.js`、`run-actions.js`、`actions/`）跑在 **phosphor** 里；页面（`*-page.js`、`books.js` 这些）跑在 **vesper** 里。改了唤醒逻辑却只重启 vesper，等于什么都没做 —— 建表语句和提示词都还是旧的。
 
 ## 📚 文档
 
@@ -178,7 +188,7 @@ pm2 logs phosphor --lines 40 --nostream | grep 最长唤醒间隔
 
 ## 🌌 夜梦
 
-TA 夜里会做梦（[Serein](https://github.com/xiaomandebbie/Serein) / [Night-Fall](https://github.com/xiaomandebbie/Night-Fall)）。
+TA 夜里会做梦（[Serein](https://github.com/xiaomandebbie/Serein) / [Night-Fall](https://github.com/ysuu525/Night-Fall)，都不是本项目写的，见上面的署名表）。
 
 - 梦在**凌晨 3–9 点**之间生成，一晚有配额，梦有寿命（默认 48 小时），过期就消散
 - **梦的正文不在 TA 这边**。醒来时它只知道自己做过梦，以及主旋律（好梦 / 噩梦 / 说不上好坏）加一句只言片语——和你在页面上看到的一样多
@@ -188,14 +198,14 @@ TA 夜里会做梦（[Serein](https://github.com/xiaomandebbie/Serein) / [Night-
 
 ## 📖 共读书架 `/books`
 
-一个两个人共用的书架。界面是 [@nonchaiovo](https://github.com/nonchaiovo) 的 [NEST 书架 UI](https://github.com/nonchaiovo/nest-bookshelf-ui)，晨暮星给它接了真的后端。
+一个两个人共用的书架。界面是 [@nonchaiovo](https://github.com/nonchaiovo) 的 [NEST 书架 UI](https://github.com/nonchaiovo/nest-bookshelf-ui)（**不是本项目的作品**，个人非商业许可，署名不能删），晨暮星给它接了真的后端。
 
 - 书是你导进来的（EPUB / PDF / TXT 在浏览器里解析，解析完把段落传上来）
-- 你们**读同一份正文、共享同一份批注，但各自读到哪里是两条线**。书架卡上两条进度都显示：「小满 读到 32%（第 120 段）· 允朔 读到 18%（第 67 段）」
+- 你们**读同一份正文、共享同一份批注，但各自读到哪里是两条线**。书架卡上两条进度都显示
 - 批注是共享的：你在某段旁边写的话，TA 读到那段时看得见，可以回。TA 写的你也看得见
 - 批注**按写的时间倒序排，并且显示到分钟**。（原来只排到「天」，同一天写的几条比较结果相等，顺序就退回成按书里的位置排——所以看起来是乱的）
 - 定位用**段落号**，不用页码：改字号或宽度就会重新分页，页码不是稳定坐标
-- TA 读一次给 `BOOKS_CHUNK` 段，读完进度推到那儿，下次接着读。一天 `BOOKS_DAILY_MAX` 回，可读可不读
+- TA 一次读 `BOOKS_CHUNK` 段，读完进度推到那儿，下次接着读。一天 `BOOKS_DAILY_MAX` 回，可读可不读
 - 聊天里读的和醒来时读的记同一份进度——因为只有一份记录
 
 ```bash
@@ -205,11 +215,11 @@ cd ~/vesper-phosphor && pm2 restart vesper phosphor --update-env
 
 > **改了前端要重新 build。** 页面加载的是 `index.html`（build 产物），`bookshelf.jsx` 只是源码。改完 `cd nest-bookshelf-ui && npm run build`，不然改了也看不见。
 >
-> 代价你得知道：导进来的书会上传到这台服务器（前端解析完把段落 POST 过来）。书架从「只在这台设备」变成「两个人同一份」。
+> 代价你得知道：导进来的书会上传到这台服务器。书架从「只在这台设备」变成「两个人同一份」。
 
 ## 🍸 小酒馆 `/bar`
 
-[Proof](https://github.com/xiaomandebbie/Proof) 接进来之后，TA 醒来可以给自己斟一杯，也可以调一杯**递给你**——递出来的是一个有时效的链接。
+[@lumingye](https://github.com/lumingye) 的 [Proof](https://github.com/lumingye/Proof)（**不是本项目的作品**，PolyForm Noncommercial）接进来之后，TA 醒来可以给自己斟一杯，也可以调一杯**递给你**——递出来的是一个有时效的链接。
 
 喝了什么、当时什么心情，都在 `/bar` 的时间轴里，不往动态里再塞一张卡。
 
@@ -225,15 +235,17 @@ TA 有一个自己的钱包，能看余额、看账、记一笔。走 MCP 接进
 
 ## 🎮 小游戏
 
-三件，都是 2 级「一整件事」，并且只在第二步「消遣」里出现：
+三件，都是 2 级「一整件事」，并且只在第二步「消遣」里出现。**三个都是别人写的**，署名见上面的表：
 
-| 游戏 | 一次做多少 |
-|---|---|
-| [上班 workkkk](https://github.com/xiaomandebbie/work-game) | 上完游戏里的一天（下班结算就停），一次最多再走 8 步 |
-| [花园](https://github.com/xiaomandebbie/rainholm-garden) | 一次最多再走 6 步，动了土就结束 |
-| 锈潮 | 一次最多再走 8 步 |
+| 游戏 | 作者 | 一次做多少 |
+|---|---|---|
+| [WORKKK 上班](https://github.com/zhizhou-xiee/workkk) | 谢之舟 [@zhizhou-xiee](https://github.com/zhizhou-xiee) · AGPL-3.0-or-later | 上完游戏里的一天（下班结算就停），一次最多再走 8 步 |
+| [rainholm-garden 花园](https://github.com/wuxuyun0606-collab/rainholm-garden) | suwanblue & Kelin & Guchen · 引擎禁商用 | 一次最多再走 6 步，动了土就结束 |
+| 锈潮 | 见其仓库 | 一次最多再走 8 步 |
 
 每件事都要走好几步才算完，所以单独一级、每次醒来最多一件。不想去就不去，没有「今天必须各去一次」这种规矩。
+
+> ⚠️ WORKKK 按 AGPL §7(b) 要求运行界面保留可见作者署名和源码链接。接它的页面别把那块抹掉。
 
 ## ⏰ 约时间（精确唤醒 MCP）
 
@@ -253,7 +265,7 @@ cd ~/vesper-phosphor && pm2 restart vesper --update-env
 
 ## 📔 日记页 `/diary`
 
-heartbeat 醒来写的日记，换成晨暮星的样子看。只读，不改 heartbeat 的任何文件。
+[dylan-heartbeat](https://github.com/callie0313/dylan-heartbeat)（[@callie0313](https://github.com/callie0313) 写的，不是本项目）醒来写的日记，换成晨暮星的样子看。只读，不改它的任何文件。
 
 - 日历和动态页一样，有日记的日子下面有个小金点
 - 一天里每次醒来写的一段算一篇，标着几点写的
@@ -268,7 +280,7 @@ cd ~/vesper-phosphor && pm2 restart vesper --update-env
 
 ## 🧠 记忆库 `/memory/`
 
-Ombre Brain 的管理页整个转发过来：浏览、搜索、改、删、设置都和原页面一样能用，只是换成晨暮星的配色。Ombre Brain 的代码一行没改，它怎么升级都不受影响。
+[Ombre Brain](https://github.com/P0luz/Ombre-Brain)（[@P0luz](https://github.com/P0luz) 写的，不是本项目）的管理页整个转发过来：浏览、搜索、改、删、设置都和原页面一样能用，只是换成晨暮星的配色。**它的代码一行没改**，怎么升级都不受影响。
 
 - 填了 `OMBRE_BRAIN_URL` 就自动开启。管理页在别的地址时填 `OMBRE_DASHBOARD_URL`，不想要填 `off`
 - 两道登录：先过 vesper 的 Basic Auth，再登 Ombre Brain 自己的密码
@@ -277,7 +289,7 @@ Ombre Brain 的管理页整个转发过来：浏览、搜索、改、删、设�
 
 ## 🎵 音乐
 
-菜单里的「音乐」跳到 [@Anko3o](https://github.com/Anko3o) 的 [Music-Mcp-Netease](https://github.com/Anko3o/Music-Mcp-Netease) 播放器。它自带的点歌台 MCP 接上以后，TA 醒来也能看你最近在听什么、把想让你听的歌收进歌单、在批注本里写一笔。
+菜单里的「音乐」跳到 [@Anko3o](https://github.com/Anko3o) 的 [Music-Mcp-Netease](https://github.com/Anko3o/Music-Mcp-Netease) 播放器（**不是本项目的作品**）。它自带的点歌台 MCP 接上以后，TA 醒来也能看你最近在听什么、把想让你听的歌收进歌单、在批注本里写一笔。
 
 播放器（默认 9090）和点歌台（默认 18012）是它仓库里的两个程序，怎么装、cookie 怎么拿看它的 README。两件事互不依赖，可以只接一个。
 
@@ -374,6 +386,8 @@ pm2 logs phosphor --lines 20 --nostream | grep 最长
 
 ## 待补充 / TODO
 
+- **检查 `/games/workkk` 有没有保留 WORKKK 的可见作者署名和源码链接**（AGPL §7(b) 的硬要求）
+- **补上 Serein 的原库地址**（作者 ChiYouyu 取自其 LICENSE，上游 URL 还没确认）
 - 菜单里的论坛只是外链，没有站内页面
 - 星星罐攒到几十颗以后会挤在一起（第 8 行之后不再往上长），要不要分页：待定
 - 纪念日先从页面上拿掉了，数据还在库里（`GET /wake/anniversaries` 能读）：待定
@@ -441,14 +455,28 @@ scripts/               一次性补丁脚本（每个都能重复跑，锚点对
 docs/                  详细文档（见上表）
 ```
 
-## 许可证
+## 许可证与署名
 
-本项目见 [LICENSE](LICENSE)。
+本仓库自己写的那部分见 [LICENSE](LICENSE)。
 
-接进来的外部项目各有各的许可证，以它们仓库里的为准：
+**下面这些项目都不是本项目的作品**，本仓库所有者只是 fork 或接入。各自的许可证以它们仓库里的为准，用之前请自己读一遍：
 
-- [NEST 书架 UI](https://github.com/nonchaiovo/nest-bookshelf-ui) · [@nonchaiovo](https://github.com/nonchaiovo) —— **个人非商业使用许可**：不得商用、不得打包再发布，公开展示必须署名并链接原仓库
-- [Ombre Brain](https://github.com/P0luz/Ombre-Brain) · [@P0luz](https://github.com/P0luz)
-- [Drivesoid](https://github.com/A1batr055/Drivesoid) · [@A1batr055](https://github.com/A1batr055)
-- [dylan-heartbeat](https://github.com/callie0313/dylan-heartbeat) · [@callie0313](https://github.com/callie0313)
-- [Music-Mcp-Netease](https://github.com/Anko3o/Music-Mcp-Netease) · [@Anko3o](https://github.com/Anko3o)
+| 项目 | 作者 | 许可证 | 要注意的 |
+|---|---|---|---|
+| [NEST 书架 UI](https://github.com/nonchaiovo/nest-bookshelf-ui) | [@nonchaiovo](https://github.com/nonchaiovo) | 个人非商业使用许可 | 不得商用、不得打包再发布；**公开展示必须署名并链接原仓库** |
+| [WORKKK / AI 上班模拟器](https://github.com/zhizhou-xiee/workkk) | 谢之舟 [@zhizhou-xiee](https://github.com/zhizhou-xiee) | AGPL-3.0-or-later ＋ §7 附加条款 | **运行界面必须保留可见作者署名和源码链接**；修改版须标明修改日期与内容，不得谎称来源；§13 网络条款 |
+| [Proof](https://github.com/lumingye/Proof) | [@lumingye](https://github.com/lumingye) | PolyForm Noncommercial 1.0.0 ＋ 附加条款 | **非商用**；再分发须带 `Required Notice: Copyright (c) 2026 lumingye`；禁恶意用途与恶意修改版 |
+| [rainholm-garden](https://github.com/wuxuyun0606-collab/rainholm-garden) | suwanblue & Kelin & Guchen | MIT（自写代码） | **随包引擎 vendor/aifarm 禁商用**；美术、字体、图标、猫角色形象各有各的许可，逐项见其 NOTICE |
+| [ios-web-push](https://github.com/Cheiineeey/ios-web-push) | [@Cheiineeey](https://github.com/Cheiineeey) | AGPL-3.0 | §13 网络条款 |
+| [Night-Fall](https://github.com/ysuu525/Night-Fall) | [@ysuu525](https://github.com/ysuu525) | MIT | Copyright (c) 2026 Night Fall contributors |
+| Serein | ChiYouyu | MIT | Copyright (c) 2026 ChiYouyu；原库地址待补 |
+| [cove-sticker-mcp](https://github.com/moonlin1213/cove-sticker-mcp) | [@moonlin1213](https://github.com/moonlin1213) | MIT | Copyright (c) 2026 moonlin1213 |
+| [Ombre Brain](https://github.com/P0luz/Ombre-Brain) | [@P0luz](https://github.com/P0luz) | 见其仓库 | |
+| [Drivesoid](https://github.com/A1batr055/Drivesoid) | [@A1batr055](https://github.com/A1batr055) | 见其仓库 | |
+| [dylan-heartbeat](https://github.com/callie0313/dylan-heartbeat) | [@callie0313](https://github.com/callie0313) | 见其仓库 | |
+| [Music-Mcp-Netease](https://github.com/Anko3o/Music-Mcp-Netease) | [@Anko3o](https://github.com/Anko3o) | 见其仓库 | |
+| [cove-resonance](https://github.com/yanceydaisy/cove-resonance) | [@yanceydaisy](https://github.com/yanceydaisy) | 见其仓库 | |
+
+> 合起来：**这套东西整体只能非商用**（Proof 和 rainholm-garden 的引擎都禁商用），并且 WORKKK 与 ios-web-push 的 AGPL 意味着你改过的版本如果让别人通过网络使用，得能把那一版源码给到对方。
+>
+> 第三方名称、商标与材料仍归各自权利人所有。
