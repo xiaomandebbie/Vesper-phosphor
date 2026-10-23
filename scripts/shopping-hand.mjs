@@ -1,26 +1,37 @@
 #!/usr/bin/env node
-// 家里那只手 —— 跑在有登录态的那台机器上（不是 VPS）。
+// 购物的手 —— 真正动浏览器的那一半。
 //
-// ── 为什么要分成两台机器 ──
+// ── 它可以和晨暮星同一台机，也可以不同 ──
 //
-// 晨暮星（vesper / phosphor）住在 VPS 上：没有浏览器、没有淘宝登录态、IP 在机房。
-// 拿它去点外卖就是给风控送人头。真正能买东西的是家里那间登录态长住的 Chrome，
-// 所以那边起这个小服务，晨暮星隔着 HTTP 请它动手。
+// 两种部署都行：
 //
-// 配对的关系：
-//   VPS 上 src/shopping.js 的 hand()  ─HTTP→  这个服务  ─spawn→  order.js / 淘宝的手
+//   A. 纯手机 + VPS（没有第二台机器）
+//      手和 vesper 跑在同一台 VPS 上，SHOPPING_HAND_URL=http://127.0.0.1:18030。
+//      VPS 没有显示器，所以浏览器跑在 Xvfb 假屏幕里（仍然是有头浏览器，
+//      只是没人看）。掉登录时走 /taobao/login-qr 把二维码截成图发进聊天，
+//      用手机扫——这是纯手机方案里唯一能把登录态补回来的路。
+//      代价：VPS 的 IP 在机房，淘宝风控比家宽严，要慢，而且更容易撞验证。
 //
-// ── 钱在哪里停下来 ──
+//   B. 家里一台机 + VPS
+//      手在家里（有真屏幕、IP 是家宽，风控宽很多），用 SSH 反向隧道打给 VPS：
+//        ssh -N -R 18030:127.0.0.1:18030 你的VPS
+//      VPS 那边的 SHOPPING_HAND_URL 还是写 127.0.0.1:18030。
 //
-// 这个服务自己不碰支付密码。外卖那边（order.js）是否自己付，取决于小满在这台机器上
-// 有没有填 PAY_PWD / ~/.takeout_pay——那是她自己的选择，这边不替她决定。
+// 两种它自己都不关心：它只知道自己听在 127.0.0.1:18030，有人敲门就动手。
+//
+// ── 钱在哪里停 ──
+//
+// 这个服务自己不碰支付密码。外卖那边（order.js）是否自己付，取决于这台机器上
+// 有没有填 PAY_PWD / ~/.takeout_pay——那是小满自己的选择，这边不替她决定。
 // 没填的话 order.js 会走到密码框前停下，回一个带「要支付密码」的死讯；
 // 晨暮星那边把这个当成「待支付」，往 Aru 的对话里发一句让她自己付。
+// 淘宝那边是硬的：走到结算页读出实付就停，不碰密码框。
 //
 // ── 请求和回复的形状 ──
 //
-// 全部是 POST + JSON，带 x-shopping-hand-token 头（和 VPS 那边的 SHOPPING_HAND_TOKEN 同一个）。
+// 全部是 POST + JSON，带 x-shopping-hand-token 头（和 vesper 那边的 SHOPPING_HAND_TOKEN 同一个）。
 //   POST /ping             → { ok, message }
+//   POST /taobao/login-qr  → { ok, logged_in, png?, message }   掉登录时截二维码
 //   POST /taobao/search    { keyword }                    → { ok, items:[{title,price,shop,url}] }
 //   POST /taobao/detail    { url }                        → { ok, detail:{title,price,shop,skus,image} }
 //   POST /taobao/chat      { url, message }               → { ok, replies:[…] }
@@ -33,20 +44,12 @@
 //
 // ── 怎么跑 ──
 //
-//   # 1. 一间登录态长住的 Chrome（别接管日常那个）
-//   open -na "Google Chrome" --args --remote-debugging-port=9222 \
-//     --user-data-dir="$HOME/.shop-chrome" --window-position=2000,2000 --window-size=1280,900
-//
-//   # 2. 装依赖（只要 playwright-core，不下载浏览器）
 //   npm i playwright-core
-//
-//   # 3. 起手
-//   SHOPPING_HAND_TOKEN=跟VPS同一个 \
+//   SHOPPING_HAND_TOKEN=跟vesper同一个 \
 //   TAKEOUT_ORDER_JS=/path/to/ai-order-takeout/script/order.js \
 //   node scripts/shopping-hand.mjs
 //
-// 只听 127.0.0.1；跟 VPS 之间用 SSH 反向隧道打通（见 docs/13-shopping.md）。
-// 别把这个端口直接暴在公网上——它背后是一个登录着的淘宝。
+// 只听 127.0.0.1。别把这个端口暴在公网上——它背后是一个登录着的淘宝。
 
 import http from 'node:http';
 import { spawn } from 'node:child_process';
@@ -101,8 +104,8 @@ function takeout(args) {
     if (!ORDER_JS) {
       return resolve({
         ok: false,
-        哪步: '配置',
-        为什么: '这台机器没配 TAKEOUT_ORDER_JS，点不了外卖。',
+        '哪步': '配置',
+        '为什么': '这台机器没配 TAKEOUT_ORDER_JS，点不了外卖。',
       });
     }
     const payload = JSON.stringify(args ?? {});
@@ -118,7 +121,11 @@ function takeout(args) {
       if (done) return;
       done = true;
       child.kill('SIGKILL');
-      resolve({ ok: false, 哪步: '超时', 为什么: `order.js 跑了超过 ${Math.round(TAKEOUT_TIMEOUT_MS / 1000)} 秒还没回来` });
+      resolve({
+        ok: false,
+        '哪步': '超时',
+        '为什么': `order.js 跑了超过 ${Math.round(TAKEOUT_TIMEOUT_MS / 1000)} 秒还没回来`,
+      });
     }, TAKEOUT_TIMEOUT_MS);
     child.stdout.on('data', (c) => (out += c));
     child.stderr.on('data', (c) => (err += c));
@@ -126,7 +133,7 @@ function takeout(args) {
       if (done) return;
       done = true;
       clearTimeout(timer);
-      resolve({ ok: false, 哪步: '起脚本', 为什么: e.message });
+      resolve({ ok: false, '哪步': '起脚本', '为什么': e.message });
     });
     child.on('close', (code) => {
       if (done) return;
@@ -148,9 +155,9 @@ function takeout(args) {
       }
       resolve({
         ok: false,
-        哪步: '读回复',
-        为什么: `order.js 没吐出能读的 JSON（退码 ${code}）`,
-        足迹: [out.slice(-600), err.slice(-600)].filter(Boolean),
+        '哪步': '读回复',
+        '为什么': `order.js 没吐出能读的 JSON（退码 ${code}）`,
+        '足迹': [out.slice(-600), err.slice(-600)].filter(Boolean),
       });
     });
   });
@@ -160,11 +167,12 @@ const ROUTES = {
   '/ping': async () => {
     const t = await taobao.ping();
     const bits = [
-      t.ok ? '淘宝的浏览器连上了' : `淘宝那边连不上：${t.message ?? '?'}`,
+      t.ok ? '淘宝的浏览器连上了' : `淘宝那边连不上：${t['为什么'] ?? t.message ?? '?'}`,
       ORDER_JS ? '外卖脚本已配' : '外卖脚本没配',
     ];
-    return { ok: t.ok, message: bits.join('；') };
+    return { ok: t.ok, message: bits.join('；'), '足迹': t['足迹'] };
   },
+  '/taobao/login-qr': () => taobao.loginQR(),
   '/taobao/search': (a) => taobao.search(a),
   '/taobao/detail': (a) => taobao.detail(a),
   '/taobao/chat': (a) => taobao.chat(a),
@@ -185,7 +193,10 @@ function serial(fn) {
 const server = http.createServer(async (req, res) => {
   const send = (code, body) => {
     const text = JSON.stringify(body);
-    res.writeHead(code, { 'content-type': 'application/json; charset=utf-8', 'content-length': Buffer.byteLength(text) });
+    res.writeHead(code, {
+      'content-type': 'application/json; charset=utf-8',
+      'content-length': Buffer.byteLength(text),
+    });
     res.end(text);
   };
 
@@ -212,7 +223,7 @@ const server = http.createServer(async (req, res) => {
   } catch (err) {
     // 异常原文可能带着整页 DOM 或者她的链接，只回 message
     log('出错', path, err.message);
-    send(200, { ok: false, 哪步: '手', 为什么: err.message });
+    send(200, { ok: false, '哪步': '手', '为什么': err.message });
   }
 });
 
