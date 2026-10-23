@@ -62,6 +62,54 @@ pm2 restart phosphor --update-env
 pm2 logs vesper --lines 5 --nostream | grep 购物
 ```
 
+## 最后一步：把那两段接进 decide.js
+
+购物的工具唤醒时已经能用了（`mcp-manager.js` 连上了），但他**看不到「现在有 2 件待支付」这行状态**，
+也没有那段「怎么逛、钱停在哪里」的说明。两段已经写在 `src/shopping-prompt.js` 里了，
+差 `decide.js` 里三行把它们接上。
+
+**为什么这三行没帮你改好**：`decide.js` 是 37KB，而 GitHub API 只能整文件覆写——
+让模型手拄 37KB 再盖回去，抄错一个字符不会当场报错，坏掉的是「他醒来怎么做决定」。
+而且这个文件在这个项目里已经坏过一次（见 5a4c679：decide.js 是从 .bak 恢复的）。
+所以这三处用编辑器改，别用整文件覆写。
+
+**第一处**，`import` 那一堆的最后面（`dreams.js` 那行下面）加一行：
+
+```js
+import { dreamDigest } from './dreams.js';
+import { shoppingSection, shoppingStatusLine } from './shopping-prompt.js';   // ← 加这行
+```
+
+**第二处**，`buildSystemPrompt` 最后那个模板字符串里，找到这一段的尾巴：
+
+```
+${forumSteps}${musicSection}${proofSection()}${doingSection(USER_NAME)}
+```
+
+在最后添一个：
+
+```
+${forumSteps}${musicSection}${proofSection()}${doingSection(USER_NAME)}${shoppingSection(USER_NAME)}
+```
+
+这段只跟配置有关（没配 `SHOPPING_MCP_URL` 就返回空字符串），进程不重启就不变，
+所以放 system 不破前缀缓存——和小酒馆、听歌那两段同一个道理。
+
+**第三处**，`buildUserPrompt` 里那个 `lines` 数组，在 `doingStatusLine(),` 后面插一行：
+
+```js
+    proofStatusLine(),
+    doingStatusLine(),
+    shoppingStatusLine(),        // ← 加这行
+    starRepliesBlock(context.starReplies),
+```
+
+这一行每次都在变（还剩几件待支付），所以必须在 user 里，不能放 system。
+没配购物时它返回空字符串，被 `lines.filter(Boolean)` 滁掉，和没这功能一样。
+
+改完重启 phosphor。**不接也能用**：他自己调 `shopping_list` 就能翻到清单，
+只是不会被动提醒「还有两件没付钱」。
+
 ## 家里那台机：把手起来
 
 **1. 一间登录态长住的 Chrome**（别接管你日常那个）：
@@ -208,6 +256,7 @@ node hand.js 眼                 # 只查人机验证 / 登录态
 | 「一个商品卡都没认出来」 | 淘宝改版了，改 `SELECTORS` |
 | 「客服窗里没找到输入框」 | 千牛改版了。它会诚实报没发出去，不会假装发了 |
 | 唤醒里说「在自动唤醒里不能用」 | 正常。要开就 `SHOPPING_WAKE_CAN_BUY=1` |
+| 他醒来看不到「还剩几件待支付」 | decide.js 那三行没接（见上面「最后一步」） |
 | 家规拦下了 | 看 `shopping_money`。改额度要改 `.env` 并重启 |
 
 手那边死讯里的**足迹永远带着**（跟 `order.js` 的坑七十学的）。
