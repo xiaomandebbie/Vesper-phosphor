@@ -1,4 +1,4 @@
-// 淘宝那只手。被 scripts/shopping-hand.mjs 调用，跑在家里那台有登录态的机器上。
+// 淘宝那只手。被 scripts/shopping-hand.mjs 调用。
 //
 // ── 这支代码是个起点，不是成品 ──
 //
@@ -15,14 +15,18 @@
 // order() 走到结算页、读出实付金额就停。不碰密码框，不存支付密码。
 // 这是硬的，不由配置开关控制。
 //
+// ── 掉登录了怎么回来（纯手机 + VPS 的关键） ──
+//
+// VPS 上没有你能看的屏幕。所以 loginQR() 把浏览器带到登录页、把二维码截成图，
+// 由 shopping-mcp 当成图片发进聊天，你用手机淘宝扫一下。二维码 1-2 分钟过期，
+// 过期了再叫一次。这是整个纯手机方案里唯一能把登录态补回来的路。
+//
 // ── 风控礼仪（别跳过） ──
 //
-// 慢。每步之间随机停一下。必须有头（headless 直接甄验证）。UA 一个字别改。
-// 撞上登录墙或人机验证就停手交给人——验证不是让你绕的，是让你停的。
+// 慢。每步之间随机停一下。必须有头（headless 直接甄验证；VPS 上用 Xvfb 假屏幕）。
+// UA 一个字别改。撞上登录墙或人机验证就停手——验证不是让你绕的，是让你停的。
 //
 // 依赖：npm i playwright-core（不下载浏览器，接管已开的那间）
-// 浏览器：open -na "Google Chrome" --args --remote-debugging-port=9222 \
-//           --user-data-dir="$HOME/.shop-chrome" --window-position=2000,2000
 
 import { chromium } from 'playwright-core';
 
@@ -43,7 +47,7 @@ const breathe = () => sleep(SLOW_MIN + Math.random() * (SLOW_MAX - SLOW_MIN));
 // 重新找的办法（和 ai-order-takeout 的 hand.js 同一个路子）：
 //   1. 把那间 Chrome 的窗口挪回屏幕，手动走一遍该走的流程；
 //   2. 在要点的东西上右键「检查」，看它的 class / 文字；
-//   3. 优先用文字（:has-text）而不是哈希 class——淘宝的 class 名每次发版都变，
+//   3. 优先用文字（text=）而不是哈希 class——淘宝的 class 名每次发版都变，
 //      文字不怎么变。
 const SELECTORS = {
   // 搜索结果里的一个商品卡
@@ -68,6 +72,10 @@ const SELECTORS = {
   // 结算页
   orderTotal: ['[class*="realPay"]', '#J_ActualFee', '.total-amount'],
   submitOrder: ['text=提交订单', '#submitOrderPC_1', '[class*="submitOrder"]'],
+  // 登录页的二维码。淘宝用 canvas 画它，所以 canvas 放在前面
+  loginQR: ['#login canvas', '[class*="qrcode"] canvas', 'canvas', '[class*="qrcode-img"]', '#J_QRCodeImg img'],
+  // 二维码周围那一块（截图连着「手机淘宝扫一扫」那行字一起截，你看得明白些）
+  loginBox: ['#login', '[class*="login-box"]', '[class*="qrcode"]'],
 };
 
 // 登录墙 / 人机验证的迹象。认到就停手。
@@ -91,13 +99,12 @@ async function connect(trace) {
   return browser;
 }
 
-// 复用同一个标签页：每次开新页会在她的浏览器里堆出一堆标签，而且更像脚本
+// 复用同一个标签页：每次开新页会堆出一堆标签，而且更像脚本
 async function getPage(trace) {
   await connect(trace);
   if (page && !page.isClosed()) return page;
   const ctx = browser.contexts()[0];
   if (!ctx) throw new Error('那间浏览器里没有上下文，它真的开着吗');
-  // 优先找一个已经在淘宝域上的页，没有就新开一个
   const pages = ctx.pages().filter((p) => !p.isClosed());
   page = pages.find((p) => /taobao\.com|tmall\.com/.test(p.url())) ?? pages[0] ?? (await ctx.newPage());
   page.setDefaultTimeout(20000);
@@ -106,7 +113,7 @@ async function getPage(trace) {
 
 export async function closeBrowser() {
   try {
-    // 只断开 CDP，不关她的浏览器
+    // 只断开 CDP，不关浏览器
     await browser?.close();
   } catch {
     // 关不掉就算了
@@ -119,7 +126,6 @@ export async function closeBrowser() {
 
 const fail = (step, why, trace) => ({ ok: false, '哪步': step, '为什么': why, '足迹': trace });
 
-// 一组备选按顺序试，返回第一个真的在页上的
 async function pick(scope, keys, { timeout = 6000 } = {}) {
   for (const sel of keys) {
     const loc = scope.locator(sel).first();
@@ -157,7 +163,7 @@ async function hitWall(p) {
   return hit ? `页面上出现了「${hit}」（登录或人机验证）` : null;
 }
 
-// 真鲠标点：先滚到眼前，停一下，再点。不用 dispatchEvent
+// 真鲠标点：先滚到眼前，停一下，再点
 async function humanClick(loc) {
   await loc.scrollIntoViewIfNeeded();
   await breathe();
@@ -188,6 +194,65 @@ async function ping() {
     return { ok: true, message: `浏览器连上了，当前页：${url.slice(0, 100) || '空白页'}`, '足迹': trace };
   } catch (err) {
     return fail('连浏览器', `${err.message}（CDP ${CDP} 不可达？浏览器带着 --remote-debugging-port 开着吗）`, trace);
+  }
+}
+
+// 把浏览器带到登录页，把二维码截成 PNG。
+// 返回 { ok:true, png:<base64> }，由 shopping-mcp 当成图片发进聊天。
+// 已经登着的时候不截，直接说本来就登着——免得你白扫一次。
+async function loginQR() {
+  const trace = [];
+  try {
+    const p = await getPage(trace);
+
+    // 先看是不是本来就登着：去一下个人中心，没被踢回登录页就是登着的
+    trace.push('先查现在是不是登着');
+    await p.goto('https://i.taobao.com/my_taobao.htm', {
+      waitUntil: 'domcontentloaded',
+      timeout: 45000,
+    }).catch(() => {});
+    await breathe();
+    if (!/login\.taobao\.com|login\.tmall\.com/.test(p.url())) {
+      trace.push(`停在 ${p.url().slice(0, 80)}，没被踢回登录页`);
+      return { ok: true, logged_in: true, message: '本来就登着，不用扫。', '足迹': trace };
+    }
+
+    trace.push('被踢回登录页了，去拿二维码');
+    await p.goto('https://login.taobao.com/', { waitUntil: 'domcontentloaded', timeout: 45000 });
+    await breathe();
+
+    // 二维码是 canvas 画的，得等它真的画出来
+    const qr = await pick(p, SELECTORS.loginQR, { timeout: 20000 });
+    if (!qr) {
+      return fail(
+        '拿二维码',
+        '登录页上没找到二维码（可能默认落在账号密码那个标签，或者选择器该改了）',
+        trace
+      );
+    }
+    await qr.scrollIntoViewIfNeeded().catch(() => {});
+    await sleep(1200); // canvas 画完要一点时间，截早了是空白
+
+    // 连着周围那块截（带上「手机淘宝扫一扫」那行字）；没认出来就只截二维码
+    const box = (await pick(p, SELECTORS.loginBox, { timeout: 3000 })) ?? qr;
+    let shot;
+    try {
+      shot = await box.screenshot({ type: 'png', timeout: 15000 });
+    } catch {
+      shot = await qr.screenshot({ type: 'png', timeout: 15000 });
+    }
+    const png = Buffer.from(shot).toString('base64');
+    trace.push(`截到了，${Math.round(png.length / 1024)}KB`);
+
+    return {
+      ok: true,
+      logged_in: false,
+      png,
+      message: '二维码截好了。用手机淘宝扫一下，大概 1-2 分钟过期，过期了再叫一次。',
+      '足迹': trace,
+    };
+  } catch (err) {
+    return fail('拿二维码', err.message, trace);
   }
 }
 
@@ -467,4 +532,4 @@ async function chat({ url, message }) {
   }
 }
 
-export const taobao = { ping, search, detail, chat, cart, order, close: closeBrowser };
+export const taobao = { ping, loginQR, search, detail, chat, cart, order, close: closeBrowser };
