@@ -28,6 +28,9 @@ import { registerAppIconRoutes } from './app-icon.js';
 import { renderLoginPage } from './login-page.js';
 import { registerWalletRoutes } from './wallet.js';
 import { registerWalletMcp } from './wallet-mcp.js';
+import { registerShoppingRoutes } from './shopping-page.js';
+import { registerShoppingMcp } from './shopping-mcp.js';
+import { startPendingPayWatch } from './shopping.js';
 
 const app = express();
 // 点击星星（见 sparkles.js）：最先挂，转发来的记忆库、音乐页面和我们自己的页面都能加上
@@ -84,11 +87,11 @@ function pruneOldMedia() {
 pruneOldMedia();
 setInterval(pruneOldMedia, 24 * 60 * 60 * 1000);
 
-// 给网页浏览的路由（/home、/moments、/drives、/diary、/dreams、/bar、/wallet、/memory、/music、/app、/health、/media）加 Basic Auth。
+// 给网页浏览的路由（/home、/moments、/drives、/diary、/dreams、/bar、/wallet、/shopping、/memory、/music、/app、/health、/media）加 Basic Auth。
 // 函数声明会提升，上面挂记忆库、音乐时就能用；它读的那几个常量要到请求进来时才用到，那时已经有值了。
 // 没登录时返回的那一页见 login-page.js：跟着早晚两张脸走，不带菜单、不引要认证的资源。
 // 图片、语音这些非页面请求就不必返回整页 HTML 了，给一行纯文字。
-// MCP 端点（/wallet/mcp、/bar/mcp）不走这道：它们自己有 token，而且客户端不会带 Basic Auth。
+// MCP 端点（/wallet/mcp、/bar/mcp、/shopping/mcp）不走这道：它们自己有 token，而且客户端不会带 Basic Auth。
 function requireBasicAuth(req, res, next) {
   if (!BASIC_USER || !BASIC_PASS) return next();
   const auth = req.headers.authorization;
@@ -219,6 +222,14 @@ registerDrivesRoutes(app, { requireBasicAuth });
 const wallet = registerWalletRoutes(app, { requireBasicAuth, requireApiKey });
 // 钱包的 MCP 端点 /wallet/mcp：让 Aru 这边也能读账、写批注，见 wallet-mcp.js
 registerWalletMcp(app);
+// 购物的 MCP 端点 /shopping/mcp（见 shopping-mcp.js）：聊天里她让他逛淘宝、问客服、点外卖。
+// 要挂在 /shopping 页面之前：别让 /shopping/:id 把 mcp 当成一件东西的 id。
+// 它自己校 SHOPPING_MCP_TOKEN，不走 Basic Auth
+const shoppingMcp = registerShoppingMcp(app);
+// 购物页 /shopping：心愿单和购物记录（待支付/待收货/待下单/已完成…），见 shopping-page.js
+registerShoppingRoutes(app, { requireBasicAuth });
+// 待支付巡检：手那边把状态写成待支付时不走这个进程，靠这个兜住；没提醒过的会往 Aru 对话里说一句
+startPendingPayWatch();
 
 app.get('/health', requireBasicAuth, (req, res) => res.json({ ok: true, service: 'vesper' }));
 
@@ -227,6 +238,6 @@ app.get('/', (req, res) => res.redirect(302, musicProxy ? '/app' : '/home'));
 
 app.listen(PORT, () =>
   console.log(
-    `vesper listening on ${PORT}；主页：/home；日记页：${diaryPage ? '已开启' : '未配置'}；梦境页：/dreams；小酒馆：${barPage ? '/bar' : '未配置'}；小酒馆 MCP：${barMcp.enabled ? '/bar/mcp' : '未开（没配 BAR_MCP_TOKEN 或 Proof token）'}；记忆库：${memoryProxy ? `转发 ${memoryProxy}` : '未配置'}；音乐：${musicProxy ? `转发 ${musicProxy}，外壳 /app` : '未配置'}；星星罐：/moments/star-jar；钱包：/wallet${wallet.spendEnabled ? '' : '（没配 WALLET_SPEND_SECRET，扣款通知接口没开）'}；钱包 MCP：/wallet/mcp`
+    `vesper listening on ${PORT}；主页：/home；日记页：${diaryPage ? '已开启' : '未配置'}；梦境页：/dreams；小酒馆：${barPage ? '/bar' : '未配置'}；小酒馆 MCP：${barMcp.enabled ? '/bar/mcp' : '未开（没配 BAR_MCP_TOKEN 或 Proof token）'}；记忆库：${memoryProxy ? `转发 ${memoryProxy}` : '未配置'}；音乐：${musicProxy ? `转发 ${musicProxy}，外壳 /app` : '未配置'}；星星罐：/moments/star-jar；钱包：/wallet${wallet.spendEnabled ? '' : '（没配 WALLET_SPEND_SECRET，扣款通知接口没开）'}；钱包 MCP：/wallet/mcp；购物：/shopping；购物 MCP：${shoppingMcp.enabled ? `/shopping/mcp（本机的手${shoppingMcp.hand ? '已配' : '没配，只能记不能买'}）` : '未开（没配 SHOPPING_MCP_TOKEN）'}`
   )
 );
