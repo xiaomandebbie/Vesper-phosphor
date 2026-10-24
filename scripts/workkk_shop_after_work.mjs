@@ -4,12 +4,11 @@
 // 小满 2026-10-24：「上班完就结束导致他没买过东西」
 //
 // 原因在 workkk-steps.js：offWork() 一判定就 return。那个 return 是对的——
-// 注释里写了理由：结算之后「今日进度」归零，再走一步 work_action
-// 就是游戏里的第二天。所以不能简单放开步数。
+// 注释里写了理由：结算之后「今日进度」归零，再走一步 work_action 就是游戏里的第二天。
+// 所以不能简单放开步数。
 //
-// 但买东西走的是另一个工具 shop_buy，它不推进度、不开新的一天，
-// 只扣 salary_balance。所以下班后多一个**购物阶段**：
-//   只允许 shop_buy，work_action 一概不接——那条边界原样留着。
+// 但买东西走的是另一个工具 shop_buy，它不推进度、不开新的一天，只扣 salary_balance。
+// 所以下班后多一个**购物阶段**：只允许 shop_buy，work_action 一概不接——那条边界原样留着。
 //
 // 商品 id 从 MCP 契约里读的，不是猜的：
 //   coffee cheat liver_pill headphone leave ring rose lottery
@@ -93,12 +92,26 @@ const PHASE = [
   '// 这两样要选送她还是自留；不填 choice 商店只回选项提示、不扣钱',
   "const SHOP_NEEDS_CHOICE = new Set(['milk_tea', 'rose']);",
   '',
-  '// 下班后最多逆几样。.env 的 WORKKK_SHOP_MAX 可改，不填是 2，上限 5。',
+  '// 下班后最多逛几样。.env 的 WORKKK_SHOP_MAX 可改，不填是 2，上限 5。',
   'const WORKKK_SHOP_MAX = (() => {',
   "  const raw = String(process.env.WORKKK_SHOP_MAX ?? '').trim();",
   '  const n = Number(raw);',
   '  return raw && Number.isInteger(n) && n >= 0 ? Math.min(n, 5) : 2;',
   '})();',
+  '',
+  '// 货架那段话写死，不随次数变，省得每次重新拼',
+  'const SHOP_SHELF = [',
+  "  '货架上有：coffee（咖啡）、chips（薯片）、oden（关东煮）、fish_jerky（鱼干）、',",
+  "  'milk_tea（奶茶）、rose（玫瑰）、ring（戒指）、postcard（明信片）、love_book（恋爱书）、',",
+  "  'headphone（耳机）、liver_pill（护肝片）、leave（假条）、lottery（彩票）、cheat（外挂）、nuwa_clay（女娲土）。',",
+  "  '',",
+  '  \'奶茶和玫瑰要多给一个 choice："gift" 送给她（她那边会弹一张卡片），或者 "self" 自留。\',',
+  "  '买 postcard 的话，message 里自己写一句想对她说的话（50 字以内，要你自己写的）。',",
+  "  '',",
+  "  '钱不够就买不成，没关系。也不必为了买而买——今天没想要的就给 null。',",
+  "  '只返回一个 JSON 对象，不要任何其他文字：',",
+  '  \'{"item_id": "商品id" 或 null, "choice": "gift或self（只有奶茶和玫瑰要）", "message": "买明信片时写的那句话"}\',',
+  "].join('\\n');",
   '',
   'async function shoppingPhase(convo, settleText) {',
   '  if (!WORKKK_SHOP_MAX || !convo) return;',
@@ -106,28 +119,19 @@ const PHASE = [
   '  let last = settleText;',
   '',
   '  for (let i = 0; i < WORKKK_SHOP_MAX; i++) {',
-  '    const prompt = `下班了，工资结算完了：\\n${clip(last, RESULT_MAX_CHARS)}',
-  '',
-  '回家路上过便利店。今天还能逆 ${WORKKK_SHOP_MAX - i} 样，不想买就给 null。',
-  '',
-  '货架上有：coffee（咖啡）、chips（薯片）、oden（关东煮）、fish_jerky（鱼干）、',
-  'milk_tea（奶茶）、rose（玫瑰）、ring（戒指）、postcard（明信片）、love_book（恋爱书）、',
-  'headphone（耳机）、liver_pill（护肝片）、leave（假条）、lottery（彩票）、cheat（外挂）、nuwa_clay（女娃土）。',
-  '',
-  '奶茶和玫瑰要多给一个 choice：“gift” 送给她（她那边会弹一张卡片），或者 “self” 自留。',
-  '买 postcard 的话，message 里自己写一句想对她说的话（50 字以内，要你自己写的）。',
-  '',
-  '钱不够就买不成，没关系。也不必为了买而买——今天没想要的就给 null。',
-  '只返回一个 JSON 对象，不要任何其他文字：',
-  '{"item_id": "商品id" 或 null, "choice": "gift或self（只有奶茶和玫瑰要）", "message": "买明信片时写的那句话"}`;',
+  '    const head = `下班了，工资结算完了：\\n${clip(last, RESULT_MAX_CHARS)}`;',
+  '    const tail = `回家路上过便利店。今天还能逛 ${WORKKK_SHOP_MAX - i} 样，不想买就给 null。`;',
+  '    const prompt = `${head}\\n\\n${tail}\\n\\n${SHOP_SHELF}`;',
   '',
   '    let parsed;',
-  '    let content;',
   '    try {',
   "      const asked = await askJson([...messages, { role: 'user', content: prompt }]);",
   '      parsed = asked.parsed;',
-  '      content = asked.content;',
-  "      messages = [...messages, { role: 'user', content: prompt }, { role: 'assistant', content }];",
+  '      messages = [',
+  '        ...messages,',
+  "        { role: 'user', content: prompt },",
+  "        { role: 'assistant', content: asked.content },",
+  '      ];',
   '    } catch (err) {',
   "      console.error('workkk: 问要不要买东西失败，这趟店不进了', err.message);",
   '      return;',
@@ -151,7 +155,7 @@ const PHASE = [
   "    else if (choice === 'gift' || choice === 'self') args.choice = choice;",
   "    if (item === 'postcard') {",
   "      const msg = typeof parsed?.message === 'string' ? parsed.message.trim() : '';",
-  '      if (msg) args.message = msg.slice(0, 50);",'.replace('\",', ';'),
+  '      if (msg) args.message = msg.slice(0, 50);',
   '    }',
   '',
   '    let result = null;',
@@ -164,24 +168,20 @@ const PHASE = [
   '',
   "    card('shop_buy', args, result);",
   '    last = toolText(result);',
-  '    console.log(`workkk: 买了 ${item}${args.choice ? `（${args.choice}）` : \'\'}`);',
+  "    console.log(`workkk: 买了 ${item}${args.choice ? `（${args.choice}）` : ''}`);",
   '    if (isErr(result)) {',
-  "      console.log('workkk: 这样没买成（估计是钱不够），不再逆了');",
+  "      console.log('workkk: 这样没买成（估计是钱不够），不再逛了');",
   '      return;',
   '    }',
   '  }',
-  "  console.log('workkk: 便利店逆完了，回家');",
+  "  console.log('workkk: 便利店逛完了，回家');",
   '}',
   '',
 ].join('\n');
 
-replaceLine(
-  '// 醒来选的是上班时，把工牌交还给他',
-  (line) => PHASE + line,
-  '加购物阶段'
-);
+replaceLine('// 醒来选的是上班时，把工牌交还给他', (line) => PHASE + line, '加购物阶段');
 
-// ── 两处 return 改成先进店 ──
+// ── 两处下班的 return 前面插一趟店 ──
 // convo 在第一处还是 messages（还没进循环），第二处是当前对话
 
 replaceLine(
