@@ -22,8 +22,16 @@ const reconnecting = {};
 // TA 自己醒来时不能用的工具，按服务名列。
 // 点歌台的 song_share 会把歌递进播放器：mode=now 立刻开播，mode=queue 在播放器闲着时也会直接开播。
 // 醒来突然出声会打扰对方，所以整个挡掉：不出现在工具列表里，硬调也会被拒。
+//
+// 购物：搜、看、问客服、记心愿单都行，他自己醒来可以逛。
+// 但加购、下单、点外卖这三个会让她收到一条「去付钱」——在深夜自动唤醒里自己把钱花出去这事，
+// 得小满开口打开（SHOPPING_WAKE_CAN_BUY=1）。默认只在聊天里用（那边走 /shopping/mcp，不过这层）。
+const SHOPPING_BUY_TOOLS = ['shopping_cart', 'shopping_order', 'shopping_takeout'];
+const wakeCanBuy = /^(1|true|yes|on)$/i.test(String(process.env.SHOPPING_WAKE_CAN_BUY ?? '').trim());
+
 const BLOCKED_TOOLS = {
   music: new Set(['song_share']),
+  shopping: new Set(wakeCanBuy ? [] : SHOPPING_BUY_TOOLS),
 };
 const isBlocked = (server, tool) => Boolean(BLOCKED_TOOLS[server]?.has(tool));
 
@@ -251,6 +259,23 @@ export async function connectAll() {
       console.log('connected MCP: music');
     } catch (err) {
       console.error('could not connect MCP "music":', err.message);
+    }
+  }
+
+  // 购物（见 shopping-mcp.js）：端点就挂在本机的 vesper 上，所以这里转一圈回自己。
+  // SHOPPING_MCP_URL 形如 http://127.0.0.1:3001/shopping/mcp，token 和那边同一个。
+  // 名字固定叫 shopping：动作卡、分级、上面的 BLOCKED_TOOLS 都按这个名字认。
+  if (process.env.SHOPPING_MCP_URL) {
+    try {
+      const token = String(process.env.SHOPPING_MCP_TOKEN ?? '').trim();
+      await connectMcpHttp(
+        'shopping',
+        process.env.SHOPPING_MCP_URL,
+        token ? { Authorization: `Bearer ${token}` } : undefined
+      );
+      console.log(`connected MCP: shopping（唤醒里${wakeCanBuy ? '可以' : '不能'}真买）`);
+    } catch (err) {
+      console.error('could not connect MCP "shopping":', err.message);
     }
   }
 }

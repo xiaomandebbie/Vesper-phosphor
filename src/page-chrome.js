@@ -1,5 +1,5 @@
 // 几个页面共用的外框：右上角的三条杠菜单，换页、换日期时的星星转场，早晚两张脸，以及那几处活起来的细节。
-// 主页、动态页、自定义页、心绪页、日记页、梦境页、小酒馆、小钱包、收藏页、星星罐，以及转发过来的记忆库（Ombre Brain 管理页）都从这里拿，
+// 主页、动态页、自定义页、心绪页、日记页、梦境页、小酒馆、小钱包、购物页、收藏页、星星罐，以及转发过来的记忆库（Ombre Brain 管理页）都从这里拿，
 // 改一处几个页面一起变。
 //
 // 菜单分三段：最上面「回到主页」、最下面「自定义」钉住不动，中间那些路径可以滑（一眼看三项）。
@@ -108,13 +108,15 @@ export function booksEnabled() {
 }
 
 // 菜单入口，分三段：top 钉在最上面，scroll 可以滑，bottom 钉在最下面。
-// 动态、梦境、心绪、小钱包都是 vesper 自己的页面，直接写路径，不用配。
+// 动态、梦境、心绪、小钱包、购物都是 vesper 自己的页面，直接写路径，不用配。
 // 日记、记忆库优先用站内页面；没配站内页面时可以用 NAV_DIARY_URL / NAV_MEMORY_URL 跳外部地址，
 // 都没配就显示成灰色「没配置」。
 // 论坛是给人看的网页（比如 Lutopia 社区首页），填 NAV_FORUM_URL 才能点；和 TA 自己连论坛用的 LUTOPIA_MCP_URL 无关。
 // 音乐和日记、记忆库一样，先看真实能力：配了 MUSIC_PLAYER_URL 就指站内 /music/（见 music-proxy.js）。
 // 没走转发时才用 NAV_MUSIC_URL，同域名下的路径或完整地址都行。
-// 小酒馆排在音乐下面（小满定的位置）：配了 Proof 才能点，没配是灰色「没配置」
+// 小酒馆排在音乐下面（小满定的位置）：配了 Proof 才能点，没配是灰色「没配置」。
+// 购物排在小钱包后面：那两页说的是同一件事的两头（账和东西）。
+// 购物页不需要配任何东西就能看：没配本机的手时心愿单照样记，只是不能真去买（见 shopping.js）
 function navGroups() {
   const diary = diaryDir()
     ? { href: '/diary', label: '日记' }
@@ -192,7 +194,7 @@ const FACE_PATCH_CSS = `
   /* 标题：苹方超细 + 大字距。
      之前是宋体 700 + 0.35em，粗、紧、端正、居中四个规整叠在一起，所以死沉。
      苹方是系统字体，一定在；行楷、魏碑这些本机没装就会退回宋体，所以没用。
-     字重、字距、行高得一起改 —— 只换字体名还是那个骨架。
+     字重、字距、行高得一起改 —— 只换字体名还是那个骸架。
      字距给最后一个字也加了右边距，用 padding-left 把居中找回来。 */
   .title { font-family: -apple-system, "PingFang SC", "Helvetica Neue", sans-serif;
     font-weight: 200; font-size: 34px; letter-spacing: 0.62em; padding-left: 0.62em; line-height: 1.3; }
@@ -200,7 +202,7 @@ const FACE_PATCH_CSS = `
   /* 副标跟着疏开一点，和标题的留白对得上 */
   .subtitle { letter-spacing: 0.3em; }
 
-  /* 标题的文字渐变：白天是紫→玫→金，夜里换成浅紫→粉→淡金，不然深底上的深紫字认不出来 */
+  /* 标题的文字渐变：白天是紫→瑰→金，夜里换成浅紫→粉→淡金，不然深底上的深紫字认不出来 */
   @supports ((-webkit-background-clip: text) or (background-clip: text)) {
     .title { background: linear-gradient(100deg, var(--t1) 0%, var(--t2) 52%, var(--t3) 100%);
       -webkit-background-clip: text; background-clip: text; color: transparent; }

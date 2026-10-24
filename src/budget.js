@@ -9,9 +9,9 @@
 // 小满 2026-10-19 定的四级：
 //   0 级 不占次数 —— 我的动态、星星罐、回留言、摘她的星、回她的动态、
 //        问进度、约时间。想做就做，不记账。
-//   1 级 轻的事   —— 逛论坛、听歌、翻批注本、自斟一杯、看钱包、调节律。
+//   1 级 轻的事   —— 逛论坛、听歌、翻批注本、自斟一杯、看钱包、调节律、逛淘宝。
 //   2 级 一整件事 —— 上班、花园、锈潮、共读。一天共 6 次。
-//   3 级 会惊动她 —— 推送、发动态（本来就有 6 小时冷却）、长期记忆。
+//   3 级 会惊动她 —— 推送、发动态（本来就有 6 小时冷却）、长期记忆、真花钱买东西。
 //
 // 一次醒来每级最多一件，0 级不限。
 // 她的原话：「他可以四级都做或者都不做」——所以不设总预算，
@@ -26,9 +26,17 @@
 // 今天不想读的那本书、去上今天不想上的那个班。那就不是他在玩，是他在还账；
 // 而且最后几次会被挤成一串赶工，哪件都不是真的想做。
 //
-// 所以这里只数到 6 就收手，不管那 6 次花在哪几件上。四件事都在、长时间没碰
+// 所以这里只数到 6 就收手，不管那 6 次花在哪几件事上。四件事都在、长时间没碰
 // 的那件也还在等着——这句话写进提示词告诉他（见 budgetSection），
 // 让他自己看得见，不写成规则罚他。
+//
+// ── 购物为什么要按工具分，而不是按 server 分 ──
+//
+// 其他 server 整个分一个级就够了：论坛整个是轻的，上班整个是一整件事。
+// 购物不行——「逛一逛淘宝」和「下一单」在同一个 server 里，但前者和听歌一样轻，
+// 后者会让她收到一条「去付钱」的消息。所以这两类必须分开：
+// 搜、看、问客服、记心愿单 → 1 级；加购、下单、点外卖、改成待支付 → 3 级。
+// 于是一次醒来最多只能真买一件东西，而且和推送、发动态抢同一个名额。
 //
 // ── 记账为什么要自己建表 ──
 //
@@ -95,11 +103,16 @@ const MCP_TIER = {
   lutopia: 1,
   music: 1,
   wallet: 1,
+  shopping: 1,
   workkk: 2,
   garden: 2,
   xiuchao: 2,
   'ombre-brain': 0,
 };
+
+// 购物里真会动钱、或者会让她收到一条「去付钱」的那几个工具，按 3 级算。
+// 其余（搜、看详情、问客服、记心愿单、翻清单、看额度）跟 server 走 1 级。
+const SHOPPING_TIER3_TOOLS = new Set(['shopping_cart', 'shopping_order', 'shopping_takeout']);
 
 // 动作名 → 级别。mcp_call 要看 server，单独处理。
 const ACTION_TIER = {
@@ -132,21 +145,29 @@ const ONCE = new Set(['read_book', 'ombre_brain']);
 function serverOf(detail) {
   try {
     const j = JSON.parse(detail);
-    const s = String(j?.server ?? '').trim().toLowerCase();
-    // 论坛那个 server 名在不同版本里写法不一（lutopia / lutopia论坛），认关键词
-    if (/lutopia/.test(s)) return 'lutopia';
-    return s;
+    return j && typeof j === 'object' ? j : null;
   } catch {
-    return '';
+    return null;
   }
 }
 
+function serverOf(detail) {
+  const j = parseDetail(detail);
+  const s = String(j?.server ?? '').trim().toLowerCase();
+  // 论坛那个 server 名在不同版本里写法不一（lutopia / lutopia论坛），认关键词
+  if (/lutopia/.test(s)) return 'lutopia';
+  return s;
+}
+
+const toolOf = (detail) => String(parseDetail(detail)?.tool ?? '').trim();
+
 // 这个动作是几级。认不出来的当 1 级：宁可当轻的放过去，不要把没见过的动作
-// 误判成 3 级然后一直拦着。
+// 误判成 3 级然后一直拦着。购物是个例外：那里真花钱的几步得按 3 级算。
 export function tierOf(action, detail) {
   const a = String(action ?? '').trim();
   if (a === 'mcp_call') {
     const s = serverOf(detail);
+    if (s === 'shopping' && SHOPPING_TIER3_TOOLS.has(toolOf(detail))) return 3;
     return MCP_TIER[s] ?? 1;
   }
   return ACTION_TIER[a] ?? 1;

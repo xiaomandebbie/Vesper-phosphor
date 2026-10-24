@@ -96,11 +96,11 @@ function pruneOldMedia() {
 pruneOldMedia();
 setInterval(pruneOldMedia, 24 * 60 * 60 * 1000);
 
-// 给网页浏览的路由（/home、/moments、/drives、/diary、/dreams、/bar、/wallet、/memory、/music、/app、/health、/media）加 Basic Auth。
+// 给网页浏览的路由（/home、/moments、/drives、/diary、/dreams、/bar、/wallet、/shopping、/memory、/music、/app、/health、/media）加 Basic Auth。
 // 函数声明会提升，上面挂记忆库、音乐时就能用；它读的那几个常量要到请求进来时才用到，那时已经有值了。
 // 没登录时返回的那一页见 login-page.js：跟着早晚两张脸走，不带菜单、不引要认证的资源。
 // 图片、语音这些非页面请求就不必返回整页 HTML 了，给一行纯文字。
-// MCP 端点（/wallet/mcp、/bar/mcp）不走这道：它们自己有 token，而且客户端不会带 Basic Auth。
+// MCP 端点（/wallet/mcp、/bar/mcp、/shopping/mcp）不走这道：它们自己有 token，而且客户端不会带 Basic Auth。
 function requireBasicAuth(req, res, next) {
   if (!BASIC_USER || !BASIC_PASS) return next();
   const auth = req.headers.authorization;

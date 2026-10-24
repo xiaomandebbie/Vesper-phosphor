@@ -41,6 +41,26 @@ const MUSIC_OPS = {
 // 这几个工具在卡片上带一下歌名
 const MUSIC_WITH_SONG = new Set(['song_share', 'song_memo', 'playlist_add', 'lyric_read', 'lyric_share', 'song_listen']);
 
+// 购物（server 叫 shopping，见 shopping-mcp.js）的工具 → 给人看的说法。
+// 和点歌台同一个口径：动态页是给小满看的，所以用"你"。
+// 下单、点外卖那两条特意写清「走到付款就停下」，因为那是她最在意的边界
+const SHOPPING_OPS = {
+  shopping_guide: '翻了翻购物那边的规矩',
+  shopping_ping: '看了看家里那只手在不在',
+  shopping_browse: '逛了逛淘宝',
+  shopping_detail: '点进一个商品看了看',
+  shopping_talk: '找店家客服问了一句',
+  shopping_wish: '往心愿单里收了一件',
+  shopping_list: '翻了翻购物清单',
+  shopping_mark: '把购物清单里的一件挪了个状态',
+  shopping_cart: '把一件东西加进了购物车',
+  shopping_order: '把一单走到了付款那一步就停下了',
+  shopping_takeout: '点了份外卖，走到付款就停下了',
+  shopping_money: '算了算这个月还能花多少',
+};
+// 这几个在卡片上带一下东西的名字
+const SHOPPING_WITH_NAME = new Set(['shopping_browse', 'shopping_wish', 'shopping_takeout']);
+
 function short(value, n = 80) {
   const chars = Array.from(String(value ?? '').replace(/\s+/g, ' ').trim());
   return chars.length > n ? `${chars.slice(0, n).join('')}…` : chars.join('');
@@ -90,6 +110,25 @@ function musicWritingDetail(args) {
   const parts = [];
   if (args?.memo) parts.push(`批注：${args.memo}`);
   if (args?.note) parts.push(`配文：${args.note}`);
+  return parts.join('\n') || null;
+}
+
+// ---------- 购物 → 给人看的话 ----------
+
+function shoppingSummary(tool, args) {
+  const label = SHOPPING_OPS[tool] || `用了购物那边的 ${tool}`;
+  const name = String(args?.keyword ?? args?.title ?? args?.dish ?? '').trim();
+  return name && SHOPPING_WITH_NAME.has(tool) ? `${label}「${short(name, CARD_TITLE_CHARS)}」` : label;
+}
+
+// 详情里放他自己写下的话：问客服的那句、为什么想要、改状态时留的话。
+// 店家回了什么、走到哪一步，都在"返回"里
+function shoppingWritingDetail(args) {
+  const parts = [];
+  if (args?.message) parts.push(`问店家：${args.message}`);
+  if (args?.reason) parts.push(`为什么想要：${args.reason}`);
+  if (args?.note) parts.push(`顺手写的：${args.note}`);
+  if (args?.dry === true) parts.push('这趟是试跑，一分没花。');
   return parts.join('\n') || null;
 }
 
@@ -207,6 +246,9 @@ export function describeActivityDetail(decision, result) {
         if (writing) parts.push(writing);
       } else if (j.server === 'music') {
         const writing = musicWritingDetail(j.args);
+        if (writing) parts.push(writing);
+      } else if (j.server === 'shopping') {
+        const writing = shoppingWritingDetail(j.args);
         if (writing) parts.push(writing);
       }
       break;
