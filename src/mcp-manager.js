@@ -16,6 +16,10 @@ const reconnecting = {};
 // 购物：搜、看、问客服、记心愿单都行，他自己醒来可以逛。
 // 但加购、下单、点外卖这三个会让她收到一条「去付钱」——在深夜自动唤醒里自己把钱花出去这事，
 // 得小满开口打开（SHOPPING_WAKE_CAN_BUY=1）。默认只在聊天里用（那边走 /shopping/mcp，不过这层）。
+//
+// 台灯（light）为什么一个都不挡：那套工具里最重的是关灯，而关灯之前他能先查状态，
+// 灯已经关着时那个工具根本不发指令。真正会惊到人的「突然把灯调暗」由 Vesper-light 自己的
+// 睡前守护管着（它永远不关灯），不在这一层。
 const SHOPPING_BUY_TOOLS = ['shopping_cart', 'shopping_order', 'shopping_takeout'];
 const wakeCanBuy = /^(1|true|yes|on)$/i.test(String(process.env.SHOPPING_WAKE_CAN_BUY ?? '').trim());
 
@@ -197,6 +201,25 @@ export async function connectAll() {
       console.log('connected MCP: music');
     } catch (err) {
       console.error('could not connect MCP "music":', err.message);
+    }
+  }
+
+  // 台灯（https://github.com/xiaomandebbie/Vesper-light），Streamable HTTP。
+  // 灯的全部逻辑在那个库里：几点调暗、一档调多少、停在哪、定时怎么走。
+  // 所以这里没有一行亮度或色温，只负责连上去——两个库互相引用，代码不重叠。
+  // LIGHT_MCP_URL 形如 http://127.0.0.1:3003/lamp/mcp，token 和那边的 LIGHT_MCP_TOKEN 同一串。
+  // 名字固定叫 light：动态页的行动卡、budget.js 的分级都按这个名字认。
+  if (process.env.LIGHT_MCP_URL) {
+    try {
+      const token = String(process.env.LIGHT_MCP_TOKEN ?? '').trim();
+      await connectMcpHttp(
+        'light',
+        process.env.LIGHT_MCP_URL,
+        token ? { Authorization: `Bearer ${token}` } : undefined
+      );
+      console.log('connected MCP: light');
+    } catch (err) {
+      console.error('could not connect MCP "light":', err.message);
     }
   }
 
