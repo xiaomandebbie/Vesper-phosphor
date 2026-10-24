@@ -39,6 +39,7 @@
 // dawn/day 走 light，dusk/night 走 dark。这条是它自己支持的，一定生效。
 // 再叠一层 SKIN_CSS 做贴色：只追加覆盖，不改它的布局和交互。
 
+import express from 'express';
 import fs from 'fs';
 import path from 'path';
 import {
@@ -64,6 +65,41 @@ import { faceAt } from './sun-time.js';
 import { formatDate } from './wall-time.js';
 
 const PREFIX = '/books';
+
+const AI_DISPLAY = process.env.AI_DISPLAY_NAME || 'TA';
+
+// 书架界面上你们两个的名字。bookshelf.jsx 里 SHELF_PROFILES 是空的（原作不预置
+// 个人资料），留空就显示「我 / AI」。这边从 .env 读，和其他页一致。
+const BOOKS_ME_NAME = String(process.env.USER_DISPLAY_NAME ?? '').trim();
+const BOOKS_AI_NAME = String(process.env.AI_DISPLAY_NAME ?? '').trim();
+
+// 书架 API 的 token。页面里那层转接必须用同步 XHR（理由见文件头），
+// 而 iOS Safari 对同步请求不带 Basic 凭据，所以走 token。
+// .env 里没配就自己生一个（进程内有效，重启换一个，不影响使用）。
+let _booksToken = '';
+export function booksApiToken() {
+  if (_booksToken) return _booksToken;
+  const fromEnv = String(process.env.BOOKS_API_TOKEN ?? '').trim();
+  _booksToken = fromEnv || `auto-${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
+  if (!fromEnv) console.log('books: 没配 BOOKS_API_TOKEN，本次运行自动生了一个');
+  return _booksToken;
+}
+
+// Basic Auth 或 token 任一通过。页面仍由 Basic Auth 护着；
+// token 只在已登录的页面 HTML 里出现，没额外放开东西。
+// 书架 API 的请求体上限。全局是 1mb（见 vesper.js），对一本小说的正文不够。
+// 只把这个前缀放大，别的路由不跟着动。.env 的 BOOKS_BODY_LIMIT 可改。
+const BOOKS_BODY_LIMIT = String(process.env.BOOKS_BODY_LIMIT ?? '').trim() || '32mb';
+
+function booksApiAuth(requireBasicAuth) {
+  return (req, res, next) => {
+    const given =
+      req.get('x-books-token') ||
+      (/^Bearer\s+(.+)$/i.exec(String(req.get('authorization') ?? ''))?.[1] ?? '').trim();
+    if (given && given === booksApiToken()) return next();
+    return requireBasicAuth(req, res, next);
+  };
+}
 
 // ── 下面这些全部照抄 bookshelf.jsx，不要凭印象改 ──
 
@@ -123,60 +159,124 @@ const SKIN_CSS = `
 // 代价就是必须跟它的键名约定——也正是上面那个坑。
 const BRIDGE_SCRIPT = `(function () {
   var API = '${PREFIX}/api';
+  var TOKEN = '${booksApiToken()}';
   var SHELF_KEY = '${SHELF_KEY}';
   var ANCHOR = /^nest_bookshelf_demo_reader_anchor_(.+)$/;
   var LS = window.localStorage;
-  var origGet = LS.getItem.bind(LS);
-  var origSet = LS.setItem.bind(LS);
+  // 挂 Storage.prototype，不是实例。localStorage 是 WebIDL 的 legacy platform object，
+  // 带「命名属性」特性（这就是为什么 localStorage.foo = 1 能存东西），
+  // 给它赋任何属性都会变成存键值对——LS.setItem = fn 的真实效果是
+  // localStorage.setItem('setItem', fn.toString())，方法根本没被覆盖。
+  // （2026-10-19：回写从来没发出过，就是这个原因。）
+  var PROTO = Object.getPrototypeOf(LS);
+  var protoGet = PROTO.getItem;
+  var protoSet = PROTO.setItem;
+  var origGet = function (k) { return protoGet.call(LS, k); };
+  var origSet = function (k, v) { return protoSet.call(LS, k, v); };
 
-  function xhr(method, url, body) {
+  // 失败要能看见。上一版把所有错误咽掉了，排查了好几轮都因为它不出声
+  function warn(msg) {
+    console.error('books: ' + msg);
+    try {
+      var bar = document.createElement('div');
+      bar.textContent = '共读同步没成：' + msg;
+      bar.style.cssText =
+        'position:fixed;left:0;right:0;top:0;z-index:99999;padding:10px 14px;' +
+        'background:#f6e6bf;color:#5a4320;font:13px/1.5 -apple-system,sans-serif;' +
+        'box-shadow:0 2px 8px rgba(0,0,0,.18)';
+      bar.onclick = function () { bar.remove(); };
+      (document.body || document.documentElement).appendChild(bar);
+    } catch (e) {}
+  }
+
+  function xhr(method, url, body, token) {
     try {
       var x = new XMLHttpRequest();
       x.open(method, url, false);
+      if (token) x.setRequestHeader('x-books-token', token);
       if (body != null) x.setRequestHeader('content-type', 'application/json');
       x.send(body == null ? null : body);
-      return x.status >= 200 && x.status < 300 ? x.responseText : null;
-    } catch (e) { return null; }
+      if (x.status >= 200 && x.status < 300) return x.responseText;
+      warn(method + ' ' + url + ' 返回 ' + x.status);
+      return null;
+    } catch (e) {
+      warn(method + ' ' + url + ' 没发出去：' + e.message);
+      return null;
+    }
   }
 
-  // 它的 loadDemoBooks() 是同步读的，所以开页这一下只能同步。之后都异步。
-  var serverText = xhr('GET', API + '/shelf');
+  // 它的 loadDemoBooks() 是同步读的，所以开页这一下只能同步。之后都异步
+  var serverText = xhr('GET', API + '/shelf', null, TOKEN);
   var server = null;
   try { server = JSON.parse(serverText); } catch (e) {}
 
   // 迁移：服务器还空着、而这台设备本地已经有书，先把本地那份推上去。
-  // 不做这一步，她手机上已有的书会被服务器的空书架盖掉。
+  // 不做这一步，她手机上已有的书会被服务器的空书架盖掉
   if (Array.isArray(server) && !server.length) {
     var localText = origGet(SHELF_KEY);
     var local = null;
     try { local = JSON.parse(localText); } catch (e) {}
     if (Array.isArray(local) && local.length) {
       console.log('books: 服务器书架是空的，把本地这', local.length, '本推上去');
-      if (xhr('PUT', API + '/shelf', localText) != null) {
-        serverText = xhr('GET', API + '/shelf');
+      if (xhr('PUT', API + '/shelf', localText, TOKEN) != null) {
+        serverText = xhr('GET', API + '/shelf', null, TOKEN);
       }
     }
   }
 
+  // 服务器已经有哪几本书的正文。回写时把这几本的 text 摸掉，只传元数据和批注——
+  // 它 persistShelf() 是整份写，每翻一页都触发一次，每次搬几百 KB 正文承受不起。
+  // 新导的书不在 known 里，仍然带全文上去（服务器还没有）。
+  var known = {};
+  if (Array.isArray(server)) {
+    server.forEach(function (b) {
+      if (b && b.id && b.text && b.text[0] && (b.text[0].paragraphs || []).length) known[b.id] = 1;
+    });
+  }
+  function slim(json) {
+    var list;
+    try { list = JSON.parse(json); } catch (e) { return json; }
+    if (!Array.isArray(list)) return json;
+    return JSON.stringify(list.map(function (b) {
+      if (!b || !known[b.id]) return b;
+      var copy = {};
+      for (var k in b) if (k !== 'text') copy[k] = b[k];
+      copy.text = [{ omitted: true }];
+      return copy;
+    }));
+  }
+
+  // 服务器为准。平板上那个标签页被 Safari 隔离了 localStorage（私密浏览或
+  // 防跟踪切存储区），自己那份是空的；之前只在「服务器为空」时才迁移，
+  // 所以它卡在「自己没有、也不去拿」。两边读同一份，就该以这边为准。
+  if (Array.isArray(server) && server.length) {
+    try { origSet(SHELF_KEY, serverText); } catch (e) {}
+  }
+
   var cached = serverText;
 
-  LS.getItem = function (k) {
+  PROTO.getItem = function (k) {
+    // sessionStorage 共用同一个 prototype，别误伤
+    if (this !== LS) return protoGet.call(this, k);
     if (k === SHELF_KEY && cached) return cached;
     return origGet(k);
   };
 
-  LS.setItem = function (k, v) {
+  PROTO.setItem = function (k, v) {
+    if (this !== LS) return protoSet.call(this, k, v);
     origSet(k, v);
     if (k === SHELF_KEY) {
       cached = v;
-      // 整份回写。不阻塞页面；失败只在控制台报一声，本地那份还在，不会丢东西
+      // 整份回写。不阻塞页面；失败弹黄条，本地那份还在，不会丢东西
       try {
         fetch(API + '/shelf', {
           method: 'PUT',
-          headers: { 'content-type': 'application/json' },
-          body: v,
-        }).catch(function (e) { console.error('books: 同步到服务器失败', e); });
-      } catch (e) { console.error('books: 同步到服务器失败', e); }
+          headers: { 'content-type': 'application/json', 'x-books-token': TOKEN },
+          body: slim(v),
+        })
+          .then(function (r) { if (!r.ok) warn('回写书架返回 ' + r.status); })
+          .catch(function (e) { warn('回写书架失败：' + e.message); });
+      } catch (e) { warn('回写书架失败：' + e.message); }
       return;
     }
     // 阅读位置：它每本书单独存一条 reader_anchor_<id>，形状 {paraIdx, offset}。
@@ -188,11 +288,34 @@ const BRIDGE_SCRIPT = `(function () {
       if (!a || typeof a.paraIdx !== 'number') return;
       fetch(API + '/progress', {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: { 'content-type': 'application/json', 'x-books-token': TOKEN },
         body: JSON.stringify({ book: m[1], paraIdx: a.paraIdx, offset: a.offset || 0 }),
-      }).catch(function () {});
+      })
+        .then(function (r) { if (!r.ok) warn('存读到哪里返回 ' + r.status); })
+        .catch(function (e) { warn('存读到哪里失败：' + e.message); });
     } catch (e) {}
   };
+  // 界面上的名字。原作 SHELF_PROFILES 留空时显示「我 / AI」；这边等它挂完
+  // SHELF_AUTHORS 再改那两个字段，不动源码、不用重新 build。
+  var ME = '${BOOKS_ME_NAME}';
+  var AI = '${BOOKS_AI_NAME}';
+  if (ME || AI) {
+    var tries = 0;
+    var tick = setInterval(function () {
+      var A = window.SHELF_AUTHORS;
+      if (A && A.me && A.ai) {
+        if (ME) A.me.name = ME;
+        if (AI) A.ai.name = AI;
+        clearInterval(tick);
+        return;
+      }
+      if (++tries > 30) clearInterval(tick);
+    }, 100);
+  }
+  console.log(
+    'books: 转接层装好了（挂在 Storage.prototype 上）。服务器书架 ' +
+      (Array.isArray(server) ? server.length + ' 本' : '读不到')
+  );
 })();`;
 
 // 把晨暮星的外框、配色和转接层注进它的 index.html。它的代码一行不改。
@@ -234,18 +357,29 @@ function toShelfJson() {
     const paras = total ? paragraphs(b.id, 0, total).map((p) => p.text) : [];
     const hers = progressOf(b.id, 'user');
     const read = Math.min(hers.para_idx, Math.max(0, total));
-    const anns = annotationsIn(b.id, 0, Math.max(0, total - 1)).map((a) => ({
+    // 按写的时间倒序（2026-10-19）：前端 bookshelf.jsx:1089 是按 date 倒序排的，
+    // 但 date 只到天——同一天的几条 localeCompare 全是 0，顺序就退回数组原序，
+    // 而 annotationsIn 是按 para_idx 排的（书里的位置）。所以在这边先排好，
+    // 让即使 date 相等时保留的原序也是时间倒序。前端不用改。
+    const anns = annotationsIn(b.id, 0, Math.max(0, total - 1))
+      .slice()
+      .sort((x, y) => (y.created_at ?? 0) - (x.created_at ?? 0))
+      .map((a) => ({
       id: String(a.id),
       author: a.author === 'assistant' ? 'ai' : 'me',
       chapter: 1,
       page: Math.floor(a.para_idx / 30) + 1,
       paraIdx: a.para_idx,
-      rangeStart: a.range_start ?? 0,
-      rangeEnd: a.range_end ?? (a.quote ? Array.from(a.quote).length : 0),
+      // 没有真实字符位置时给 null，前端会跳过不画高亮。
+      // 以前这里兜底成 0 和 quote.length，于是高亮永远从段首开始、
+      // 长度等于引文——画出来的位置和引文根本不是一处（2026-10-19）。
+      rangeStart: a.range_start ?? null,
+      rangeEnd: a.range_end ?? null,
       color: safeColor(a.color),
       text: a.quote ?? '',
       note: a.note ?? '',
       date: formatDate(a.created_at),
+      time: hhmm(a.created_at),
       createdAt: a.created_at,
       comments: repliesOf(a.id).map((r) => ({
         author: r.author === 'assistant' ? 'ai' : 'me',
@@ -258,7 +392,16 @@ function toShelfJson() {
       id: b.id,
       title: b.title,
       author: b.author ?? '',
-      description: '',
+      // 她看不到他读到哪了（2026-10-19）：这边给前端的 progress 只有她自己那条，
+      // 他那条压根没传过去。前端书架卡会显示 description（bookshelf.jsx 第 508/514 行），
+      // 原来是空字符串，所以把他的进度写在这儿——不用改前端。
+      description: (() => {
+        if (!total) return '';
+        const his = progressOf(b.id, 'assistant');
+        const at = Math.min(his.para_idx, total);
+        if (!at) return `${AI_DISPLAY} 还没开始读`;
+        return `${AI_DISPLAY} 读到 ${Math.round((at / total) * 100)}%（第 ${at} 段）`;
+      })(),
       cover: safeCover(b.cover, b.id),
       status: b.status === 'finished' ? 'finished' : 'reading',
       progress: b.status === 'finished' ? 1 : total ? Math.min(1, read / total) : 0,
@@ -296,10 +439,15 @@ function applyShelfJson(list) {
     if (!id) continue;
     seen.add(id);
     const existing = getBook(id);
-    // 正文在 text[0].paragraphs；它的段落是字符串数组
-    const paras = (Array.isArray(b?.text?.[0]?.paragraphs) ? b.text[0].paragraphs : []).map((p) =>
-      typeof p === 'string' ? p : String(p?.text ?? '')
-    );
+    // 正文在 text[0].paragraphs；它的段落是字符串数组。
+    // bridge 对服务器已知的书会把 text 换成 [{omitted:true}]，因为正文这边已经有了——
+    // 每翻一页都把整库书传一遍会 413（或者翻完流量）
+    const omitted = b?.text?.[0]?.omitted === true;
+    const paras = omitted
+      ? []
+      : (Array.isArray(b?.text?.[0]?.paragraphs) ? b.text[0].paragraphs : []).map((p) =>
+          typeof p === 'string' ? p : String(p?.text ?? '')
+        );
 
     if (!existing) {
       if (!paras.length) continue; // 没正文的不收
@@ -321,7 +469,11 @@ function applyShelfJson(list) {
     }
 
     const total = paragraphCount(id);
-    const mine = new Map(annotationsIn(id, 0, Math.max(0, total - 1)).map((a) => [a.id, a]));
+    const existingAnns = annotationsIn(id, 0, Math.max(0, total - 1));
+    const mine = new Map(existingAnns.map((a) => [a.id, a]));
+    // 按内容的索引，用来查重（理由见下面那段注释）
+    const annSig = (x) => [x.para_idx, x.author, String(x.note ?? '').trim()].join('\u0000');
+    const byContent = new Map(existingAnns.map((x) => [annSig(x), x.id]));
 
     for (const a of Array.isArray(b.annotations) ? b.annotations : []) {
       const numeric = Number(a?.id);
@@ -342,6 +494,34 @@ function applyShelfJson(list) {
         }
         continue;
       }
+      // 查重。前端新建的批注 id 是 "an_1760..."，服务器存的是数字——两边永远对不上，
+      // 所以上面那个按 id 的判断对它永远不生效，每次都走到新建。
+      // 而 persistShelf() 每翻一页都触发，于是同一条被反复新建。
+      // （2026-10-19：她加一条，列表里出现好几条一样的，就是这个。）
+      // 所以按内容认人：同一本书 + 同一段 + 同一个作者 + 同样的话 = 同一条。
+      const sig = [
+        Number(a?.paraIdx) || 0,
+        a?.author === 'ai' ? 'assistant' : 'user',
+        String(a?.note ?? '').trim(),
+      ].join('\u0000');
+      const dup = byContent.get(sig);
+      if (dup) {
+        // 已经有一条一样的。不新建，但要把回复补上——
+        // 不然本次会话里刚写的回复会丢（那条批注在前端还是 an_xxx）
+        const have = repliesOf(dup).length;
+        const incoming = Array.isArray(a.comments) ? a.comments : [];
+        for (const c of incoming.slice(have)) {
+          const t = String(c?.text ?? '').trim();
+          if (!t) continue;
+          addReply({
+            annotationId: dup,
+            author: c?.author === 'ai' ? 'assistant' : 'user',
+            content: t,
+          });
+          replies++;
+        }
+        continue;
+      }
       const newId = addAnnotation({
         bookId: id,
         paraIdx: Number(a?.paraIdx) || 0,
@@ -352,6 +532,7 @@ function applyShelfJson(list) {
         color: safeColor(a?.color),
         author: a?.author === 'ai' ? 'assistant' : 'user',
       });
+      byContent.set(sig, newId);
       notes++;
       for (const c of Array.isArray(a?.comments) ? a.comments : []) {
         const text = String(c?.text ?? '').trim();
@@ -387,9 +568,25 @@ function applyShelfJson(list) {
 
 export function registerBookRoutes(app, { requireBasicAuth }) {
   const dir = booksUiDir();
+  const apiAuth = booksApiAuth(requireBasicAuth);
+
+  // 诊断用：每次 /books/api/* 请求记一行。挂在 apiAuth 之前，连被 401 拦掉的也记得下——
+  // 「请求没到」和「到了但被拒」是两回事，之前就是分不清这两个所以猜了好几轮。
+  app.use(`${PREFIX}/api`, (req, res, next) => {
+    const hasToken = Boolean(req.get('x-books-token') || req.get('authorization'));
+    const len = req.get('content-length') || '0';
+    console.log(
+      `books: 进来一条 ${req.method} ${req.path}，${hasToken ? '带了 token' : '没带 token'}，body ${len} 字节`
+    );
+    next();
+  });
+
+  // 整份书架会很大（新导的书带全文）。这一句要在各条 API 之前，
+  // 否则全局那个 1mb 的解析器先接走了，直接 413
+  app.use(`${PREFIX}/api`, express.json({ limit: BOOKS_BODY_LIMIT }));
 
   // API 先挂：别让下面的静态文件接走 /books/api/*
-  app.get(`${PREFIX}/api/shelf`, requireBasicAuth, (req, res) => {
+  app.get(`${PREFIX}/api/shelf`, apiAuth, (req, res) => {
     try {
       res.set('cache-control', 'no-store').json(toShelfJson());
     } catch (err) {
@@ -398,8 +595,10 @@ export function registerBookRoutes(app, { requireBasicAuth }) {
     }
   });
 
-  app.put(`${PREFIX}/api/shelf`, requireBasicAuth, (req, res) => {
+  app.put(`${PREFIX}/api/shelf`, apiAuth, (req, res) => {
     try {
+      const got = Array.isArray(req.body) ? req.body.length : -1;
+      console.log(`books: 收到书架 ${got} 本${got < 0 ? '（body 不是数组！）' : ''}`);
       const out = applyShelfJson(req.body);
       if (out.added || out.notes || out.replies || out.removed) {
         console.log(
@@ -414,17 +613,18 @@ export function registerBookRoutes(app, { requireBasicAuth }) {
   });
 
   // 她读到哪里。和他的那条线分开存
-  app.post(`${PREFIX}/api/progress`, requireBasicAuth, (req, res) => {
+  app.post(`${PREFIX}/api/progress`, apiAuth, (req, res) => {
     const book = String(req.body?.book ?? '').trim();
     const paraIdx = Number(req.body?.paraIdx);
     if (!book || !Number.isInteger(paraIdx)) return res.status(400).json({ error: 'book 和 paraIdx 必填' });
     if (!getBook(book)) return res.status(404).json({ error: '没有这本书' });
     setProgress(book, 'user', paraIdx, Number(req.body?.offset) || 0);
+    console.log(`books: 她读到《${getBook(book).title}》第 ${paraIdx} 段`);
     res.json({ ok: true });
   });
 
   // 单条批注删除（它的 removeUserAnnotation 走整份回写，这条是给以后用的）
-  app.delete(`${PREFIX}/api/annotations/:id`, requireBasicAuth, (req, res) => {
+  app.delete(`${PREFIX}/api/annotations/:id`, apiAuth, (req, res) => {
     const id = Number(req.params.id);
     if (!Number.isInteger(id)) return res.status(400).json({ error: 'id 要是数字' });
     res.json({ ok: true, removed: removeAnnotation(id) });

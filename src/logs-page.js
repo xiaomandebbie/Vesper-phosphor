@@ -257,16 +257,21 @@ const STYLE = `
   .lines { list-style: none; margin: 0; padding: 0; }
   .line { background: var(--card); border: 1px solid var(--line); border-left: 4px solid #cbb8c6;
     border-radius: 12px; padding: 10px 14px 12px; margin-bottom: 10px; box-shadow: 0 1px 2px rgba(60, 30, 60, 0.05); }
-  .line.err { border-left-color: #c2607f; background: #fffafb; }
+  .line.err { border-left-color: #c2607f; background: rgba(194, 96, 127, 0.05); }
   .meta { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
   .meta .t { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
   .meta .tag { font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted);
     border: 1px solid var(--line); border-radius: 999px; padding: 1px 7px; }
-  .line.err .meta .tag { color: #a8415f; border-color: #eec3d0; }
+  .line.err .meta .tag { color: #c2607f; border-color: #c2607f; }
   .msg { margin: 0; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-    font-size: 13px; line-height: 1.7; white-space: pre-wrap; word-break: break-word; }
+    font-size: 13px; line-height: 1.7; white-space: pre-wrap; word-break: break-word; color: var(--ink); }
   .empty, .notice { background: var(--card); border-radius: 14px; padding: 16px; font-size: 14px; line-height: 1.6;
     border-left: 4px solid var(--gold); }
+  /* 夜里底色是深紫，红线和标签要提亚才看得见；卡底透一点红，和普通条区分开 */
+  html[data-face="night"] .line.err, html[data-face="dusk"] .line.err {
+    border-left-color: #e08ba8; background: rgba(226, 138, 168, 0.1); }
+  html[data-face="night"] .line.err .meta .tag, html[data-face="dusk"] .line.err .meta .tag {
+    color: #f0a9c0; border-color: #c2738f; }
   @media (max-width: 420px) { .title { font-size: 34px; } .msg { font-size: 12px; } }
 `;
 

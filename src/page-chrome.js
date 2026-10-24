@@ -24,6 +24,8 @@
 import { FACE_CSS, FACE_SCRIPT } from './sun-time.js';
 import { FLOURISH_CSS, FLOURISH_SCRIPT } from './flourish.js';
 import { STAR_ENTRY_CSS, STAR_ENTRY_SCRIPT } from './star-entry.js';
+import fs from 'fs';
+import path from 'path';
 
 const env = (k) => String(process.env[k] ?? '').trim();
 
@@ -64,6 +66,19 @@ export function musicEnabled() {
   }
 }
 
+// 小游戏（WORKKK）配好了没有。判断口径和 game-page.js 一致：
+// 填了 WORKKK_PAGE_URL（它的监控大屏在本机的地址），菜单里那一项才能点。
+export function workkkEnabled() {
+  const raw = env('WORKKK_PAGE_URL');
+  if (!raw || /^(off|0|false|no)$/i.test(raw)) return false;
+  try {
+    const u = new URL(raw);
+    return u.protocol === 'http:' || u.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
 // Ombre Brain 管理页在本机的地址，vesper 把它转发到 /memory/。
 // 没填 OMBRE_DASHBOARD_URL 就用 OMBRE_BRAIN_URL 的地址（只取协议、主机和端口，去掉 /mcp）；填 off 不转发
 export function ombreDashboardBase() {
@@ -77,6 +92,18 @@ export function ombreDashboardBase() {
     return explicit ? `${u.origin}${u.pathname.replace(/\/+$/, '')}` : u.origin;
   } catch {
     return '';
+  }
+}
+
+// 共读书架配好了没有。判断口径和 books-page.js 的 booksUiDir() 一致：
+// 填了 BOOKS_UI_DIR、而且那个目录里真有 index.html，才有站内页 /books。
+export function booksEnabled() {
+  const raw = env('BOOKS_UI_DIR');
+  if (!raw || /^(off|0|false|no)$/i.test(raw)) return false;
+  try {
+    return fs.existsSync(path.join(raw, 'index.html'));
+  } catch {
+    return false;
   }
 }
 
@@ -98,6 +125,12 @@ function navGroups() {
   const music = musicEnabled()
     ? { href: '/music/', label: '音乐', noStars: true }
     : { href: externalUrl('NAV_MUSIC_URL', { allowPath: true }), label: '音乐', external: true, note: '没配置' };
+  // 共读书架：/books 是我们自己的页面，但里面托的是 NEST 书架 UI（别人的排版），
+  // 不跑 HEAD_SCRIPT，所以和 /music/ 同理挂 noStars——进场动画的记号留着没人清，
+  // 会在之后打开的页面上乱闪一次
+  const books = booksEnabled()
+    ? { href: '/books', label: '共读', noStars: true }
+    : { href: '', label: '共读', note: '没配置' };
   const bar = barEnabled()
     ? { href: '/bar', label: '小酒馆' }
     : { href: '', label: '小酒馆', note: '没配置' };
@@ -108,10 +141,15 @@ function navGroups() {
       diary,
       { href: '/dreams', label: '梦境' },
       music,
+      books,
       bar,
       { href: '/drives', label: '心绪' },
       memory,
+      workkkEnabled()
+        ? { href: '/games', label: '小游戏' }
+        : { href: '', label: '小游戏', note: '没配置' },
       { href: '/wallet', label: '小钱包' },
+      { href: '/logs', label: '后台日志' },
       { href: externalUrl('NAV_FORUM_URL'), label: '论坛', external: true, note: '没配置' },
     ],
     bottom: [{ href: '/moments/profile', label: '自定义' }],

@@ -7,6 +7,7 @@ import starJar from './star-jar.js';
 import shakeJar from './shake-jar.js';
 import readMemo from './read-memo.js';
 import proofDrink from './proof-drink.js';
+import readBook from './read-book.js';
 import { describeActivity, describeActivityDetail } from './activity.js';
 import { addActivityMoment } from '../moments-store.js';
 
@@ -22,6 +23,7 @@ const actions = {
   shake_jar: shakeJar,
   read_memo: readMemo,
   proof_drink: proofDrink,
+  read_book: readBook,
   noop: async () => {},
 };
 

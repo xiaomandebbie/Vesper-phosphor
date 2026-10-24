@@ -150,6 +150,21 @@ export function describeActivity(decision, result) {
         return `${AI_NAME}刚刚逛了 Lutopia 论坛，${forumSummary(cmd)}`;
       }
       if (j.server === 'music') return `${AI_NAME}刚刚${musicSummary(j.tool, j.args)}`;
+      // 花园：第一步走这里，续步在 garden-steps.js 自己记，两边口径一致。
+      if (j.server === 'garden') {
+        const scene = { garden: '花园', greenhouse: '花房', cathome: '小窝' }[j.args?.scene] || '花园';
+        if (j.tool === 'garden_state') return `${AI_NAME}看了一眼${scene}现在的样子`;
+        if (j.tool === 'garden_map') return `${AI_NAME}读了一遍${scene}的地图`;
+        const label = { move: '走了几步', say: '说了句话', plant: '种下了一株', water: '浇了水', harvest: '收了一块' }[j.args?.action];
+        if (label) {
+          const plot = Number.isInteger(j.args?.plot) ? ` ${j.args.plot} 号` : '';
+          return `黑猫在${scene}里${label}${plot}`;
+        }
+        return `黑猫在${scene}里动了动`;
+      }
+      // 锈潮：卡片在 xiuchao-steps.js 里写（那边连着走好几步，每步一张，
+      // 而这边对未知 server 只会写「用了 xiuchao 的 panel」，说不清干了什么）
+      if (j.server === 'xiuchao') return null;
       return `${AI_NAME}刚刚用了 ${j.server} 的 ${j.tool}`;
     }
     case 'ombre_brain': {
@@ -168,6 +183,9 @@ export function describeActivity(decision, result) {
     case 'set_mode':
       if (!result?.ok) return null;
       return `${AI_NAME}刚刚把自己的节律调成了${result.mode === 'low-frequency' ? '低频，想安静一阵' : '正常'}`;
+    // 读书：卡片在 books-steps.js 里写（读完几小段才记一张，不是每翻一页记一张）
+    case 'read_book':
+      return null;
     default:
       return null;
   }

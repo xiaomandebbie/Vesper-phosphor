@@ -48,6 +48,8 @@ import {
   unseenFromUser,
   markSeen,
   BOOKS_CHUNK,
+  recapOf,
+  myMarks,
 } from './books.js';
 import db from './state.js';
 
@@ -61,7 +63,7 @@ const USER_NAME = process.env.USER_DISPLAY_NAME || '她';
 const CHUNK = (() => {
   const raw = String(process.env.BOOKS_MCP_CHUNK ?? '').trim();
   const n = Number(raw);
-  return raw && Number.isInteger(n) && n > 0 ? Math.min(n, 30) : Math.max(BOOKS_CHUNK, 8);
+  return raw && Number.isInteger(n) && n > 0 ? Math.min(n, 50) : Math.max(BOOKS_CHUNK, 8);
 })();
 
 const TOOLS = [
@@ -73,12 +75,11 @@ const TOOLS = [
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
   {
-    name: 'book_read',
+    name: 'book_recap',
     description:
-      `接着往下读。不填 from 就从你上次停的地方接，读完进度自动推到这儿——` +
-      `不用你记读到第几段，也不用往记忆库写。你和${USER_NAME}各自一条进度，互不影响。\n` +
-      `段落前面的 [12] 是那一段的编号，写批注要用它。书没有页，别用页码。\n` +
-      `这几段旁边已经有的批注会跟着正文一起给你。`,
+      `看一本书读到哪里了、前面的故事是什么，以及你在这本书上划过的句子和当时写的话。\n` +
+      `想起这本书、跟${USER_NAME}聊到它的时候用这个——不要凭印象说读没读过。\n` +
+      `往下读不在聊天里做：读书是醒来时自己坐下来读的，读完会把前情更新到这里。`,
     inputSchema: {
       type: 'object',
       properties: {
@@ -191,10 +192,57 @@ async function callBooksTool(name, args) {
 
   if (name === 'book_shelf') return text(shelfText());
 
-  if (name === 'book_read') {
+  if (name === 'book_recap') {
     const book = resolveBook(a.book);
     if (!book) return fail(`书架上找不到「${a.book ?? ''}」。先用 book_shelf 看一眼有哪几本。`);
-    const count = Number.isInteger(Number(a.count)) ? Math.min(Number(a.count), 30) : CHUNK;
+    const total = paragraphCount(book.id);
+    const mine = progressOf(book.id, 'assistant');
+    const at = Math.min(mine.para_idx, total);
+    const pct = total ? Math.round((at / total) * 100) : 0;
+    const lines = [
+      `《${book.title}》${book.author ? ` · ${book.author}` : ''}`,
+      `你读到 ${pct}%（第 ${at} 段，全书 ${total} 段）。`,
+      '',
+    ];
+    const r = recapOf(book.id);
+    if (r?.recap) {
+      lines.push(`前面的故事（到第 ${r.through_idx + 1} 段）：`, r.recap, '');
+      if (at > r.through_idx + 1) {
+        lines.push(`（这份前情只写到第 ${r.through_idx + 1} 段，后面那几段还没记下来。）`, '');
+      }
+    } else if (at > 0) {
+      lines.push('这本还没有前情——下次醒来读完一次就会有了。', '');
+    } else {
+      lines.push('这本你还没开始读。', '');
+    }
+    const marks = myMarks(book.id, 8);
+    if (marks.length) {
+      lines.push('你在这本书上划过的句子：');
+      for (const m of marks) {
+        const q = m.quote ? `「${short(m.quote, 70)}」` : `第 ${m.para_idx} 段`;
+        lines.push(`  ${q}`, `      你当时写：${m.note}`);
+      }
+    } else {
+      lines.push('（你还没在这本书上写过什么。）');
+    }
+    return text(lines.join('\n'));
+  }
+
+  // 聊天里不再往下读（2026-10-19）。理由在 mcp-patches.txt 开头：
+  // 这条路没有收尾钩子，读了不写前情，只把进度往前推——于是下次醒来
+  // 前情就缺一段，而他自己也不知道读过。
+  if (name === 'book_read') {
+    return fail(
+      '往下读不在聊天里做。读书是醒来时自己坐下来读的，' +
+        '那边读完会把前情记下来。\n' +
+        '想起这本书用 book_recap：读到哪里、前面的故事、你划过的句子都在里面。'
+    );
+  }
+
+  if (name === 'book_read_disabled') {
+    const book = resolveBook(a.book);
+    if (!book) return fail(`书架上找不到「${a.book ?? ''}」。先用 book_shelf 看一眼有哪几本。`);
+    const count = Number.isInteger(Number(a.count)) ? Math.min(Number(a.count), 50) : CHUNK;
     // 传了 from 就先把进度挪过去（跳回去重读），readOn 再从那儿往下读
     if (Number.isInteger(Number(a.from))) {
       const total = paragraphCount(book.id);

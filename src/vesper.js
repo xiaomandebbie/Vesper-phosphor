@@ -16,9 +16,12 @@ import { registerMomentRoutes } from './moments-page.js';
 import { registerFavoriteRoutes } from './favorites.js';
 import { registerStarJarRoutes } from './star-jar.js';
 import { registerDrivesRoutes } from './drives-page.js';
+import { registerLogRoutes } from './logs-page.js';
 import { registerDiaryRoutes } from './diary-page.js';
 import { registerDreamRoutes } from './dreams-page.js';
 import { registerBarRoutes } from './bar-page.js';
+import { registerBookRoutes } from './books-page.js';
+import { registerBooksMcp } from './books-mcp.js';
 import { registerBarMcp } from './bar-mcp.js';
 import { registerMemoryProxy } from './memory-proxy.js';
 import { registerMusicProxy } from './music-proxy.js';
@@ -28,6 +31,8 @@ import { registerAppIconRoutes } from './app-icon.js';
 import { renderLoginPage } from './login-page.js';
 import { registerWalletRoutes } from './wallet.js';
 import { registerWalletMcp } from './wallet-mcp.js';
+import { registerWakeMcp } from './wake-mcp.js';
+import { registerGameRoutes } from './game-page.js';
 
 const app = express();
 // 点击星星（见 sparkles.js）：最先挂，转发来的记忆库、音乐页面和我们自己的页面都能加上
@@ -36,7 +41,14 @@ registerSparkles(app);
 // 所以必须挂在下面的 body 解析之前。音乐 /music/ 同理（见 music-proxy.js）
 const memoryProxy = registerMemoryProxy(app, { requireBasicAuth });
 const musicProxy = registerMusicProxy(app, { requireBasicAuth });
-app.use(express.json());
+// 书架 API 要收整份正文，比这儿的上限大得多，由 books-page.js 自己挂解析器。
+// 这里先跳过，否则请求体被这个 100kb/1mb 的解析器先吃掉 → 413。
+// 标记：books:skip-global-json
+const _globalJson = express.json();
+app.use((req, res, next) => {
+  if (req.path.startsWith('/books/api')) return next();
+  return _globalJson(req, res, next);
+});
 // 动态页的留言、头像表单是普通 form 提交。
 // 头像在浏览器里裁好后以 base64 一起提交，一般几十 KB，上限放到 1mb（默认 100kb 偶尔不够）
 app.use(express.urlencoded({ extended: false, limit: '1mb' }));
@@ -215,10 +227,29 @@ registerStarJarRoutes(app, { requireBasicAuth });
 registerMomentRoutes(app, { requireBasicAuth, requireApiKey });
 // 心绪页 /drives（Drivesoid 的情绪状态），见 drives-page.js
 registerDrivesRoutes(app, { requireBasicAuth });
+registerLogRoutes(app, { requireBasicAuth });
 // 电子小钱包 /wallet：余额、按日历分组的账单、每笔的批注，见 wallet.js
 const wallet = registerWalletRoutes(app, { requireBasicAuth, requireApiKey });
 // 钱包的 MCP 端点 /wallet/mcp：让 Aru 这边也能读账、写批注，见 wallet-mcp.js
 registerWalletMcp(app);
+// 精确唤醒的 MCP 端点 /wake/mcp：让他自己约时间、看还有什么约、撒约、改时间（见 wake-mcp.js）。
+// 到点触发一次正常唤醒，不强制开口 —— 醒过来做什么是他那一刻自己决定的
+const wakeMcp = registerWakeMcp(app);
+// 小游戏 /games（见 game-page.js）：一页列出所有小游戏，点进去直接玩。
+// 第一个是 WORKKK——不是我们写的（谢之舟 / zhizhou-xiee，AGPL），页面是转发过来的，
+// 署名照它的许可条款留在页面里。没配 WORKKK_PAGE_URL 时列表页会说明怎么装。
+const games = registerGameRoutes(app, { requireBasicAuth });
+
+// 共读书架 /books（见 books-page.js）：托的是 NEST 书架 UI，接我们自己的后端。
+// 它要发前端目录里的静态文件，但那个模块不直接 import express，所以把 static 从这儿交过去。
+const booksDir = String(process.env.BOOKS_UI_DIR ?? '').trim();
+if (booksDir) app.set('books:static', express.static(booksDir));
+// 共读书架的 MCP 端点 /books/mcp（见 books-mcp.js）：聊天里他也能读书、写批注。
+// 要挂在下面 registerBookRoutes 之前：那边有个 app.use('/books', ...) 接静态文件，
+// 按前缀匹配，会把 /books/mcp 也接走。和 bar-mcp 挂在 /bar 页面之前同理。
+// 它自己校 BOOKS_MCP_TOKEN，不走 Basic Auth——聊天客户端不带那个
+const booksMcp = registerBooksMcp(app);
+const books = registerBookRoutes(app, { requireBasicAuth });
 
 app.get('/health', requireBasicAuth, (req, res) => res.json({ ok: true, service: 'vesper' }));
 
@@ -227,6 +258,6 @@ app.get('/', (req, res) => res.redirect(302, musicProxy ? '/app' : '/home'));
 
 app.listen(PORT, () =>
   console.log(
-    `vesper listening on ${PORT}；主页：/home；日记页：${diaryPage ? '已开启' : '未配置'}；梦境页：/dreams；小酒馆：${barPage ? '/bar' : '未配置'}；小酒馆 MCP：${barMcp.enabled ? '/bar/mcp' : '未开（没配 BAR_MCP_TOKEN 或 Proof token）'}；记忆库：${memoryProxy ? `转发 ${memoryProxy}` : '未配置'}；音乐：${musicProxy ? `转发 ${musicProxy}，外壳 /app` : '未配置'}；星星罐：/moments/star-jar；钱包：/wallet${wallet.spendEnabled ? '' : '（没配 WALLET_SPEND_SECRET，扣款通知接口没开）'}；钱包 MCP：/wallet/mcp`
+    `vesper listening on ${PORT}；主页：/home；日记页：${diaryPage ? '已开启' : '未配置'}；梦境页：/dreams；小酒馆：${barPage ? '/bar' : '未配置'}；小酒馆 MCP：${barMcp.enabled ? '/bar/mcp' : '未开（没配 BAR_MCP_TOKEN 或 Proof token）'}；记忆库：${memoryProxy ? `转发 ${memoryProxy}` : '未配置'}；音乐：${musicProxy ? `转发 ${musicProxy}，外壳 /app` : '未配置'}；星星罐：/moments/star-jar；钱包：/wallet${wallet.spendEnabled ? '' : '（没配 WALLET_SPEND_SECRET，扣款通知接口没开）'}；钱包 MCP：/wallet/mcp${wakeMcp.enabled ? `；约时间 MCP：/wake/mcp（最多挂 ${wakeMcp.maxPending} 个）` : '；约时间 MCP：未配 WAKE_MCP_TOKEN'}；共读书架：${books.enabled ? '/books' : '未配置（缺 BOOKS_UI_DIR）'}；共读 MCP：${booksMcp.enabled ? '/books/mcp' : '未开（没配 BOOKS_MCP_TOKEN）'}`
   )
 );

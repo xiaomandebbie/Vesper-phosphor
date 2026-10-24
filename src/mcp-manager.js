@@ -2,6 +2,16 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { getForumNotes } from './state.js';
+import { newRequestId } from './garden.js';
+
+// 花园要求 requestId：16–80 个 [A-Za-z0-9_-]。模型没给、或者给的不合法就换一个新的。
+// 合法的不动：那可能是它在沿用同一个编号重试同一个意图，换掉反而会重复执行。
+function withGardenRequestId(serverName, args) {
+  if (serverName !== 'garden') return args;
+  const given = args?.requestId;
+  const ok = typeof given === 'string' && /^[A-Za-z0-9_-]{16,80}$/.test(given);
+  return ok ? args : { ...(args ?? {}), requestId: newRequestId() };
+}
 
 const clients = {};
 // 每个服务怎么重新连接。远端会话过期（Session not found）时用它重连。
@@ -145,6 +155,10 @@ export async function callTool(serverName, toolName, args) {
     console.log(`MCP "${serverName}": ${replyBlocked}`);
     return { isError: true, content: [{ type: 'text', text: replyBlocked }] };
   }
+  // 花园的幂等钥匙。摆在这里而不是各自补：第一步走 executeAction →
+  // actions/mcp-action.js，续步走 garden-steps.js，两条路只在这里汇合。
+  // 模型自己给了合法的就不动——它可能真在重试。
+  args = withGardenRequestId(serverName, args);
   return withClient(serverName, (c) => c.callTool({ name: toolName, arguments: args }));
 }
 
@@ -152,6 +166,21 @@ export async function callTool(serverName, toolName, args) {
 // 没配或连不上的只打一行警告，不会让整个进程崩掉。
 // 连上的 MCP，TA 醒来时都可以自己决定用（BLOCKED_TOOLS 里的除外）。
 export async function connectAll() {
+  // 锈潮（https://xiuchao.online）：一个小机住在星落村里的世界，Streamable HTTP。
+  // 和论坛同一个性质——那边有别的小机，有世界频道、留言板、集市。
+  // 名字固定叫 xiuchao：decide.js 的提示词、xiuchao.js 的判别、budget.js 的分级都按这个名字认。
+  if (process.env.XIUCHAO_MCP_URL) {
+    try {
+      const headers = process.env.XIUCHAO_MCP_TOKEN
+        ? { Authorization: `Bearer ${process.env.XIUCHAO_MCP_TOKEN}` }
+        : undefined;
+      await connectMcpHttp('xiuchao', process.env.XIUCHAO_MCP_URL.replace(/\/sse$/, ''), headers);
+      console.log('connected MCP: xiuchao');
+    } catch (err) {
+      console.error('could not connect MCP "xiuchao":', err.message);
+    }
+  }
+
   // Ombre Brain（https://github.com/P0luz/Ombre-Brain）：长期记忆，Streamable HTTP。
   // OMBRE_BRAIN_URL 形如 http://localhost:18001/mcp，要求鉴权时再填 OMBRE_MCP_TOKEN。
   if (process.env.OMBRE_BRAIN_URL) {
@@ -180,9 +209,42 @@ export async function connectAll() {
     }
   }
 
+  // WORKKK 小游戏（https://github.com/zhizhou-xiee/workkk）：AI 上班模拟器。
+  // 本机部署，只监听 127.0.0.1；鉴权走我们自己打的补丁（MCP_LOCAL_TOKEN，
+  // 见 scripts/setup_workkk.mjs）——它原生的 OAuth token 一天就过期，
+  // 自动唤醒那条路上没人能去过授权页。名字固定叫 workkk。
+  if (process.env.WORKKK_MCP_URL) {
+    try {
+      const headers = process.env.WORKKK_MCP_TOKEN
+        ? { Authorization: `Bearer ${process.env.WORKKK_MCP_TOKEN}` }
+        : undefined;
+      await connectMcpHttp('workkk', process.env.WORKKK_MCP_URL, headers);
+      console.log('connected MCP: workkk');
+    } catch (err) {
+      console.error('could not connect MCP "workkk":', err.message);
+    }
+  }
+
   // 网易云点歌台（https://github.com/Anko3o/Music-Mcp-Netease 的 mcp/music_mcp.py），Streamable HTTP。
   // 和晨暮星跑在同一台机器上，只听本机，不用鉴权。MUSIC_MCP_URL 形如 http://127.0.0.1:18012/mcp
   // 名字固定叫 music：decide.js 的 prompt、动态页的行为卡片、上面的 BLOCKED_TOOLS 都按这个名字认。
+  // 花园 Rainholm Garden（suwanblue & Kelin & Guchen）：白猫是她、黑猫是他，
+  // 同一片地同一份存档。本机只听 127.0.0.1:5173，用它自带的 AI 钥匙鉴权
+  // （静态、不过期，比 workkk 那个 OAuth 省事）。
+  // 名字固定叫 garden：garden.js 的 gardenCallOf、下面 callTool 补 requestId、
+  // 动态页的行为卡片都按这个名字认。
+  if (process.env.GARDEN_MCP_URL) {
+    try {
+      const headers = process.env.GARDEN_MCP_TOKEN
+        ? { Authorization: `Bearer ${process.env.GARDEN_MCP_TOKEN}` }
+        : undefined;
+      await connectMcpHttp('garden', process.env.GARDEN_MCP_URL, headers);
+      console.log('connected MCP: garden');
+    } catch (err) {
+      console.error('could not connect MCP "garden":', err.message);
+    }
+  }
+
   if (process.env.MUSIC_MCP_URL) {
     try {
       await connectMcpHttp('music', process.env.MUSIC_MCP_URL);

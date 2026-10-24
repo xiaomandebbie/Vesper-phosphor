@@ -1,6 +1,5 @@
 import 'dotenv/config';
-import {
-  getWakeState,
+import { getWakeState,
   updateWakeState,
   addPendingWake,
   getDuePendingWakes,
@@ -19,14 +18,22 @@ import {
   addForumNotes,
   closeDb,
 } from './state.js';
-import { decideWithMessages, forumNextStep, musicNextStep, FORUM_MAX_STEPS, MUSIC_MAX_STEPS } from './decide.js';
+import { decideWithMessages, forumNextStep, musicNextStep, FORUM_MAX_STEPS, MUSIC_MAX_STEPS, askShare } from './decide.js';
 import { executeAction } from './actions/index.js';
+import { runActions, registerContinuers } from './run-actions.js';
+import { budgetConfigSummary } from './budget.js';
+import { xiuchaoConfigSummary } from './xiuchao.js';
+import { booksConfigSummary } from './books.js';
 import { maybeDream, recallDream, markRecalled, dreamConfigSummary } from './dreams.js';
 import { describeActivity, describeActivityDetail } from './actions/activity.js';
+import { workkkConfigSummary } from './workkk.js';
+import { continueWorkkk } from './workkk-steps.js';
 import { addActivityMoment } from './moments-store.js';
 import { isImageEnabled, isVoiceEnabled } from './actions/moment.js';
 import { listAllTools, connectAll, callTool, isConnected } from './mcp-manager.js';
 import { isSharedTimelineEnabled, describeAction, postSharedEvent } from './timeline.js';
+import { gardenConfigSummary } from './garden.js';
+import { continueGarden } from './garden-steps.js';
 import { getSharedContext, countRecentChat } from './context.js';
 import { getTopDrives, isDrivesEnabled } from './drives.js';
 import { getUnseenStarReplies, markStarRepliesSeen, hasStarToday, starWindowLabel } from './star-jar.js';
@@ -45,7 +52,19 @@ import {
 } from './doing.js';
 
 const TICK_MS = 60 * 1000;
-const MISSED_GRACE_MS = 3 * 60 * 1000;
+// 约好的时间晚了多久就不算了。
+//
+// 原来是 3 分钟，太短 —— 一次完整唤醒（breath、feel、模型、论坛续步、听歌续步）
+// 跑五六分钟是常态，那几分钟里 tick 全被 ticking 锁跳过，等跑完这个约已经过期，
+// 下一轮第一件事就把它标成 missed，于是「到点了什么都没发生」。
+//
+// 30 分钟足够盖住一次最长的唤醒。真正该判 missed 的是停机几小时那种 ——
+// 那时候一口气补触发五个约没有意义，告诉他错过了就够。
+// .env 的 WAKE_MISSED_GRACE_MINUTES 可改。
+const MISSED_GRACE_MS = (() => {
+  const n = Number(process.env.WAKE_MISSED_GRACE_MINUTES);
+  return (Number.isFinite(n) && n > 0 ? n : 30) * 60 * 1000;
+})();
 const LOW_FREQ_MIN_GAP_MINUTES = 90;
 const DEFAULT_WAKE_MINUTES = 60;
 const MIN_WAKE_MINUTES = 5;
@@ -541,6 +560,7 @@ async function runDecisionCycle({ kind, scheduledAt = null, selfNote = null, cle
   let messages = null;
   let result = null;
   let errorMessage = null;
+  let actionResults = [];
 
   try {
     const out = await decideWithMessages(context);
@@ -603,31 +623,39 @@ async function runDecisionCycle({ kind, scheduledAt = null, selfNote = null, cle
     } catch (err) {
       console.error(`[${kind}] handleDoingFollowUp failed:`, err);
     }
+    // 一次醒来可以做几件事：按级别筛一遍，按顺序做，每件做完该接着走的就走。
+    // 分级和 2 级那一天 6 次的上限在 budget.js，执行和续步分发在 run-actions.js。
     try {
-      result = await executeAction(decision);
-      console.log(`[${kind}] action result:`, JSON.stringify(result));
+      const ran = await runActions(decision, messages, { kind });
+      actionResults = ran.results;
+      // 老字段留着：logWake 和共享时间线那边还按单个结果认
+      result = ran.results.length === 1 ? ran.results[0].result : ran.results.map((r) => r.result);
     } catch (err) {
       errorMessage = err.message;
-      console.error(`[${kind}] executeAction failed:`, err);
+      console.error(`[${kind}] runActions failed:`, err);
     }
   }
 
-  // 逛论坛：看完了可以接着点开、回帖、发帖。出什么错都不影响这次唤醒剩下的收尾
+
+
+  // 上班：开了就把游戏里的那一天上完（见 workkk-steps.js）。
+  // 做到一半停下这天不结算工资，所以走到「今日进度」满；
+  // 下班那一刻立即收手，不往下一天续。出什么错都不影响剩下的收尾。
   if (decision && !errorMessage) {
     try {
-      rememberForumSteps(await continueForum(decision, result, messages));
+      await continueWorkkk(decision, result, messages);
     } catch (err) {
-      console.error(`[${kind}] continueForum failed:`, err);
+      console.error(`[${kind}] continueWorkkk failed:`, err);
     }
   }
 
-  // 听歌：查完一首可以接着翻批注、读歌词、刷评论，最后写一笔或收进歌单。
-  // 和论坛一样：出什么错都不影响这次唤醒剩下的收尾
+  // 逛花园：读完状态和地图可以接着走过去、种一块（见 garden-steps.js）。
+  // 动了土就停，和上班那支正好相反——种地每一步都当场生效，没有「做到一半白干」这回事。
   if (decision && !errorMessage) {
     try {
-      await continueMusic(decision, result, messages);
+      await continueGarden(decision, result, messages);
     } catch (err) {
-      console.error(`[${kind}] continueMusic failed:`, err);
+      console.error(`[${kind}] continueGarden failed:`, err);
     }
   }
 
@@ -640,6 +668,40 @@ async function runDecisionCycle({ kind, scheduledAt = null, selfNote = null, cle
     console.error('[' + kind + '] maybeDream failed:', err.message);
   }
 
+  // 分享：动作和续步都跑完了，再单独问一句有没有想跟她说的（2026-10-20）。
+  // 和 say 不是一回事：say 在动作之前定，那会儿事还没做，说不了「刚才做了什么」。
+  // 这一步手上有真实结果。投递走 bark（正文进 Aru 对话，只叮一声），不另造链路。
+  // 问不出来、或者他给 null，都不影响这次收尾。
+  // 她正在说话的时候别插话（小满 2026-10-20）。
+  // 15:45 那三条分享是在她聊天的中间插进来的。最近一条消息不到 20 分钟
+  // 就不问分享，攒着，等下次醒来再说。typeof 那一步是保险：
+  // recentMessages 不在这个作用域时降级成「照旧问」，不报错。
+  const SHARE_QUIET_MIN = Number(process.env.SHARE_QUIET_MINUTES) || 20;
+  const _recent =
+    typeof recentMessages !== 'undefined' && Array.isArray(recentMessages) ? recentMessages : [];
+  const _lastMsgTs = Math.max(0, ..._recent.map((m) => Number(m && m.ts) || 0));
+  const _quietEnough = !_lastMsgTs || Date.now() - _lastMsgTs >= SHARE_QUIET_MIN * 60000;
+  if (!_quietEnough) {
+    console.log('[' + kind + '] 分享：她刚说过话（不到 ' + SHARE_QUIET_MIN + ' 分钟），这次不插话');
+  }
+  if (!errorMessage && actionResults.length && _quietEnough) {
+    try {
+      const share = await askShare(messages, actionResults);
+      if (share) {
+        const shareDecision = {
+          action: 'bark',
+          action_detail: share,
+          mood: decision && decision.mood,
+        };
+        const shareResult = await executeAction(shareDecision);
+        console.log('[' + kind + '] 分享:', JSON.stringify(shareResult));
+      } else {
+        console.log('[' + kind + '] 分享：这次没什么想说的');
+      }
+    } catch (err) {
+      console.error('[' + kind + '] 分享这一步没成（不影响收尾）:', err.message);
+    }
+  }
   logWake({
     kind,
     scheduledAt,
@@ -652,7 +714,12 @@ async function runDecisionCycle({ kind, scheduledAt = null, selfNote = null, cle
 
   // 做了事就写回共享时间线，让另一边醒来时也知道。
   // 星星罐那一句不写：describeAction 对 star_jar 返回 null，咽下去的话不该漏到别处去
-  if (!errorMessage) await postSharedEvent(describeAction(decision, result));
+  if (!errorMessage) {
+    for (const r of actionResults) {
+      const one = { ...decision, action: r.action, action_detail: r.action_detail };
+      await postSharedEvent(describeAction(one, r.result));
+    }
+  }
   if (repliedCount) {
     await postSharedEvent(`自动唤醒：本次未发送推送｜回复了动态下的 ${repliedCount} 条留言`);
   }
@@ -694,15 +761,29 @@ async function nonPreciseTick() {
 }
 
 async function preciseTick() {
+  // 先把过期太久的摘掉（停机几小时之后不该一口气补触发一堆），
+  // 再执行还在宽限期内的。
   const overdue = getOverduePendingWakes(Date.now(), MISSED_GRACE_MS);
   for (const w of overdue) {
     setPendingWakeStatus(w.id, 'missed');
+    console.warn(
+      `phosphor: 约好的 ${new Date(w.wake_at).toLocaleString()} 已经过去太久（note: ${w.note ?? '(无)'}），这次不补，下次醒来会告诉他`
+    );
   }
 
   const due = getDuePendingWakes();
   for (const w of due) {
     setPendingWakeStatus(w.id, 'triggered');
-    await runDecisionCycle({ kind: 'precise', scheduledAt: w.wake_at, selfNote: w.note });
+    // 晚了多久他自己得知道。约好九点、九点零六才醒过来，
+    // 不说的话他会当成现在正好是九点，然后说一句对不上的话。
+    const lateMin = Math.round((Date.now() - w.wake_at) / 60000);
+    const note = lateMin >= 2
+      ? `${w.note ?? ''}（这个约定的时间是 ${new Date(w.wake_at).toLocaleString()}，你晚了 ${lateMin} 分钟才醒过来，说话时把这件事算进去）`.trim()
+      : w.note;
+    console.log(
+      `phosphor: 到点了，按约醒一次（原定 ${new Date(w.wake_at).toLocaleString()}${lateMin >= 2 ? `，晚了 ${lateMin} 分钟` : ''}）`
+    );
+    await runDecisionCycle({ kind: 'precise', scheduledAt: w.wake_at, selfNote: note });
   }
 }
 
@@ -746,15 +827,17 @@ async function tick() {
   if (ticking) return;
   ticking = true;
   try {
-    try {
-      await nonPreciseTick();
-    } catch (err) {
-      console.error('nonPreciseTick error:', err);
-    }
+    // 精确链排在前面：约好的时间比「隔一阵子自己醒一下」重要。
+    // 反过来的话，自然唤醒先占住 ticking 锁跑五六分钟，约就在后面干等。
     try {
       await preciseTick();
     } catch (err) {
       console.error('preciseTick error:', err);
+    }
+    try {
+      await nonPreciseTick();
+    } catch (err) {
+      console.error('nonPreciseTick error:', err);
     }
     try {
       await cleanupTick();
@@ -787,6 +870,28 @@ function shutdown(signal) {
 }
 
 async function main() {
+  // 这台机器上真正接了哪几支续步，由这里说了算。
+  // 论坛和听歌写在本文件里，别的在各自的 *-steps.js。
+  const continuers = [
+    async (d, r, m) => rememberForumSteps(await continueForum(d, r, m)),
+    continueMusic,
+  ];
+  for (const [mod, name] of [
+    ['./books-steps.js', 'continueBooks'],
+    ['./xiuchao-steps.js', 'continueXiuchao'],
+    ['./workkk-steps.js', 'continueWorkkk'],
+    ['./garden-steps.js', 'continueGarden'],
+  ]) {
+    try {
+      const m = await import(mod);
+      if (typeof m?.[name] === 'function') continuers.push(m[name]);
+    } catch {
+      // 这台机器上没接这一支，跳过。顶层 import 一个不存在的文件会让整个唤醒起不来（见 fa75608）
+    }
+  }
+  registerContinuers(continuers);
+  console.log(`phosphor: 续步接了 ${continuers.length} 支`);
+
   process.on('SIGINT', () => shutdown('SIGINT'));
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   console.log(
@@ -798,7 +903,7 @@ async function main() {
               : '不归档'
           }`
         : '关闭'
-    }；论坛一次最多再走 ${FORUM_MAX_STEPS} 步；听歌一次最多再走 ${MUSIC_MAX_STEPS} 步；${dreamConfigSummary()}；共享时间线：${isSharedTimelineEnabled() ? '已开启' : '未开启'}；动态配图：${isImageEnabled() ? '已开启' : '未配置'}；动态语音：${isVoiceEnabled() ? '已开启' : '未配置'}；情绪（Drivesoid）：${isDrivesEnabled() ? '已接入' : '未接入'}；星星罐：一天一颗，提示窗 ${starWindowLabel()}；她放的星和她发的动态：醒来会带上，回应不占动作；${proofSummary()}；${doingSummary()}`
+    }；论坛一次最多再走 ${FORUM_MAX_STEPS} 步；听歌一次最多再走 ${MUSIC_MAX_STEPS} 步；${dreamConfigSummary()}；共享时间线：${isSharedTimelineEnabled() ? '已开启' : '未开启'}；动态配图：${isImageEnabled() ? '已开启' : '未配置'}；动态语音：${isVoiceEnabled() ? '已开启' : '未配置'}；情绪（Drivesoid）：${isDrivesEnabled() ? '已接入' : '未接入'}；${workkkConfigSummary()}；${gardenConfigSummary()}；星星罐：一天一颗，提示窗 ${starWindowLabel()}；她放的星和她发的动态：醒来会带上，回应不占动作；${proofSummary()}；${doingSummary()}；${budgetConfigSummary()}；${xiuchaoConfigSummary()}；${booksConfigSummary()}`
   );
   await connectAll();
   await tick();

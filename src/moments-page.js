@@ -412,11 +412,42 @@ function renderActivityCard(m, inStack = false) {
 
 // 列表是新的在前。连着的动作卡片，和这一摞里最新那张相差不超过 STACK_WINDOW_MS 的，归成一摞；
 // 中间夹着谁发的动态就断开
+// 这张行动卡是哪一件事（2026-10-20）。
+// moments 表里没存工具名，所以从正文认：activity.js 里那套说法是写死的
+// （LUTOPIA_OPS、MUSIC_OPS 两张表），认得准；老卡片也一样能认。
+// 认不出来就归 other，那些之间照旧可以叠。
+function activityTag(content) {
+  const s = String(content ?? '');
+  if (/Lutopia|论坛/.test(s)) return 'forum';
+  if (/记忆库|存入了一条记忆|OB /.test(s)) return 'memory';
+  if (/在听什么|搜了搜歌|点了一首歌|歌词|批注本|评论区|认真听了|歌单|网易云|点歌台/.test(s)) {
+    return 'music';
+  }
+  if (/共读|书架|读到第|《/.test(s)) return 'books';
+  if (/花园/.test(s)) return 'garden';
+  if (/上班|workkk/i.test(s)) return 'workkk';
+  if (/锈潮/.test(s)) return 'xiuchao';
+  if (/小酒馆|自斟|调了一杯/.test(s)) return 'proof';
+  if (/钱包/.test(s)) return 'wallet';
+  if (/星星罐|摇了摇/.test(s)) return 'jar';
+  if (/节律/.test(s)) return 'mode';
+  // 「TA 刚刚用了 X 的 Y」这种兜底写法，把 X 当成分组依据
+  const m = /用了 (\S+) 的/.exec(s);
+  if (m) return `srv:${m[1]}`;
+  return 'other';
+}
+
 function groupForDisplay(moments) {
   const out = [];
   for (const m of moments) {
     const last = out[out.length - 1];
-    if (m.kind === 'activity' && last?.type === 'stack' && Math.abs(last.items[0].ts - m.ts) <= STACK_WINDOW_MS) {
+    if (
+      m.kind === 'activity' &&
+      last?.type === 'stack' &&
+      // 光是时间近不够了：论坛跟论坛叠，听歌跟听歌叠，两件不同的事不再扑成一摞
+      activityTag(last.items[0].content) === activityTag(m.content) &&
+      Math.abs(last.items[0].ts - m.ts) <= STACK_WINDOW_MS
+    ) {
       last.items.push(m);
       continue;
     }
@@ -432,7 +463,7 @@ function renderStack(items) {
   const ordered = [...items].reverse();
   const n = ordered.length;
   const dots = ordered.map((_, k) => `<i class="stack-dot${k === n - 1 ? ' on' : ''}"></i>`).join('');
-  return `<section class="act-stack" data-stack aria-label="同一时间的 ${n} 个行动">
+  return `<section class="act-stack" data-stack aria-label="同一件事的 ${n} 个行动">
     <div class="stack-row">
       <button type="button" class="stack-arrow" data-stack-prev aria-label="上一个行动"><span aria-hidden="true">‹</span></button>
       <div class="stack-viewport">${ordered.map((m) => renderActivityCard(m, true)).join('')}</div>

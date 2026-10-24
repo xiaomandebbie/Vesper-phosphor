@@ -21,7 +21,7 @@
 // 由接线脚本说了算，一件事只走一遍。
 
 import { executeAction } from './actions/index.js';
-import { pickActions, tier2KindOf, recordTier2, TIER2_KINDS } from './budget.js';
+import { pickActions, tier1KindOf, recordTier1, TIER1_KINDS, tier2KindOf, recordTier2, TIER2_KINDS, recordBookRead, booksRemaining, BOOKS_DAILY_MAX } from './budget.js';
 
 let continuers = [];
 
@@ -41,6 +41,27 @@ async function runContinuers(decision, result, messages) {
   }
 }
 
+// 他想「什么都不做」，却写成了一次工具调用。
+//
+// 2026-10-19 14:16 那次：{"server":"garden","tool":"noop","args":{}}。
+// 花园没有叫 noop 的工具，于是 Unknown tool.——这次醒来既没做事，也没留下任何痕迹。
+// 他的意图很清楚，不该因为写法不对就变成一次失败。
+//
+// 要在 pickActions 之前就改完：否则 tier2KindOf 会把它认成「花园」，
+// 兑成成功之后反而白扣一次 2 级额度。
+function isNoopCall(action, detail) {
+  if (action !== 'mcp_call') return false;
+  try {
+    const raw = typeof detail === 'string' ? detail : JSON.stringify(detail ?? '');
+    const j = JSON.parse(raw);
+    const tool = String(j?.tool ?? '').trim().toLowerCase();
+    const cmd = String(j?.args?.command ?? '').trim().toLowerCase();
+    return !tool || tool === 'noop' || tool === 'none' || cmd === 'noop';
+  } catch {
+    return false;
+  }
+}
+
 // 做完这一次该做的事。
 // 返回 { results, dropped }。results 每项带 action / action_detail / result，
 // logWake 和共享时间线那边要用 action_detail 重建一个 decision 形状。
@@ -51,7 +72,15 @@ export async function runActions(decision, messages, { kind = 'non_precise' } = 
       ? decision.actions
       : [{ action: decision?.action, action_detail: decision?.action_detail }];
 
-  const { allowed, dropped } = pickActions(list);
+  // 把「包成工具调用的 noop」兑回真 noop，再进筛子
+  const cleaned = list.map((item) => {
+    const a = String(item?.action ?? '').trim();
+    if (!isNoopCall(a, item?.action_detail)) return item;
+    console.log(`[${kind}] 他把 noop 当成工具去调了（${item?.action_detail}），按「什么都不做」算`);
+    return { ...item, action: 'noop', action_detail: '' };
+  });
+
+  const { allowed, dropped } = pickActions(cleaned);
   for (const d of dropped) console.log(`[${kind}] 没做：${d.action}——${d.why}`);
 
   const results = [];
@@ -77,6 +106,19 @@ export async function runActions(decision, messages, { kind = 'non_precise' } = 
 
     // 2 级记一笔。记在这里（真正开跑了的那一刻），而不是模型说要做的时候；
     // 后面 continueXxx 里接着走的那几步不再记——一件事只算一次
+    // 1 级也记一笔（见 budget.js）。和下面 2 级同一个位置：真正开跑了才记，
+    // continueXxx 里接着走的那些步不再记。这本账没有上限，只是为了让他下次
+    // 醒来看见「论坛上次是 3 天前」——和那四个游戏一样的活状态。
+    const kind1 = tier1KindOf(item.action, item.action_detail);
+    if (kind1 && !result?.isError) {
+      try {
+        recordTier1(kind1);
+        console.log(`[${kind}] 记上一次 1 级：${TIER1_KINDS[kind1]}`);
+      } catch (err) {
+        console.error('run-actions: 1 级记账失败（不影响这次）', err.message);
+      }
+    }
+
     const kind2 = tier2KindOf(item.action, item.action_detail);
     if (kind2 && !result?.isError) {
       try {
@@ -84,6 +126,18 @@ export async function runActions(decision, messages, { kind = 'non_precise' } = 
         console.log(`[${kind}] 记上一次 2 级：${TIER2_KINDS[kind2]}`);
       } catch (err) {
         console.error('run-actions: 2 级记账失败（不影响这次）', err.message);
+      }
+    }
+
+    // 读书单算一本账（见 budget.js）：一天几回，不占 2 级那几次。
+    // 只有真的往下读了才记——看书架、写批注、回她一句都不扣。
+    // 后面 continueBooks 里接着翻的那几小段也不记，一次坐下只算一回。
+    if (item.action === 'read_book' && !result?.isError && result?.mode === 'read') {
+      try {
+        recordBookRead();
+        console.log(`[${kind}] 记上一回读书：今天还剩 ${booksRemaining()} 回（一天 ${BOOKS_DAILY_MAX} 回）`);
+      } catch (err) {
+        console.error('run-actions: 读书记账失败（不影响这次）', err.message);
       }
     }
 

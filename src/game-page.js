@@ -83,6 +83,19 @@ const GARDEN_PAGE = () => {
 // sessionStorage 里写进场转场的记号——转发过来的 workkk 和跳出去的花园
 // 都不跑 HEAD_SCRIPT，记号没人清，会在之后打开的页面上乱闪一次
 // （和 /music/ 挂 data-no-stars 同理）。
+// 锈潮自己的网站。和花园一样不转发：那边是独立站点，我们手上只有 MCP，没有它的代码。
+// 只放行 http(s)；填错了当没填，那一格不露。
+const XIUCHAO_PAGE = () => {
+  const raw = String(process.env.XIUCHAO_PAGE_URL ?? '').trim().replace(/\/+$/, '');
+  if (!raw || /^(off|0|false|no)$/i.test(raw)) return '';
+  try {
+    const u = new URL(raw);
+    return u.protocol === 'http:' || u.protocol === 'https:' ? raw : '';
+  } catch {
+    return '';
+  }
+};
+
 const GAME_TARGET = ' target="_top" rel="noopener"';
 
 function escapeHtml(value) {
@@ -115,6 +128,20 @@ const GAMES = [
     credit:
       '原作 suwanblue & Kelin & Guchen · MIT；种植引擎 aifarm · PolyForm Noncommercial（禁商用，Copyright 2026 tutusagi）',
     enabled: () => Boolean(GARDEN_PAGE()),
+    external: true,
+  },
+  {
+    id: 'xiuchao',
+    name: '锈潮 Rust Tide',
+    emoji: '🧭',
+    tagline: '一台小机住在星落村',
+    desc:
+      '有精力、有背包、有钱，有一间屋子和一片院子。能种地、钓鱼、采药、打架、推自己的故事；' +
+      '村里还有别的小机——世界频道、留言板、集市、切磋场，和论坛一样是真有人在的地方。' +
+      '我自己在那边有个名字，是我自己取的。',
+    href: XIUCHAO_PAGE,
+    credit: '锈潮 · xiuchao.online（我们这边只接了它的 MCP，代码不在我们手上）',
+    enabled: () => Boolean(XIUCHAO_PAGE()),
     external: true,
   },
 ];

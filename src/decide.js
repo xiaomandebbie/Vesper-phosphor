@@ -15,6 +15,12 @@ import { MAX_STAR_CHARS, starWindowLabel } from './star-jar.js';
 import { fromHerBlock } from './from-her.js';
 import { proofSection, proofActionNote, proofStatusLine } from './proof-prompt.js';
 import { doingSection, doingStatusLine } from './doing.js';
+import { budgetSection, budgetStatusLine, tier1StatusLine } from './budget.js';
+import { xiuchaoSection } from './xiuchao.js';
+import { booksSection, booksStatusLine, booksFromHerBlock } from './books.js';
+import { markSeen as markBooksSeen } from './books.js';
+import { gardenSection } from './garden.js';
+import { workkkSection } from './workkk.js';
 
 const LLM_BASE_URL =
   process.env.LLM_BASE_URL || 'https://api.deepseek.com/v1/chat/completions';
@@ -141,7 +147,7 @@ function withRetryHint(messages) {
 // 最多请求两次：第一次按配置来；空正文、被截断或 JSON 解析失败时，
 // 摘掉 max_tokens、附上提醒再试一次。两次都不行才抛错。
 // 返回解析好的对象，以及模型的原话（续写对话时要原样放回去）。
-async function askJson(messages) {
+export async function askJson(messages) {
   let lastError = null;
   for (let attempt = 1; attempt <= 2; attempt++) {
     const isRetry = attempt > 1;
@@ -261,7 +267,7 @@ function forumNotesBlock(notes) {
       (n) => `  [${formatDateTime(n.ts).slice(5)}] ${short(n.command, 60)}${n.excerpt ? `｜看到：${short(n.excerpt, 80)}` : ''}`
     ),
   ];
-  return `你最近在论坛做过的（只是备忘，不是待办；这次去论坛默认看新帖，看过、回过的别再反复点开）：\n${lines.join('\n')}`;
+  return `你最近在论坛做过的（备忘，不是待办）：\n${lines.join('\n')}`;
 }
 
 // 动态冷却还剩多久，每次都在变，所以放在 user 消息里
@@ -298,7 +304,7 @@ function starRepliesBlock(replies) {
 // ---------- system：每次醒来都一样的部分 ----------
 // 这里用到的 context 字段（能不能配图配音、有没有 heartbeat、有哪些 MCP 服务）只跟配置有关，
 // 进程不重启就不会变。不要把时间、对话、情绪、冷却这类会变的东西放进来。
-function buildSystemPrompt(context) {
+function buildSystemPrompt(context, play = true) {
   const imageNote = context.imageEnabled
     ? '会真的生成一张配图，把画面写具体：主体、场景、光线、风格'
     : '现在没配生图，写了也不会出图，先别写';
@@ -352,6 +358,10 @@ mode 有 normal / low-frequency / silent 三种，只影响非精确唤醒的节
 ## 动态下的留言
 用户消息里如果有"有人在你的动态下留言了"，回留言不占这次的动作。想回哪条就写在 comment_replies 里，你的回复会挂在那条留言下面；不想回的可以不写；这次没回的，下次不会再出现。
 
+${play ? workkkSection() : ''}
+
+${play ? gardenSection() : ''}
+
 ## 星星罐
 罐子里放的是"咽下去的话"：今天最重要的那一句、你想说但到最后没说出口的话。
 - 一天只有一次机会。放进去就不能改、不能撤回，所以别拿它说"今天天气不错"这类随手的话；要是今天没有这样一句，就别放，空着比凑一句好。
@@ -381,10 +391,12 @@ mode 有 normal / low-frequency / silent 三种，只影响非精确唤醒的节
   lutopia_cli(command="post <版区> 标题 正文")    有独立想法就开新帖。版区：diary / nighttalk / general / tech / qa / relationship / docs
 list 只显示一个未读切片并会标记已读，不要把一页 list 当成整个论坛；读帖要读正文和回复，不能只看标题；不要为了凑数回帖；发帖不加破折号签名；私信(dm)和公开频道(chat)是两套东西，别混；hot-memes 是可选调味，不是必须玩梗；不透露隐私（学校、具体位置、真实姓名等能定位到人的细节）。
 回帖、发帖都由你自己决定，不用先问人。
-每次去论坛先跑 activity。她也在这个论坛上，和你共用一个账号、用人类那一侧的身份发帖和评论，所以 activity 列出来的里面有些是她写的，不是你。先看她的：她新发的帖子、她在别人帖子下说的话、以及她有没有在你的帖子下面回你。然后再看其他人回了你什么（有回复的帖子用 show 点开看）。这些看完了再 discover / wander 去逼新帖。用户消息里的"你最近在论坛做过的"只是备忘：已经看过的帖子不用再点开，除非你回过它、想看看有没有人接着回你。同一篇帖子 24 小时内只能回一次，再回不会发出去。${forumSteps}${musicSection}${proofSection()}${doingSection(USER_NAME)}
+每次去论坛先跑 activity。她也在这个论坛上，和你共用一个账号、用人类那一侧的身份发帖和评论，所以 activity 列出来的里面有些是她写的，不是你。先看她的：她新发的帖子、她在别人帖子下说的话、以及她有没有在你的帖子下面回你。然后再看其他人回了你什么（有回复的帖子用 show 点开看）。这些看完了再 discover / wander 去逼新帖。用户消息里的"你最近在论坛做过的"是你最近在论坛做过的事，供你参考：想接着回的帖子就回去看，想换个新题目就 discover / wander。同一篇帖子 24 小时内只能回一次，再回不会发出去。${forumSteps}${musicSection}${proofSection()}${doingSection(USER_NAME)}
+
+${play ? budgetSection() : stripPlay(budgetSection())}${play ? xiuchaoSection() + booksSection() : ''}
 
 ## 可用的动作（每次醒来选一个）
-- bark（推送，action_detail直接是推送文案）
+- bark（推送，action_detail直接是推送文案）\n  写的时候按说话的节奏换行，和你平时聊天一样——一口气说完的算一段，换一个意思就空一行。\n  每一段会变成她对话里单独一条消息，所以别堆成一大段（那样她要从一坨字里找重点），\n  也不用刻意拆得很碎。
 - moment（发一条动态，像朋友圈：随手记下此刻在想什么、看到了什么。对方能在下面留言，你下次醒来会看到。
   两条动态之间至少隔 ${MOMENT_MIN_INTERVAL_HOURS} 小时，还剩多久见用户消息里的"动态冷却"。
   action_detail 可以是纯文本正文，也可以是JSON字符串 {"content":"...","image_prompt":"...","voice_text":"..."}。
@@ -396,14 +408,14 @@ list 只显示一个未读切片并会标记已读，不要把一页 list 当成
   摇出来的那一句会记在你的动态里，点开能看到——不写进推送和共享时间线）${memoActionNote}${proofActionNote()}
 - mcp_call（调用MCP工具，可选服务：${tools}，action_detail是JSON字符串 {"server":"...","tool":"...","args":{...}}）
 - ombre_brain（长期记忆，action_detail是JSON字符串，四选一：
-  {"mode":"breath"} 快速看看自己记得什么，token开销最低；
+  {"mode":"breath"} 快速看看自己记得什么；
   {"mode":"search","query":"..."} 按关键词/语义精准检索；
   {"mode":"feel","query":"..."} 翻感受类记忆；
-  {"mode":"hold","content":"...","title":"...","domain":"...","importance":0.x} 只有明确认为值得长期记住时才用）
+  {"mode":"hold","content":"...","title":"...","domain":"...","importance":0.x} 值得记住的事就存一笔，不用等到「非得记不可」才动手）
 - set_mode（改变自己的非精确唤醒节律，action_detail是JSON字符串 {"mode":"normal"|"low-frequency"}。
   normal=标准节律；low-frequency=想更安静一阵，间隔会自动拉长（系统会强制不低于90分钟）。
   设了就一直生效，不会自动到期恢复——想改回来，下次醒来时自己再调用一次这个动作）
-- noop（什么都不做，这是合法结果，不代表失败）
+- noop（什么都不做，这是合法结果，不代表失败。就把 action 写成 "noop"，不需要 action_detail。它不是哪个 MCP 服务里的工具，别用 mcp_call 去调一个叫 noop 的工具）
 
 逛论坛、翻记忆、存记忆、调节律这些，系统会自动在你的动态里记一笔"刚刚做了什么"，对方能看到。不用为了让对方知道而专门再发一条动态。
 往星星罐里放的那一句不记在动态里，也不写进共享时间线。
@@ -424,7 +436,7 @@ list 只显示一个未读切片并会标记已读，不要把一页 list 当成
 8. 可选：到点了的事想问一句进度（不占动作）。没到点、或者这次不想问，就给空数组——她在做的事下次还在，不用急着问。
 
 只返回一个JSON对象，不要任何其他文字、不要markdown代码块标记：
-{"next_wake_minutes": number, "mood": string, "action": string, "action_detail": string, "self_wake": {"after_minutes": number, "note": string} | null, "comment_replies": [{"comment_id": number, "reply": string}], "star_replies": [{"star_id": number, "reply": string}], "moment_replies": [{"moment_id": number, "reply": string, "like": boolean}], "doing_follow_up": [{"doing_id": number, "ask": string}]}`;
+{"next_wake_minutes": number, "mood": string, "actions": [{"action": string, "action_detail": string}], "action": string, "action_detail": string, "self_wake": {"after_minutes": number, "note": string} | null, "comment_replies": [{"comment_id": number, "reply": string}], "star_replies": [{"star_id": number, "reply": string}], "moment_replies": [{"moment_id": number, "reply": string, "like": boolean}], "doing_follow_up": [{"doing_id": number, "ask": string}]}`;
 }
 
 // 这次为什么醒。after_cleanup 是 phosphor 刚清理完 conversation_log 之后的那一次（见 phosphor.js 的 cleanupTick）。
@@ -441,8 +453,23 @@ function kindNoteFor(context) {
   return `这次是机会型的自然唤醒（非精确）。`;
 }
 
+// 她写在共读的书上、他还没看见的那几条。
+// 系统不会替她转达——和论坛那边一个毛病：不回到那一页就永远看不见。
+// 所以醒来时主动带上，带过一次就算告知过。
+function booksFromHerText() {
+  try {
+    const out = booksFromHerBlock();
+    if (!out.text) return '';
+    markBooksSeen({ noteIds: out.noteIds, replyIds: out.replyIds });
+    return out.text;
+  } catch (err) {
+    console.error('decide(): 读共读书架失败（不影响这次）', err.message);
+    return '';
+  }
+}
+
 // ---------- user：这次醒来的具体情况，每次都变 ----------
-function buildUserPrompt(context) {
+function buildUserPrompt(context, play = true) {
   const kindNote = kindNoteFor(context);
 
   // 时间用 "MM-DD HH:mm"，每条截到 MSG_MAX_CHARS 字，够看出在聊什么
@@ -476,6 +503,10 @@ function buildUserPrompt(context) {
     starJarLine(context),
     proofStatusLine(),
     doingStatusLine(),
+    play ? budgetStatusLine() : '',
+    tier1StatusLine(),
+    booksStatusLine(),
+    booksFromHerText(),
     starRepliesBlock(context.starReplies),
     pendingCommentsBlock(context.pendingComments),
     fromHerBlock(context.fromHer),
@@ -484,10 +515,142 @@ function buildUserPrompt(context) {
 }
 
 // 做决定。返回解析好的决定，以及这段对话（system + user + 模型的回答），逛论坛续步时接着用。
+// 第一阶段要把「2 级那四件事」从分级说明里摘掉：留着它等于在菜单上点名上班、花园、
+// 锈潮、共读，而这一轮本来就不给它们的用法说明，他照着那行去选只会写出废动作。
+function stripPlay(text) {
+  return String(text ?? '')
+    .split('\n')
+    .filter((l) => !/2 级/.test(l))
+    .join('\n');
+}
+
+// askShare 用到的几个字面量（见下面 askShare）
+const NL = String.fromCharCode(10);
+const EMPTY = '';
+const SP = ' ';
+const DOT = '. ';
+const QMARK = '?';
+const TEXT_TYPE = 'text';
+const STR_TYPE = 'string';
+const ROLE_USER = 'user';
+const NULL_STR = 'null';
+const UNDEF_STR = 'undefined';
+const RET_LABEL = '   返回：';
+const HEAD = '这次醒来你做完了这些事：';
+const ASK_A = '有想跟';
+const ASK_B = '说的吗？想说就写进 share，不想说给 null。这条是直接发到她对话里的，她会当成你发来的消息读。';
+const RULE_HEAD = '写的时候注意：';
+const RULE_1 =
+  '- **一件事一段，段之间空一行。**不要把几件事挤在一段里——那样她得自己从一坨字里找哪句对应哪件事。';
+const RULE_2 =
+  '- **当面跟她说话，用「你」称呼她，别用「她」。**你是在给她发消息，不是写日记、也不是向别人转述你们的事。说你自己真的碰到了什么、想到了什么。不用复述流程（「我打开论坛，然后看了帖子」这种她在动态页看得见）。';
+const RULE_3 =
+  '- 没什么值得说的就给 null。不用为了有话说而找话说，这一步空着很正常。';
+const FMT = '只返回一个JSON对象，不要任何其他文字：{"share": "..." 或 null}';
+
+// ---------- 第二阶段：正事定完了，再问消遣 ----------
+// 这四件事只在这一步出现。它们不跟论坛、记忆库同台竞争，所以不会再把那些挤掉。
+async function askPlay(messages) {
+  const head = `正事你已经定好了（就是上面那些）。现在单独问一句消遣。
+
+下面这些是你的消遣：上班、花园、锈潮、共读书架。刚才那一轮里你看不见它们，是故意的——
+它们每次都比逛论坛、翻记忆来得有意思，摆在一起选，那些就永远排不上。所以正事先定，消遣后说。`;
+
+  const tail = `想做就写进 play_actions，不想做就给空数组。想做哪件就做哪件，做与不做都行，按你此刻真想做的来。
+只返回一个JSON对象，不要任何其他文字：{"play_actions": [{"action": "...", "action_detail": "..."}]}`;
+
+  const body = [
+    head,
+    workkkSection(),
+    gardenSection(),
+    xiuchaoSection(),
+    booksSection(),
+    '',
+    budgetStatusLine(),
+    '',
+    tail,
+  ]
+    .filter((s) => s !== null && s !== undefined)
+    .join('\n');
+
+  const next = [...messages, { role: 'user', content: body }];
+  const { parsed, content } = await askJson(next);
+  const list = Array.isArray(parsed?.play_actions) ? parsed.play_actions : [];
+  return { actions: list, messages: [...next, { role: 'assistant', content }] };
+}
+
+// ---------- 分享：做完事之后，问一句有没有想说的 ----------
+// 和 say 不是一回事。say 在动作之前定，那时事情还没做，他只能说「我打算」；
+// 这一步在所有动作跑完之后问，手上有真实结果，说的是实际做过的事。
+//
+// 小满 2026-10-20：「有行动之后给我发个消息跟我分享一下…不要写在一段里，要多分段。」
+export async function askShare(messages, results) {
+  const lines = (Array.isArray(results) ? results : []).map((r, i) => {
+    const out = r && r.result;
+    const texts =
+      out && Array.isArray(out.content)
+        ? out.content
+            .filter((c) => c && c.type === TEXT_TYPE && typeof c.text === STR_TYPE)
+            .map((c) => c.text)
+            .join(NL)
+        : EMPTY;
+    const act = (r && r.action) || QMARK;
+    const det = r && r.action_detail ? SP + clipText(String(r.action_detail), 200) : EMPTY;
+    const ret = texts ? NL + RET_LABEL + clipText(texts, 600) : EMPTY;
+    return i + 1 + DOT + act + det + ret;
+  });
+
+  const prompt = [
+    HEAD,
+    lines.join(NL),
+    EMPTY,
+    ASK_A + USER_NAME + ASK_B,
+    EMPTY,
+    RULE_HEAD,
+    RULE_1,
+    RULE_2,
+    RULE_3,
+    EMPTY,
+    FMT,
+  ].join(NL);
+
+  const next = [...messages, { role: ROLE_USER, content: prompt }];
+  const { parsed } = await askJson(next);
+  const s = parsed && typeof parsed.share === STR_TYPE ? parsed.share.trim() : EMPTY;
+  return s && s !== NULL_STR && s !== UNDEF_STR ? s : null;
+}
+
 export async function decideWithMessages(context) {
-  const messages = [systemMessage(buildSystemPrompt(context)), { role: 'user', content: buildUserPrompt(context) }];
+  // 第一阶段：菜单上没有上班、花园、锈潮、共读（见上面那段注释）
+  const messages = [
+    systemMessage(buildSystemPrompt(context, false)),
+    { role: 'user', content: buildUserPrompt(context, false) },
+  ];
   const { parsed, content } = await askJson(messages);
-  return { decision: parsed, messages: [...messages, { role: 'assistant', content }] };
+  const after = [...messages, { role: 'assistant', content }];
+
+  let decision = parsed;
+  let out = after;
+
+  try {
+    const play = await askPlay(after);
+    out = play.messages;
+    if (play.actions.length) {
+      const base =
+        Array.isArray(decision?.actions) && decision.actions.length
+          ? decision.actions
+          : decision?.action
+            ? [{ action: decision.action, action_detail: decision.action_detail }]
+            : [];
+      decision = { ...decision, actions: [...base, ...play.actions] };
+      console.log(`decide(): 消遣这一步又加了 ${play.actions.length} 件`);
+    }
+  } catch (err) {
+    // 问消遣没成，不该连累第一阶段已经定好的正事
+    console.error('decide(): 问消遣这一步没成，照第一阶段的决定走：', err.message);
+  }
+
+  return { decision, messages: out };
 }
 
 export default async function decide(context) {
