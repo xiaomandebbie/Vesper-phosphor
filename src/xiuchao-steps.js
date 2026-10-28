@@ -14,6 +14,20 @@
 // 战斗里连着两次「近战主武器攻击 方位一」是正常打法，所以重复判定带上参数，
 // 不是只看工具名——参数一样才算转圈，而战斗每一步的方位通常会变。
 //
+// ── 2026-10-28：被我们自己拦下来不算出错 ──
+//
+// mcp-manager.js 的 callTool 里有一道检查：他在锈潮对外说的话，句末带「喵」
+// 或者自报名号编号，就不发出去，返回一个 isError 结果加一句人话
+// （见 rusttide.js 的 rusttideBlockedNote）。
+//
+// 小满发现：拦住了，但他没重发。因为这边原来遇 isError 就 break，
+// 而被拦下来也是 isError——话被吞了就停下，没人再问他一次。
+// 拦了却不给改的机会，等于白拦，还把他的话吞了，比不拦更糟。
+//
+// 现在分开：
+//   真出错（连不上、参数错、那边报错）  →  停，和以前一样
+//   被我们拦下来                      →  不停，把话递回去让他改完重发
+//
 // 行为卡片全在这边记，包括醒来选的那第一步：activity.js 对 xiuchao 返回 null
 // （否则卡片上就是「用了 xiuchao 的 panel」这种说不清干了什么的话）。
 
@@ -29,8 +43,6 @@ const RESULT_MAX_CHARS = 2500;
 // 行为卡片详情最多多少字
 const DETAIL_MAX_CHARS = 1500;
 
-const isErr = (r) => r == null || Boolean(r?.isError);
-
 function toolText(result) {
   if (!Array.isArray(result?.content)) return '';
   return result.content
@@ -39,6 +51,16 @@ function toolText(result) {
     .join('\n')
     .trim();
 }
+
+// 这次是被我们自己拦下来的，还是那边真出错了。
+// 拦下来的话 rusttideBlockedNote 开头固定是「这句话没发出去」
+function isBlockedByUs(result) {
+  if (!result?.isError) return false;
+  return toolText(result).startsWith('这句话没发出去');
+}
+
+// 真出错：空返回、或者 isError 而不是被我们拦的
+const isRealError = (r) => (r == null || Boolean(r?.isError)) && !isBlockedByUs(r);
 
 function clip(value, n) {
   const s = String(value ?? '').trim();
@@ -85,10 +107,17 @@ function card(tool, args, result) {
 
 // 把那边刚返回的内容追进对话，问他下一步做什么。
 // 前面的 system + user + 上一步的回答原样不动，前缀缓存照样命中
-async function nextStep(messages, { tool, resultText, isError, remaining }) {
-  const body = isError
-    ? `锈潮这边出错了（你刚才用的：${tool}）：\n${clip(resultText, RESULT_MAX_CHARS)}`
-    : `锈潮返回了（你刚才用的：${tool}）：\n${clip(resultText, RESULT_MAX_CHARS)}`;
+async function nextStep(messages, { tool, resultText, blocked, isError, remaining }) {
+  let body;
+  if (blocked) {
+    // 被拦下来：那句话本身就是要给他看的，不用再包一层解释
+    body = `${clip(resultText, RESULT_MAX_CHARS)}\n\n改好的那句重新发一次就行，别的不用动。`;
+  } else if (isError) {
+    body = `锈潮这边出错了（你刚才用的：${tool}）：\n${clip(resultText, RESULT_MAX_CHARS)}`;
+  } else {
+    body = `锈潮返回了（你刚才用的：${tool}）：\n${clip(resultText, RESULT_MAX_CHARS)}`;
+  }
+
   const prompt = `${body}
 
 这次你还能在锈潮再走 ${remaining} 步。七把工具：join、panel、xingluocun、home、jingli、jichat、kaiguan。
@@ -113,11 +142,18 @@ export async function continueXiuchao(decision, firstResult, messages) {
   if (!XIUCHAO_MAX_STEPS || !messages) return;
 
   const key = (tool, args) => `${tool}|${JSON.stringify(args ?? {})}`;
-  const steps = [{ tool: call.tool, args: call.args, text: toolText(firstResult), error: isErr(firstResult) }];
+  const steps = [{
+    tool: call.tool,
+    args: call.args,
+    text: toolText(firstResult),
+    blocked: isBlockedByUs(firstResult),
+    error: isRealError(firstResult),
+  }];
   let convo = messages;
 
   while (convo && steps.length - 1 < XIUCHAO_MAX_STEPS) {
     const last = steps[steps.length - 1];
+    // 真出错就停；被我们拦下来不算出错，还要问他一次
     if (last.error) break;
 
     let next;
@@ -125,6 +161,7 @@ export async function continueXiuchao(decision, firstResult, messages) {
       next = await nextStep(convo, {
         tool: last.tool,
         resultText: last.text,
+        blocked: last.blocked,
         isError: last.error,
         remaining: XIUCHAO_MAX_STEPS - (steps.length - 1),
       });
@@ -143,8 +180,10 @@ export async function continueXiuchao(decision, firstResult, messages) {
       console.log(`xiuchao: 那边没这把工具（${tool}），停下`);
       break;
     }
-    // 同一个工具加同一组参数走两遍是原地转圈。战斗里方位通常会变，所以带参数判
-    if (steps.some((s) => key(s.tool, s.args) === key(tool, next.args))) {
+    // 同一个工具加同一组参数走两遍是原地转圈。战斗里方位通常会变，所以带参数判。
+    // 上一步是被我们拦下来的就不拦：他改完重发时参数本来就会变，
+    // 万一只去掉一两个字导致 key 几乎一样，也该让他发出去。
+    if (!last.blocked && steps.some((s) => key(s.tool, s.args) === key(tool, next.args))) {
       console.log(`xiuchao: 这一步重复了（${tool}），停下`);
       break;
     }
@@ -155,8 +194,15 @@ export async function continueXiuchao(decision, firstResult, messages) {
     } catch (err) {
       console.error(`xiuchao: 调用失败（${tool}）`, err.message);
     }
-    steps.push({ tool, args: next.args, text: toolText(result), error: isErr(result) });
-    console.log(`xiuchao: 第 ${steps.length} 步：${tool}${isErr(result) ? '（失败）' : ''}`);
+
+    const blocked = isBlockedByUs(result);
+    const error = isRealError(result);
+    steps.push({ tool, args: next.args, text: toolText(result), blocked, error });
+    console.log(
+      `xiuchao: 第 ${steps.length} 步：${tool}${
+        blocked ? '（话被拦下来了，让他重写）' : error ? '（失败）' : ''
+      }`
+    );
     card(tool, next.args, result);
   }
 
