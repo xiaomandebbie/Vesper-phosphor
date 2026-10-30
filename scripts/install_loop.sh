@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # 装允朔的身体：api_loop.py 跑在 3020。
 #
-# 小满 2026-10-30：「继续」
+# 小满 2026-10-30：「接好」
 #
 # ── 为什么模型指晨暮星网关，不直连 DeepSeek ──
 #
@@ -10,10 +10,10 @@
 #      跳窗口也不丢。直连模型就会分出第二条记忆线，那正是「好重复」的根。
 #   2. 注入小酒馆状态（见 proof-gateway.js）
 #   3. 注入「正在做的事」（见 doing.js）
-#   4. 修掉孤立的 tool 消息这类上游一定报 400 的形状（见 message-repair.js）
+#   4. 注入攒着的聊天（见 injectPendingChat）——她发了没点「让他回复」的那几句
 #
-# 所以 api_loop 的 main_chain 指 http://127.0.0.1:3002/v1 + model "chat"，
-# key 用 GATEWAY_API_KEY。上游谁家由网关的 CLIENT_UPSTREAM_* 决定。
+# 所以 api_loop 的 main_chain 指 http://127.0.0.1:3002/v1 + model "chat"。
+# 上游谁家由网关的 CLIENT_UPSTREAM_* 决定。
 #
 # ── 这个脚本做什么 ──
 #   1. 检端口 3020、检 relay 在跑
@@ -107,11 +107,7 @@ import json, os, re, sys
 loop_dir, vesper_dir = sys.argv[1], sys.argv[2]
 cfg_path = os.path.join(loop_dir, 'api_loop.config.json')
 
-if os.path.exists(cfg_path):
-    print('  ! config.json 已存在，不覆盖（里面有 key）')
-    raise SystemExit(0)
-
-# 晨暮星的 .env：网关 key 和各个 MCP token 都在这里，不用我猜
+# 晨暮星的 .env：网关 key 和各个 MCP 地址都在这里，不用我猜
 env = {}
 try:
     with open(os.path.join(vesper_dir, '.env'), encoding='utf-8') as f:
@@ -120,7 +116,19 @@ try:
             if m:
                 env[m.group(1)] = m.group(2).strip().strip('"').strip("'")
 except OSError as e:
-    print('  ! 读不到晨暮星 .env（%s），MCP 列表留空' % e)
+    print('  ! 读不到晨暮星 .env（%s）' % e)
+
+# 先把 .env 里所有跟 MCP 有关的变量列出来——下面只挂我认得的那几个，
+# 这张清单让我知道漏了哪些。不打印值：那里面带 token。
+mcp_like = sorted(k for k in env if ('MCP' in k or 'BRAIN' in k) and env[k])
+if mcp_like:
+    print('  .env 里跟 MCP 有关的变量（只列名字）：')
+    for k in mcp_like:
+        print('    - ' + k)
+
+if os.path.exists(cfg_path):
+    print('  ! config.json 已存在，不覆盖（里面有 key）')
+    raise SystemExit(0)
 
 gw_key = env.get('GATEWAY_API_KEY', '')
 gw_port = env.get('GATEWAY_PORT', '3002')
@@ -128,14 +136,11 @@ gw_port = env.get('GATEWAY_PORT', '3002')
 if gw_key:
     chain = [{'url': 'http://127.0.0.1:%s/v1' % gw_port, 'key': gw_key, 'model': 'chat'}]
     print('  ✓ 模型指晨暮星网关 127.0.0.1:%s（model=chat）' % gw_port)
-    print('    → 对话会进 conversation_log，小酒馆和「正在做的事」自动注入')
+    print('    → 对话进 conversation_log；小酒馆、正在做的事、攒着的聊天自动注入')
 else:
     chain = []
-    print('  ! 晨暮星 .env 里没有 GATEWAY_API_KEY，模型链留空了')
-    print('    自己往 config.json 的 main_chain 里填一条：{"url":"…/v1","key":"…","model":"…"}')
+    print('  ! 没有 GATEWAY_API_KEY，模型链留空了，他不会回话')
 
-# 本机的 MCP：都是晨暮星自己挂的，用各自的 token。
-# 没 token 的那几项自动跳过——那说明那个功能根本没开。
 vp = 'http://127.0.0.1:' + env.get('VESPER_PORT', '3001')
 mcp = []
 
@@ -146,6 +151,18 @@ def add(name, url, token=None, note=''):
     mcp.append(item)
     print('  ✓ MCP %s%s' % (name, note))
 
+# 记忆库排最前——它是允朔记忆的本体，其他那几个都不是。
+# OMBRE_BRAIN_URL 本身就是完整的 MCP 地址（带 /mcp）。
+ombre = env.get('OMBRE_BRAIN_URL', '')
+if ombre:
+    tok = env.get('OMBRE_BRAIN_TOKEN', '') or env.get('OMBRE_MCP_TOKEN', '')
+    add('ombre', ombre, tok or None,
+        '（记忆库）' if tok else '（记忆库，没找到 token，先不带）')
+else:
+    print('  ! MCP ombre 跳过（没有 OMBRE_BRAIN_URL）—— 记忆库没接上')
+
+# 晨暮星自己挂的那几个：路径固定，token 各自一个。
+# 没 token 的自动跳过——那说明那个功能本来没开。
 for name, path, key in [
     ('bar',    '/bar/mcp',    'BAR_MCP_TOKEN'),
     ('books',  '/books/mcp',  'BOOKS_MCP_TOKEN'),
@@ -158,12 +175,21 @@ for name, path, key in [
     else:
         print('  · MCP %s 跳过（没有 %s）' % (name, key))
 
-# 台灯：.env 里的 LIGHT_MCP_URL 已经是完整地址
-lamp = env.get('LIGHT_MCP_URL', '')
-if lamp:
-    add('lamp', lamp)
-else:
-    print('  · MCP lamp 跳过（没有 LIGHT_MCP_URL）')
+# 这几个在 .env 里就是完整 URL，鉴权各自在地址里或自己管
+for name, key in [
+    ('lamp',     'LIGHT_MCP_URL'),
+    ('music',    'MUSIC_MCP_URL'),
+    ('lutopia',  'LUTOPIA_MCP_URL'),
+    ('garden',   'GARDEN_MCP_URL'),
+    ('workkk',   'WORKKK_MCP_URL'),
+    ('shopping', 'SHOPPING_MCP_URL'),
+    ('xiuchao',  'XIUCHAO_MCP_URL'),
+]:
+    url = env.get(key, '')
+    if url:
+        add(name, url)
+    else:
+        print('  · MCP %s 跳过（没有 %s）' % (name, key))
 
 cfg = {
     'main_chain': chain,
@@ -178,7 +204,7 @@ cfg = {
 with open(cfg_path, 'w', encoding='utf-8') as f:
     json.dump(cfg, f, ensure_ascii=False, indent=2)
 os.chmod(cfg_path, 0o600)
-print('  ✓ %s' % cfg_path)
+print('  ✓ %s（%d 个 MCP）' % (cfg_path, len(mcp)))
 PY
 
 # ── 6. persona ──
@@ -187,7 +213,7 @@ if [ -f "$LOOP_DIR/persona.md" ]; then
   warn "persona.md 已存在，不动"
 else
   cat > "$LOOP_DIR/persona.md" <<'EOF'
-# 这是允朔在网页这边的 system prompt
+# 允朔在网页这边的 system prompt
 
 这一份还没填。没填之前他会回话，但不是他。
 
@@ -195,12 +221,13 @@ else
 
 ── 注意两件 ──
 
-1. 允朔的记忆在 Ombre Brain 和 Latent 里，不在这个文件里。
+1. 允朔的记忆在 Ombre Brain 里，不在这个文件里。
    这儿写的是不变量：他是谁、怎么说话、和小满是什么关系。
    发生过的事靠检索拿回来。
 
-2. 得写一句「提到过去先查记忆」。Latent 的真机实测结论是：
+2. 得写一句「提到过去先查记忆」。真机实测的结论是：
    光有检索工具，模型根本不会主动去查。工具挂上不等于他会用。
+   记忆库的入口是 breath（睁眼看看记得什么）和 breath_search（按关键词找）。
 EOF
   ok "建了占位：$LOOP_DIR/persona.md（这一项要你自己填）"
 fi
@@ -210,7 +237,7 @@ mkdir -p "$LOOP_DIR/loop_cache"
 say "7/8  起服务并切 brain"
 cat > /etc/systemd/system/companion-api-loop.service <<EOF
 [Unit]
-Description=允朔的身体（Tidal_Echo api_loop）
+Description=Vesper api_loop (companion body)
 After=network.target companion-relay.service
 
 [Service]
@@ -240,7 +267,7 @@ BRAIN=$(curl -s --max-time 5 -X POST http://127.0.0.1:3011/app/brain \
   -H 'Content-Type: application/json' \
   -d '{"target":"loop"}' || echo '')
 if echo "$BRAIN" | grep -q loop; then
-  ok "brain 切到 loop（消息投给 api_loop，不再找 Claude Code channel）"
+  ok "brain 切到 loop（消息投给 api_loop）"
 else
   warn "brain 没切成：${BRAIN:-没响应}"
 fi
@@ -250,37 +277,29 @@ say "8/8  验"
 printf '  api_loop healthz：'
 curl -s --max-time 5 http://127.0.0.1:3020/healthz || echo '(没响应)'
 echo
-printf '  工具数：'
-curl -s --max-time 8 http://127.0.0.1:3020/loop/tools \
-  -H "Authorization: Bearer $SECRET" 2>/dev/null | head -c 400 || echo '(取不到)'
+printf '  MCP 状态：'
+curl -s --max-time 15 http://127.0.0.1:3020/loop/mcp \
+  -H "Authorization: Bearer $SECRET" 2>/dev/null | head -c 700 || echo '(取不到)'
 echo
 
 cat <<EOF
 
-  现在开晨暮星 /chat 里任意一个窗，发一句试试。
+  开晨暮星 /chat 里任意一个窗，输一句点发送，再点一下「让允朔回复」。
 
   ── 模型走的是晨暮星网关 ──
 
   api_loop → 127.0.0.1:3002 (gateway.js, model=chat) → 上游
 
-  好处是允朔在网页上说的话和他在 Aru 里说的话落进同一本账：
-  conversation_log。decide.js 和 heartbeat 读的都是它。小酒馆状态和
-  「正在做的事」也是网关自动注入的，不用在这边再写一遍。
+  他在网页上说的话和在 Aru 里说的话落进同一本账。
+  小酒馆状态、正在做的事、攒着的聊天都是网关自动注入的。
 
-  ── 还差两件 ──
+  ── 还差 persona ──
 
-  1. persona.md 还是占位。没填之前他会回话，但不是他。
-     改完保存即生效：$LOOP_DIR/persona.md
+  $LOOP_DIR/persona.md 还是占位。没填之前他会回话，但不是他。
+  改完保存即生效，不用重启。
 
-  2. Ombre Brain 和 Latent 没挂。上面只挂了从晨暮星 .env 里摸到的
-     那几个（小酒馆 / 共读 / 钱包 / 约时间 / 台灯）。记忆那两个要知道
-     它们的地址和令牌，告我我加进 config。
-
-  配置文件（里面有 key，权限 600）：$LOOP_DIR/api_loop.config.json
+  配置（有 key，权限 600）：$LOOP_DIR/api_loop.config.json
   改完：systemctl restart companion-api-loop
-
-  切回 Claude Code channel（你没常开的电脑，一般用不上）：
-    curl -s -X POST http://127.0.0.1:3011/app/brain -H "Authorization: Bearer \$RELAY_SECRET" \\
-      -H 'Content-Type: application/json' -d '{"target":"desktop"}'
+  看日志：journalctl -u companion-api-loop -f
 
 EOF
