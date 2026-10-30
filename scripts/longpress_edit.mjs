@@ -3,15 +3,19 @@
 //
 // 那个叉是我给攒着的消息做的「收回」，位置算错了：
 // .grp.me .ln 是 row-reverse，所以 append 进去的元素会跑到最左。
-// 而长按菜单正好能替掉它：收回这事不必常驻一个按钮。
+// 长按菜单正好替掉它：收回这事不必常驻一个按钮。
 //
 // ── 哪些能改、哪些不能 ──
 //
-// 攒着还没递出去的（.grp.wait，有 pid）：能编辑、能删——还在我们自己库里。
-// 已经递出去的：只能复制。它已经进了 relay 的库、进了他的上文，
-// 在网页上抹掉只是自己看不见——那是假的删除，比不给更坏。
+// 攒着还没递出去的（组上有 data-pid）：能编辑、能删——还在我们自己库里。
+// 已经递出去的：只能复制。它进了 relay 的库和他的上文，在网页上抹掉
+// 只是自己看不见——那是假的删除，比不给更坏。
 //
-// 编辑 = 改队列里那条的正文（走新的 PATCH /chat/api/pending/:id）。
+// ── 上一版为什么炸了 ──
+//
+// 170 行那个单引号字符串里写了真实换行（还有两处同样的毛病）。
+// JavaScript 的普通字符串不能跳行——这是今天第三次犯同一个错。
+// 这一版所有多行文本一律过 L(...)，单行字符串里绝不出现换行。
 //
 // 重跑安全。备份在 src/.chat-lp-backup/。
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
@@ -40,13 +44,20 @@ function load(name) {
 }
 
 function apply(st, label, find, repl) {
-  if (st.text.includes(repl)) { console.log('  · ' + label + '：已经是这样了'); return; }
-  if (!st.text.includes(find)) { console.error('  ✗ ' + label + '：找不到原文'); failed++; return; }
+  if (st.text.includes(repl)) {
+    console.log('  · ' + label + '：已经是这样了');
+    return;
+  }
+  if (!st.text.includes(find)) {
+    console.error('  ✗ ' + label + '：找不到原文');
+    failed++;
+    return;
+  }
   st.text = st.text.replace(find, repl);
   console.log('  ✓ ' + label);
 }
 
-// ════ 1. chat-queue.js：改正文 ════
+// ════ 1. chat-queue.js ════
 console.log('1/3  chat-queue.js —— 改攒着那条的正文');
 const q = load('chat-queue.js');
 if (q) {
@@ -68,14 +79,21 @@ if (q) {
   writeFileSync(q.p, q.text, 'utf8');
 }
 
-// ════ 2. echo-relay.js：加一条路由 ════
+// ════ 2. echo-relay.js ════
 console.log('');
-console.log('2/3  echo-relay.js —— PATCH /chat/api/pending/:id');
+console.log('2/3  echo-relay.js —— 加一条改正文的路由');
 const e = load('echo-relay.js');
 if (e) {
   apply(e, 'import editPending',
-    '  dropPending,\n} from \'./chat-queue.js\';',
-    '  dropPending,\n  editPending,\n} from \'./chat-queue.js\';');
+    L(
+      '  dropPending,',
+      "} from './chat-queue.js';"
+    ),
+    L(
+      '  dropPending,',
+      '  editPending,',
+      "} from './chat-queue.js';"
+    ));
 
   apply(e, '改正文的路由',
     "  app.post('/chat/api/pending/:id/drop', requireBasicAuth, (req, res) => {",
@@ -93,12 +111,12 @@ if (e) {
   writeFileSync(e.p, e.text, 'utf8');
 }
 
-// ════ 3. chat-page.js：去掉叉、加长按 ════
+// ════ 3. chat-page.js ════
 console.log('');
 console.log('3/3  chat-page.js —— 去叉、加长按菜单');
 const c = load('chat-page.js');
 if (c) {
-  // 3a. CSS
+  // ── 3a. CSS ──
   apply(c, '菜单样式',
     L(
       '  /* 攒着还没递出去的：气泡半透，旁边一个小叉可以收回 */',
@@ -128,7 +146,6 @@ if (c) {
       '  .lp-item.danger { color: #8a2a2a; }',
       '  .lp-item.off { color: #b4b4b4; }',
       '',
-      '  /* 编辑框 */',
       '  .lp-edit { width: 100%; max-width: 360px; background: var(--card);',
       '    border: 1px solid var(--line); border-radius: 16px; padding: 14px;',
       '    box-shadow: 0 12px 34px rgba(0, 0, 0, 0.2); }',
@@ -136,15 +153,15 @@ if (c) {
       '    border: 1px solid var(--line); border-radius: 12px; background: #fff;',
       '    font: inherit; font-size: 15px; line-height: 1.6; color: var(--ink);',
       '    resize: vertical; -webkit-appearance: none; appearance: none; }',
-      '  .lp-edit-row { display: flex; gap: 8px; margin-top: 10px; }',
-      '  .lp-edit-row button { flex: 1; min-height: 42px; border-radius: 12px;',
+      '  .lp-row { display: flex; gap: 8px; margin-top: 10px; }',
+      '  .lp-row button { flex: 1; min-height: 42px; border-radius: 12px;',
       '    border: 1px solid var(--line); background: none; font: inherit;',
       '    font-size: 14px; color: var(--muted); }',
-      '  .lp-edit-row button.main { border: none; background: #1a1a1a; color: #fdfdfd; }'
+      '  .lp-row button.main { border: none; background: #1a1a1a; color: #fdfdfd; }'
     ));
 
-  // 3b. undoBtn 不再用——改成把 pid 存在组上
-  apply(c, 'undoBtn 换成存 pid',
+  // ── 3b. undoBtn → markPid ──
+  apply(c, 'undoBtn 换成记 pid',
     L(
       '  function undoBtn(pid) {',
       "    var x = document.createElement('button');",
@@ -164,15 +181,27 @@ if (c) {
       '  }'
     ));
 
-  // 3c. group 里那两处调用
-  apply(c, 'group 里不再插叉',
+  // ── 3c. group 里不再插叉 ──
+  apply(c, 'group 里改成记 pid',
     '        if (opts.wait && opts.pid) ln.appendChild(undoBtn(opts.pid));',
-    '        // 攒着的那条把 id 记在组上，长按菜单用它判能不能改
-        if (opts.wait && opts.pid) markPid(g, opts.pid);');
-
-  apply(c, 'doSend 里不再插叉',
     L(
-      '        var g = ph && ph.closest ? ph.closest(\'.grp\') : null;',
+      '        // 攒着的那条把 id 记在组上，长按菜单用它判能不能改',
+      '        if (opts.wait && opts.pid) markPid(g, opts.pid);'
+    ));
+
+  // ── 3d. 组上记 ts（编辑后要重画，时间不能丢）──
+  apply(c, '组上记 ts',
+    "    g.setAttribute('data-full', String(text == null ? '' : text));",
+    L(
+      "    g.setAttribute('data-full', String(text == null ? '' : text));",
+      '    // 编辑后要重画这一组，时间不能丢',
+      "    if (ts) g.setAttribute('data-ts', String(normTs(ts) || ''));"
+    ));
+
+  // ── 3e. doSend 里不再插叉 ──
+  apply(c, 'doSend 改成记 pid',
+    L(
+      "        var g = ph && ph.closest ? ph.closest('.grp') : null;",
       '        if (!g || !d.id) return;',
       "        var lns = g.querySelectorAll('.ln');",
       '        if (lns.length) lns[lns.length - 1].appendChild(undoBtn(d.id));'
@@ -182,7 +211,8 @@ if (c) {
       '        if (g && d.id) markPid(g, d.id);'
     ));
 
-  apply(c, 'doFlush 里不再找叉',
+  // ── 3f. doFlush 里不再找叉 ──
+  apply(c, 'doFlush 里清 pid',
     L(
       "          var x = waiting[i].querySelector('[data-drop]');",
       '          if (x && x.parentNode) x.parentNode.removeChild(x);'
@@ -192,7 +222,7 @@ if (c) {
       "          waiting[i].removeAttribute('data-pid');"
     ));
 
-  // 3d. 点击处理里那段 data-drop 改成长按菜单
+  // ── 3g. 点击处理里抿掉 data-drop 那段 ──
   apply(c, '点击里抿掉 data-drop',
     L(
       "    var dp = e.target.closest('[data-drop]');",
@@ -212,7 +242,7 @@ if (c) {
     ),
     '  });');
 
-  // 3e. 长按菜单整套
+  // ── 3h. 长按菜单整套 ──
   apply(c, '长按菜单',
     '  function doSend() {',
     L(
@@ -220,64 +250,48 @@ if (c) {
       '  //',
       '  // 小满 10-30：「消息长按编辑/删除」。',
       '  //',
-      '  // 能改能删的只有攒着还没递出去的（组上有 data-pid）——还在我们自己库里。',
-      '  // 已经递出去的只给复制：它进了 relay 的库和他的上文，在网页上抹掉',
-      '  // 只是自己看不见——那是假的删除，比不给更坏。',
+      '  // 能改能删的只有攒着还没递出去的（组上有 data-pid）。',
+      '  // 已经递出去的只给复制：它进了 relay 的库和他的上文，',
+      '  // 在网页上抹掉只是自己看不见——那是假的删除，比不给更坏。',
       "  var lpMask = document.createElement('div');",
       "  lpMask.className = 'lp-mask';",
-      "  lpMask.setAttribute('data-lp', '');",
       '  document.body.appendChild(lpMask);',
-      '  var lpTarget = null;',
       '',
       '  function lpClose() {',
       "    lpMask.classList.remove('on');",
       "    lpMask.innerHTML = '';",
-      '    lpTarget = null;',
       '  }',
       '',
-      '  function lpOpen(g) {',
-      '    lpTarget = g;',
-      "    var pid = g.getAttribute('data-pid');",
-      "    var full = g.getAttribute('data-full') || '';",
-      "    var box = document.createElement('div');",
-      "    box.className = 'lp-box';",
+      '  function lpItem(box, label, cls, fn) {',
+      "    var b = document.createElement('button');",
+      "    b.type = 'button';",
+      "    b.className = 'lp-item' + (cls ? ' ' + cls : '');",
+      '    b.textContent = label;',
+      '    if (fn) {',
+      "      b.addEventListener('click', function (ev) {",
+      '        ev.stopPropagation();',
+      '        fn();',
+      '      });',
+      '    }',
+      '    box.appendChild(b);',
+      '  }',
       '',
-      '    function item(label, cls, fn) {',
-      "      var b = document.createElement('button');",
-      "      b.type = 'button';",
-      "      b.className = 'lp-item' + (cls ? ' ' + cls : '');",
-      '      b.textContent = label;',
-      '      if (fn) {',
-      "        b.addEventListener('click', function (ev) { ev.stopPropagation(); fn(); });",
+      '  function lpCopy(full) {',
+      '    try {',
+      '      if (navigator.clipboard) navigator.clipboard.writeText(full);',
+      '      else {',
+      "        var ta = document.createElement('textarea');",
+      '        ta.value = full;',
+      '        document.body.appendChild(ta);',
+      '        ta.select();',
+      "        document.execCommand('copy');",
+      '        document.body.removeChild(ta);',
       '      }',
-      '      box.appendChild(b);',
-      '      return b;',
+      "      toast('复制好了');",
+      '    } catch (err) {',
+      "      toast('复制没成');",
       '    }',
-      '',
-      '    if (pid) {',
-      "      item('编辑', '', function () { lpEdit(g, pid, full); });",
-      "      item('删除', 'danger', function () { lpDrop(g, pid); });",
-      '    } else {',
-      "      item('已经递给他了，改不了', 'off', null);",
-      '    }',
-      "    item('复制', '', function () {",
-      '      try {',
-      '        if (navigator.clipboard) navigator.clipboard.writeText(full);',
-      '        else {',
-      "          var ta = document.createElement('textarea');",
-      '          ta.value = full;',
-      '          document.body.appendChild(ta);',
-      '          ta.select();',
-      "          document.execCommand('copy');",
-      '          document.body.removeChild(ta);',
-      '        }',
-      "        toast('复制好了');",
-      "      } catch (err) { toast('复制没成'); }",
-      '      lpClose();',
-      '    });',
-      '',
-      '    lpMask.appendChild(box);',
-      "    lpMask.classList.add('on');",
+      '    lpClose();',
       '  }',
       '',
       '  function lpDrop(g, pid) {',
@@ -291,7 +305,10 @@ if (c) {
       '        pendingN = d.pending;',
       '        syncBtn();',
       '      })',
-      "      .catch(function () { lpClose(); toast('没删掉'); });",
+      '      .catch(function () {',
+      '        lpClose();',
+      "        toast('没删掉');",
+      '      });',
       '  }',
       '',
       '  function lpEdit(g, pid, full) {',
@@ -301,21 +318,28 @@ if (c) {
       "    var ta = document.createElement('textarea');",
       '    ta.value = full;',
       '    box.appendChild(ta);',
+      '',
       "    var row = document.createElement('div');",
-      "    row.className = 'lp-edit-row';",
+      "    row.className = 'lp-row';",
       "    var cancel = document.createElement('button');",
       "    cancel.type = 'button';",
       "    cancel.textContent = '不改了';",
-      "    cancel.addEventListener('click', function (ev) { ev.stopPropagation(); lpClose(); });",
+      "    cancel.addEventListener('click', function (ev) {",
+      '      ev.stopPropagation();',
+      '      lpClose();',
+      '    });',
       "    var save = document.createElement('button');",
       "    save.type = 'button';",
       "    save.className = 'main';",
       "    save.textContent = '存';",
       "    save.addEventListener('click', function (ev) {",
-      '      ev.stopPropagation();
-      var text = ta.value.trim();',
+      '      ev.stopPropagation();',
+      '      var text = ta.value.trim();',
       '      if (!text) return;',
       '      save.disabled = true;',
+      "      var where = g.nextSibling;",
+      '      var parent = g.parentNode;',
+      "      var ts = g.getAttribute('data-ts');",
       "      fetch('/chat/api/pending/' + pid + '/edit', {",
       "        method: 'POST',",
       "        credentials: 'same-origin',",
@@ -327,30 +351,52 @@ if (c) {
       '          lpClose();',
       '          if (!d || !d.edited) return;',
       '          // 重画这一组：换行改了的话气泡数量也跟着变',
-      "          var ts = g.getAttribute('data-ts');",
-      '          var prev = g.previousSibling;
-          var parent = g.parentNode;',
       '          if (parent) parent.removeChild(g);',
       "          var nb = group('human', text, ts ? Number(ts) : Date.now(),",
       "            { wait: true, pid: pid, read: 'unread' });",
-      '          // group 总把新组接在最后，这儿把它搬回原位',
       "          var moved = nb && nb.closest ? nb.closest('.grp') : null;",
-      '          if (moved && parent && prev && prev.parentNode === parent) {',
-      '            parent.insertBefore(moved, prev.nextSibling);',
+      '          // group 总把新组接在最后，这儿把它搬回原位',
+      '          if (moved && parent && where && where.parentNode === parent) {',
+      '            parent.insertBefore(moved, where);',
       '          }',
       '        })',
-      "        .catch(function () { lpClose(); toast('没存上'); });",
+      '        .catch(function () {',
+      '          lpClose();',
+      "          toast('没存上');",
+      '        });',
       '    });',
       '    row.appendChild(cancel);',
       '    row.appendChild(save);',
       '    box.appendChild(row);',
+      '',
       '    lpMask.appendChild(box);',
       "    lpMask.classList.add('on');",
       '    setTimeout(function () { ta.focus(); }, 60);',
       '  }',
       '',
-      "  lpMask.addEventListener('click', function (e) { if (e.target === lpMask) lpClose(); });",
-      "  document.addEventListener('keydown', function (e) { if (e.key === 'Escape') lpClose(); });",
+      '  function lpOpen(g) {',
+      "    var pid = g.getAttribute('data-pid');",
+      "    var full = g.getAttribute('data-full') || '';",
+      "    lpMask.innerHTML = '';",
+      "    var box = document.createElement('div');",
+      "    box.className = 'lp-box';",
+      '    if (pid) {',
+      "      lpItem(box, '编辑', '', function () { lpEdit(g, pid, full); });",
+      "      lpItem(box, '删除', 'danger', function () { lpDrop(g, pid); });",
+      '    } else {',
+      "      lpItem(box, '已经递给他了，改不了', 'off', null);",
+      '    }',
+      "    lpItem(box, '复制', '', function () { lpCopy(full); });",
+      '    lpMask.appendChild(box);',
+      "    lpMask.classList.add('on');",
+      '  }',
+      '',
+      "  lpMask.addEventListener('click', function (e) {",
+      '    if (e.target === lpMask) lpClose();',
+      '  });',
+      "  document.addEventListener('keydown', function (e) {",
+      "    if (e.key === 'Escape') lpClose();",
+      '  });',
       '',
       '  // 长按：按住 460ms、且指头没挪开超过 10px。',
       '  // 没这两个条件，滚动列表时会误触。',
@@ -358,34 +404,38 @@ if (c) {
       "  stream.addEventListener('pointerdown', function (e) {",
       "    var g = e.target.closest ? e.target.closest('.grp.me') : null;",
       '    if (!g) return;',
-      '    lpX = e.clientX; lpY = e.clientY; lpFired = false;',
+      '    lpX = e.clientX;',
+      '    lpY = e.clientY;',
+      '    lpFired = false;',
       '    clearTimeout(lpTimer);',
-      '    lpTimer = setTimeout(function () { lpFired = true; lpOpen(g); }, 460);',
+      '    lpTimer = setTimeout(function () {',
+      '      lpFired = true;',
+      '      lpOpen(g);',
+      '    }, 460);',
       '  });',
       "  stream.addEventListener('pointermove', function (e) {",
       '    if (!lpTimer) return;',
       '    if (Math.abs(e.clientX - lpX) + Math.abs(e.clientY - lpY) > 10) {',
-      '      clearTimeout(lpTimer); lpTimer = null;',
+      '      clearTimeout(lpTimer);',
+      '      lpTimer = null;',
       '    }',
       '  });',
       "  ['pointerup', 'pointercancel', 'pointerleave'].forEach(function (ev) {",
-      '    stream.addEventListener(ev, function () { clearTimeout(lpTimer); lpTimer = null; });',
+      '    stream.addEventListener(ev, function () {',
+      '      clearTimeout(lpTimer);',
+      '      lpTimer = null;',
+      '    });',
       '  });',
       '  // 长按弹出菜单之后浏览器还会补一次 click，别让它把菜单立刻关掉',
       "  stream.addEventListener('click', function (e) {",
-      '    if (lpFired) { e.preventDefault(); e.stopPropagation(); lpFired = false; }',
+      '    if (lpFired) {',
+      '      e.preventDefault();',
+      '      e.stopPropagation();',
+      '      lpFired = false;',
+      '    }',
       '  }, true);',
       '',
       '  function doSend() {'
-    ));
-
-  // 3f. 组上记 ts，编辑重画时要用
-  apply(c, '组上记 ts',
-    "    g.setAttribute('data-full', String(text == null ? '' : text));",
-    L(
-      "    g.setAttribute('data-full', String(text == null ? '' : text));",
-      '    // 编辑后要重画这一组，时间不能丢',
-      "    if (ts) g.setAttribute('data-ts', String(normTs(ts) || ''));"
     ));
 
   writeFileSync(c.p, c.text, 'utf8');
@@ -394,7 +444,8 @@ if (c) {
 console.log('');
 if (failed) {
   console.error('失败 ' + failed + ' 处。回滚：');
-  console.error('  cd ' + srcDir + ' && for f in chat-page chat-queue echo-relay; do cp .chat-lp-backup/$f.js.' + stamp + ' $f.js; done');
+  console.error('  cd ' + srcDir);
+  console.error('  for f in chat-page chat-queue echo-relay; do cp .chat-lp-backup/$f.js.' + stamp + ' $f.js; done');
   process.exitCode = 1;
 } else {
   console.log('pm2 restart vesper --update-env');
