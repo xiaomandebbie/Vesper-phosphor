@@ -1,37 +1,41 @@
 // 聊天：两层。
 //
-// 小满 2026-10-30：「点击聊天是竖着列这的所有聊天窗，聊天窗名字可以改
-//   再点进去就是具体聊天界面」
-//
 //   /chat      → 窗口列表（竖着排，每条带改名，顶上一个「开一个新窗」）
 //   /chat/<id> → 那个窗的具体界面
 //
+// ── 这个文件为什么是整个重写的 ──
+//
+// 2026-10-30 这一天它被七个脚本轮流改过，原文早就对不上了：.nudge 那段叠成
+// 两遍，var(--accent) 被灰度脚本吃成 `* 0 0`，最后一个脚本的「是否已改过」
+// 判据用了 data-go，而同一个脚本上一步刚把 data-go 写进 JS 里，于是
+// 输入框那一处被判成「已经改好」跳过了——两个按钮一个没动，JS 却在找
+// 一个不存在的按钮。打补丁到这儿为止，整段重写。
+//
 // ── 聊天真的通了 ──
 //
-// 输入框不再是假的。后端是 Tidal_Echo 的 relay（见 echo-relay.js、chat-queue.js）：
+// 后端是 Tidal_Echo 的 relay（见 echo-relay.js、chat-queue.js）。
 // 发出去的话先落本地队列，不立刻惊动他。两条出口：
-//   点「让他读」 → 按顺序递给 relay，他当场回
-//   不点         → 他下次唤醒自己读（见 gateway.js）
-// 小满 10-30：「可以发完再点一次让允朔读。也可以发完不点，在允朔下一次
-// 唤醒的时候读取并回复。」
+//   点发送键（输入框空着）→ 按顺序递给 relay，他当场回
+//   不点                  → 他下次唤醒自己读（见 gateway.js 的 injectPendingChat）
+// 小满 10-30：「在输入的时候点发送键是发送。消息空的时候点发送键是让允朔回复。
+// 唤醒的时候他可以读取到我只发送未让他回复的消息。」
+//
+// 所以发送和「让他回复」是同一个按钮，不是两个——两个挤在一起才是之前
+// 老点错的根。
 //
 // 密钥不进浏览器：前端只打 /chat/api/*，走晨暮星自己的登录。
 //
-// ── 行动卡片归哪个窗 ──
+// ── 行动卡片 ──
 //
-// 不归属任何窗，是「最新那个窗显示它们」——这样开新窗不用搬历史，
-// 老窗就是当时那一摹。她 2026-10-30 定的。
+// 和消息按时间混排（小满 10-30）。所以卡片不能服务端直接写成 HTML——
+// 那样它们永远在最上面。现在当数据发下来，和历史消息、攒着的话一起
+// 按时间戳排好再画。
 //
-// ── 长相 ──
+// ── 时间戳的坑 ──
 //
-// 行动卡片：居中、没底色、只有点阴影。点开的详情才是带底色的卡，
-// 边框用她 09-30 定的那个暗黄 #E6B652。
-//
-// 说过的话：逐句气泡，每句左边都有头像、只有第一句上面有名字，
-// 时间只跟在最后一个气泡旁边——他的在右，我的在左。头像和名字用动态页
-// 那同一份（moments-store.js 的 getProfile），不另开一套。
-//
-// 思考链默认收着，点了才展开（和 Aru 那边一样）。
+// relay 那边的 ts 和我们自己的 Date.now() 不一定同一个单位。秒和毫秒
+// 混在一起排序，整批消息会被甩到几十年前，表现出来就是「消息不见了」。
+// 所以统一过一道 normTs：小于 1e12 的当秒处理。
 
 import db from './state.js';
 import { listMomentsBetween, getProfile } from './moments-store.js';
@@ -114,7 +118,7 @@ function activityCards(now) {
     .slice(0, LIMIT);
   return rows.map((m) => {
     const { when, body } = splitCard(m.content);
-    return { id: m.id, when, body, detail: tidyActivityDetail(m.detail) };
+    return { id: m.id, ts: m.ts, when, body, detail: tidyActivityDetail(m.detail) };
   });
 }
 
@@ -129,37 +133,36 @@ function latestLine(now) {
 }
 
 const LIST_STYLE = `
-  :root { --ink: #2b2233; --muted: #665a70; --accent: #7a3e5d; --gold: #b7792f;
-    --card: #fffdfb; --line: #eadfe6; --activity: #E6B652; }
+  :root { --ink: #1a1a1a; --muted: #7a7a7a; --card: #ffffff; --line: #e4e4e4; }
   * { box-sizing: border-box; }
   body { margin: 0; min-height: 100vh; color: var(--ink);
     font-family: -apple-system, "PingFang SC", "Helvetica Neue", sans-serif; }
   main { position: relative; z-index: 1; max-width: 600px; margin: 0 auto; padding: 18px 16px 48px; }
   .new { margin: 0 0 14px; }
   .new button { width: 100%; min-height: 46px; border-radius: 16px; border: 1px dashed var(--line);
-    background: rgba(255, 253, 251, 0.7); color: var(--accent); font-size: 14px; }
-  .new button:active { background: #f6eef3; }
+    background: rgba(255, 255, 255, 0.7); color: var(--ink); font-size: 14px; }
+  .new button:active { background: #f2f2f2; }
   .win { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; padding: 13px 14px;
     background: var(--card); border: 1px solid var(--line); border-radius: 16px;
-    box-shadow: 0 1px 3px rgba(60, 30, 60, 0.07); }
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05); }
   .win-go { flex: 1; min-width: 0; color: inherit; text-decoration: none; }
   .win-go:active { opacity: 0.7; }
-  .win-name { display: block; font-size: 15px; font-weight: 600; color: var(--accent); }
-  .win-when { display: block; margin-top: 3px; font-size: 11px; color: #a597ab; }
+  .win-name { display: block; font-size: 15px; font-weight: 600; color: var(--ink); }
+  .win-when { display: block; margin-top: 3px; font-size: 11px; color: #a0a0a0; }
   .win-last { display: block; margin-top: 5px; font-size: 12px; line-height: 1.5; color: var(--muted);
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .win-tag { display: inline-block; margin-top: 5px; font-size: 10px; color: var(--gold);
-    border: 1px solid var(--activity); border-radius: 999px; padding: 0 7px; }
+  .win-tag { display: inline-block; margin-top: 5px; font-size: 10px; color: var(--muted);
+    border: 1px solid var(--line); border-radius: 999px; padding: 0 7px; }
   .win-edit { flex: none; width: 38px; height: 38px; border-radius: 12px; border: 1px solid var(--line);
     background: none; color: var(--muted); font-size: 15px; }
-  .win-edit:active { background: #f6eef3; }
+  .win-edit:active { background: #f2f2f2; }
   .rename { display: none; gap: 6px; margin: 8px 0 0; }
   .rename.on { display: flex; }
   .rename input { flex: 1; min-width: 0; height: 38px; padding: 0 11px; border-radius: 12px;
     border: 1px solid var(--line); background: #fff; font-size: 15px; color: var(--ink); }
   .rename button { flex: none; min-width: 52px; height: 38px; border-radius: 12px; border: none;
-    background: var(--accent); color: #fffdfb; font-size: 13px; }
-  .foot { margin: 20px 6px 0; font-size: 11px; line-height: 1.7; color: #a597ab; }
+    background: #1a1a1a; color: #fdfdfd; font-size: 13px; }
+  .foot { margin: 20px 6px 0; font-size: 11px; line-height: 1.7; color: #a0a0a0; }
 `;
 
 const LIST_SCRIPT = `(function () {
@@ -177,186 +180,153 @@ const LIST_SCRIPT = `(function () {
 })();`;
 
 const ROOM_STYLE = `
-  :root { --ink: #2b2233; --muted: #665a70; --accent: #7a3e5d; --gold: #b7792f;
-    --card: #fffdfb; --line: #eadfe6; --activity: #E6B652; --place: #9a6412; }
+  :root { --ink: #1a1a1a; --muted: #7a7a7a; --card: #ffffff; --line: #e4e4e4; }
   * { box-sizing: border-box; }
   body { margin: 0; min-height: 100vh; color: var(--ink);
     font-family: -apple-system, "PingFang SC", "Helvetica Neue", sans-serif; }
-  main { position: relative; z-index: 1; max-width: 600px; margin: 0 auto; padding: 60px 16px 48px; }
+  main { position: relative; z-index: 1; max-width: 600px; margin: 0 auto;
+    padding: 60px 16px 220px; }
 
   /* 顶条：窗的名字。返回键在左上角（tabs.js 负责插），所以这儿居中 */
   .room-top { position: fixed; top: calc(12px + env(safe-area-inset-top, 0px)); left: 0; right: 0;
     z-index: 60; text-align: center; pointer-events: none; }
   .room-name { display: inline-block; max-width: 56%; padding: 8px 14px; border-radius: 999px;
-    background: rgba(255, 253, 251, 0.94); backdrop-filter: blur(10px); border: 1px solid var(--line);
-    font-size: 13px; font-weight: 600; color: var(--accent);
+    background: rgba(255, 255, 255, 0.94); backdrop-filter: blur(10px); border: 1px solid var(--line);
+    font-size: 13px; font-weight: 600; color: var(--ink);
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-    box-shadow: 0 2px 10px rgba(60, 30, 60, 0.1); }
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.06); }
 
-  /* 行动卡片：居中、没底色、只有点阴影。
-     按钮元素要把浏览器默认那套按钮样式全抹掉 */
-  .card { display: block; width: 100%; margin: 0 0 14px; padding: 2px 10px; border: none;
+  /* 行动卡片：居中、没底色。和消息按时间混在一起排 */
+  .card { display: block; width: 100%; margin: 14px 0; padding: 2px 10px; border: none;
     background: none; text-align: center; font: inherit; color: var(--muted);
     -webkit-appearance: none; appearance: none; }
-  .card-when { display: block; font-size: 11px; color: var(--place); opacity: 0.75;
-    font-variant-numeric: tabular-nums; }
-  .card-body { display: block; margin-top: 2px; font-size: 13px; line-height: 1.6;
-    color: var(--muted); text-shadow: 0 1px 2px rgba(60, 30, 60, 0.1); }
-  .card-more { display: inline-block; margin-top: 3px; font-size: 10px; color: var(--activity); }
+  .card-when { display: block; font-size: 11px; color: #9a9a9a; font-variant-numeric: tabular-nums; }
+  .card-body { display: block; margin-top: 3px; font-size: 13px; line-height: 1.6; color: var(--muted); }
+  .card-more { display: inline-block; margin-top: 3px; font-size: 10px; color: #b8b8b8; }
   .card.tap { cursor: pointer; border-radius: 14px; }
-  .card.tap:active { background: rgba(122, 62, 93, 0.05); }
-  .card.tap:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .card.tap:active { background: rgba(0, 0, 0, 0.04); }
 
   /* 说过的话。一组 = 一次张口，里面按句子拆成几个气泡：
      每句左边都有头像（第二句起隐形占位，所以缩进对齐），
      名字只在第一句上面出一次，时间只跟在最后一个气泡旁边 */
-  .grp { margin: 0 0 12px; }
-  .ln { display: flex; align-items: flex-end; gap: 7px; margin-bottom: 3px; }
+  .grp { margin: 0 0 18px; }
+  .ln { display: flex; align-items: flex-end; gap: 9px; margin-bottom: 6px; }
   .grp.me .ln { flex-direction: row-reverse; }
-  .av { flex: none; width: 30px; height: 30px; border-radius: 50%; overflow: hidden;
-    background: var(--card); border: 1px solid var(--line); display: flex;
-    align-items: center; justify-content: center; font-size: 12px; color: var(--accent); }
+  .av { flex: none; width: 38px; height: 38px; border-radius: 50%; overflow: hidden;
+    background: #f0f0f0; border: 1px solid var(--line); display: flex;
+    align-items: center; justify-content: center; font-size: 14px; color: var(--ink); }
   .av img { width: 100%; height: 100%; object-fit: cover; display: block; }
   .av.ghost { visibility: hidden; }
-  .who { margin: 0 0 3px 37px; font-size: 11px; color: var(--muted); }
-  .grp.me .who { margin: 0 37px 3px 0; text-align: right; }
-  .bub { max-width: 70%; padding: 8px 12px; border-radius: 15px; font-size: 14px;
-    line-height: 1.65; white-space: pre-wrap; word-break: break-word;
-    box-shadow: 0 1px 3px rgba(60, 30, 60, 0.08); }
-  .grp.me .bub { background: var(--accent); color: #fffdfb; border-bottom-right-radius: 5px; }
-  .grp.ta .bub { background: var(--card); color: var(--ink); border: 1px solid var(--line);
-    border-bottom-left-radius: 5px; }
+  .who { margin: 0 0 5px 47px; font-size: 11px; color: var(--muted); }
+  .grp.me .who { margin: 0 47px 5px 0; text-align: right; }
+  .bub { max-width: 72%; padding: 11px 15px; border-radius: 18px; font-size: 15px;
+    line-height: 1.7; white-space: pre-wrap; word-break: break-word; }
+  .grp.me .bub { background: #1a1a1a; color: #fdfdfd; border-bottom-right-radius: 6px; }
+  .grp.ta .bub { background: #f0f0f0; color: var(--ink); border-bottom-left-radius: 6px; }
   .bub.draft { opacity: 0.72; }
-  .at { flex: none; font-size: 10px; color: #a597ab; font-variant-numeric: tabular-nums;
-    padding-bottom: 2px; }
+
+  /* 时间和已读/未读：只跟在最后一个气泡旁边。
+     flex-direction 已经把我这边翻过来了，所以同样 append 就是他的在右、我的在左 */
+  .meta { flex: none; display: flex; flex-direction: column; align-items: flex-end;
+    gap: 2px; padding-bottom: 3px; }
+  .grp.me .meta { align-items: flex-start; }
+  .at { font-size: 10px; color: #a0a0a0; font-variant-numeric: tabular-nums; }
+  .seen { font-size: 10px; color: #b0b0b0; }
+  .seen.unread { color: #6a6a6a; }
 
   /* 攒着还没递出去的：气泡半透，旁边一个小叉可以收回 */
   .grp.wait .bub { opacity: 0.55; }
-  .undo { flex: none; width: 22px; height: 22px; border-radius: 50%; border: 1px solid var(--line);
-    background: var(--card); color: var(--muted); font-size: 12px; line-height: 1; padding: 0; }
+  .undo { flex: none; width: 24px; height: 24px; border-radius: 50%; border: 1px solid var(--line);
+    background: var(--card); color: var(--muted); font-size: 13px; line-height: 1; padding: 0; }
 
-  /* 思考链：默认只一条，点了才展开 */
-  .think { margin: 0 0 8px 37px; }
-  .think-top { display: inline-flex; align-items: center; gap: 5px; padding: 3px 10px;
+  /* 思考链：默认只一条，点了才展开（和 Aru 那边一样） */
+  .think { margin: 0 0 12px 47px; }
+  .think-top { display: inline-flex; align-items: center; gap: 5px; padding: 4px 11px;
     background: none; border: 1px solid var(--line); border-radius: 999px;
     font: inherit; font-size: 11px; color: var(--muted); }
-  .think-top:active { background: rgba(122, 62, 93, 0.05); }
   .think-caret { font-size: 9px; transition: transform 0.15s; }
   .think.on .think-caret { transform: rotate(90deg); }
-  .think-body { display: none; margin: 6px 0 0; padding: 9px 12px; border-radius: 12px;
-    background: rgba(122, 62, 93, 0.04); border: 1px dashed var(--line);
-    font-size: 12px; line-height: 1.7; color: var(--muted);
+  .think-body { display: none; margin: 7px 0 0; padding: 10px 13px; border-radius: 12px;
+    background: #f7f7f7; border: 1px dashed var(--line);
+    font-size: 12px; line-height: 1.75; color: var(--muted);
     white-space: pre-wrap; word-break: break-word; }
   .think.on .think-body { display: block; }
 
-  .msg-act { margin: 0 0 10px; text-align: center; font-size: 11px; color: var(--activity); }
-  .typing { margin: 0 0 10px 37px; font-size: 12px; color: var(--muted); }
+  .msg-act { margin: 0 0 12px; text-align: center; font-size: 11px; color: #9a9a9a; }
+  .typing { margin: 0 0 12px 47px; font-size: 12px; color: var(--muted); }
 
-  /* 详情：这一张有底色。居中，底下留出输入框和标签栏的高度 */
+  /* 详情：居中，底下留出输入框和标签栏的高度 */
   .sheet { position: fixed; inset: 0; z-index: 95; display: none; align-items: center;
     justify-content: center; padding: 16px 16px calc(96px + env(safe-area-inset-bottom, 0px));
-    background: rgba(43, 34, 51, 0.32); }
+    background: rgba(0, 0, 0, 0.32); }
   .sheet.on { display: flex; }
   .sheet-box { width: 100%; max-width: 560px; max-height: 68vh; overflow-y: auto;
-    background: var(--card); border: 1px solid var(--activity); border-radius: 18px;
-    padding: 16px 18px 18px; box-shadow: 0 12px 34px rgba(60, 30, 60, 0.24);
-    animation: up 0.22s ease-out; }
-  @keyframes up { from { transform: translateY(14px); opacity: 0; } to { transform: none; opacity: 1; } }
+    background: var(--card); border: 1px solid var(--line); border-radius: 18px;
+    padding: 16px 18px 18px; box-shadow: 0 12px 34px rgba(0, 0, 0, 0.18); }
   .sheet-head { display: flex; align-items: center; justify-content: space-between; gap: 12px;
     margin-bottom: 10px; }
-  .sheet-when { font-size: 12px; color: var(--place); }
+  .sheet-when { font-size: 12px; color: var(--muted); }
   .sheet-x { border: none; background: none; font-size: 20px; line-height: 1; color: var(--muted);
     padding: 6px 4px; }
-  .sheet-title { margin: 0 0 8px; font-size: 14px; font-weight: 600; color: var(--accent); }
+  .sheet-title { margin: 0 0 8px; font-size: 14px; font-weight: 600; color: var(--ink); }
   .sheet-body { margin: 0; font-size: 13px; line-height: 1.75; white-space: pre-wrap;
-    word-break: break-word; color: var(--ink); }
+    word-break: break-word; color: var(--ink); font-family: inherit; }
 
-  /* 输入框 */
+  /* 输入框。发送和「让他回复」是同一个按钮（小满 10-30）：
+     输入框有字 = 发送，空着 = 把攒着的递给他让他回复。
+     两个按钮挤在一起是之前点错的根，合成一个就不存在了 */
   .composer { position: fixed; left: 50%; transform: translateX(-50%);
-    bottom: calc(72px + env(safe-area-inset-bottom, 0px)); z-index: 80;
-    display: flex; gap: 8px; width: calc(100% - 24px); max-width: 420px; padding: 6px;
-    background: rgba(255, 253, 251, 0.94); backdrop-filter: blur(10px);
-    border: 1px solid var(--line); border-radius: 20px; box-shadow: 0 4px 16px rgba(60, 30, 60, 0.1); }
-  .composer input { flex: 1; height: 38px; padding: 0 12px; border-radius: 14px;
-    border: 1px solid var(--line); background: #fff; font-size: 15px; color: var(--ink); }
-  .composer button { width: 38px; height: 38px; border-radius: 14px; border: none;
-    background: var(--accent); color: #fffdfb; font-size: 15px; }
-  body.vp-has-tabs main { padding-bottom: calc(190px + env(safe-area-inset-bottom, 0px)) !important; }
-
-  /* 「让他读」：攒着话的时候才冒出来，浮在输入框上方 */
-  .nudge { position: fixed; left: 50%; transform: translateX(-50%); z-index: 81;
-    bottom: calc(118px + env(safe-area-inset-bottom, 0px)); display: none;
-    align-items: center; gap: 6px; min-height: 34px; padding: 0 15px;
-    background: var(--accent); color: #fffdfb; border: none; border-radius: 999px;
-    font-size: 12px; box-shadow: 0 3px 12px rgba(60, 30, 60, 0.22); }
-  .nudge.on { display: inline-flex; }
-  .nudge:disabled { opacity: 0.6; }
+    bottom: calc(76px + env(safe-area-inset-bottom, 0px)); z-index: 80;
+    display: flex; gap: 8px; width: calc(100% - 24px); max-width: 440px; padding: 7px;
+    background: rgba(255, 255, 255, 0.96); backdrop-filter: blur(10px);
+    border: 1px solid var(--line); border-radius: 22px; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08); }
+  .composer input { flex: 1; min-width: 0; height: 40px; padding: 0 13px; border-radius: 15px;
+    border: 1px solid var(--line); background: #fff; font-size: 15px; color: var(--ink);
+    -webkit-appearance: none; appearance: none; }
+  .go { flex: none; min-width: 44px; height: 40px; padding: 0 14px; border-radius: 15px;
+    border: none; background: #1a1a1a; color: #fdfdfd; font-size: 14px; white-space: nowrap;
+    -webkit-appearance: none; appearance: none; }
+  .go:disabled { background: #d4d4d4; color: #fafafa; }
 
   .tip { position: fixed; left: 50%; transform: translateX(-50%);
-    bottom: calc(160px + env(safe-area-inset-bottom, 0px)); z-index: 96;
+    bottom: calc(130px + env(safe-area-inset-bottom, 0px)); z-index: 96;
     max-width: calc(100% - 40px); padding: 9px 16px; border-radius: 999px;
-    background: rgba(43, 34, 51, 0.9); color: #fffdfb; font-size: 12px; line-height: 1.5;
+    background: rgba(26, 26, 26, 0.9); color: #fdfdfd; font-size: 12px; line-height: 1.5;
     opacity: 0; pointer-events: none; transition: opacity 0.22s ease; }
   .tip.on { opacity: 1; }
 
   .empty { text-align: center; font-size: 13px; line-height: 1.7; color: var(--muted); margin: 32px 10px; }
-  html[data-face="night"] .room-name, html[data-face="dusk"] .room-name,
-  html[data-face="night"] .composer, html[data-face="dusk"] .composer,
-  html[data-face="night"] .sheet-box, html[data-face="dusk"] .sheet-box {
-    background: var(--card); border-color: var(--line); }
-  html[data-face="night"] .composer input, html[data-face="dusk"] .composer input {
-    background: rgba(255, 255, 255, 0.06); color: var(--ink); }
 `;
 
-// 进来就停在最新那条（她 10-30 提的）。滚三次：立刻、load 后、120ms 后——
-// 字体加载完和 fixed 元素入场都会推一把布局。不用 smooth：那样先看见几天前的再晃到底。
-//
-// 注：这整段是模板字符串，里面不能出现 ${ —— 会被当成插值。
-// 所以字符串拼接一律用 +。
+// 注：这整段是模板字符串，里面不能出现 ${ —— 会被当成插值。字符串拼接一律用 +。
 const ROOM_SCRIPT = `(function () {
-  function toBottom() {
-    try { window.scrollTo(0, document.documentElement.scrollHeight); } catch (e) {}
-  }
-  toBottom();
-  window.addEventListener('load', toBottom);
-  setTimeout(toBottom, 120);
-
-  // 行动卡片的详情
-  var sheet = document.querySelector('[data-sheet]');
-  if (sheet) {
-    var sbox = sheet.querySelector('[data-sheet-body]');
-    var swhen = sheet.querySelector('[data-sheet-when]');
-    var openSheet = function (id, label) {
-      var tpl = document.querySelector('template[data-for="' + id + '"]');
-      if (!tpl) return;
-      sbox.textContent = tpl.content ? tpl.content.textContent : tpl.textContent;
-      swhen.textContent = label || '';
-      sheet.classList.add('on');
-      document.body.style.overflow = 'hidden';
-    };
-    var closeSheet = function () {
-      sheet.classList.remove('on');
-      document.body.style.overflow = '';
-    };
-    document.addEventListener('click', function (e) {
-      var card = e.target.closest ? e.target.closest('.card.tap') : null;
-      if (card) {
-        var w = card.querySelector('.card-when');
-        openSheet(card.getAttribute('data-detail'), w ? w.textContent : '');
-        return;
-      }
-      if (e.target.closest && e.target.closest('[data-sheet-x]')) { closeSheet(); return; }
-      if (e.target === sheet) closeSheet();
-    });
-    document.addEventListener('keydown', function (e) { if (e.key === 'Escape') closeSheet(); });
-  }
-
-  // ── 聊天 ──
+  var main = document.querySelector('main');
   var stream = document.querySelector('[data-stream]');
   var tipEl = document.querySelector('[data-tip]');
-  var nudge = document.querySelector('[data-nudge]');
-  var nudgeN = document.querySelector('[data-nudge-n]');
+  var form = document.querySelector('[data-send]');
+  var input = form && form.querySelector('input');
+  var btn = document.querySelector('[data-go]');
   if (!stream) return;
+
+  // 进来停在最新那条（小满 10-30：「点击进入要定位到最新一条消息」）。
+  // 不用 smooth：那样先看见几天前的再晃到底。
+  function toBottom() {
+    try {
+      var last = stream.lastElementChild;
+      if (last && last.scrollIntoView) last.scrollIntoView({ block: 'end' });
+      window.scrollTo(0, document.documentElement.scrollHeight);
+    } catch (e) {}
+  }
+
+  // 底部留白：量输入框的实际位置，不写固定值。
+  // 固定值总有算不准的时候（安全区、按钮文字变长、转屏），
+  // 而标签栏在输入框下面，已经被这个距离包含。
+  function fitBottom() {
+    if (!main || !form) return;
+    var top = form.getBoundingClientRect().top;
+    var need = Math.max(160, Math.round(window.innerHeight - top + 28));
+    main.style.paddingBottom = need + 'px';
+  }
 
   function attr(k, d) {
     var v = stream.getAttribute(k);
@@ -374,8 +344,17 @@ const ROOM_SCRIPT = `(function () {
     setTimeout(function () { tipEl.classList.remove('on'); }, 2800);
   }
 
+  // relay 那边的 ts 和我们的 Date.now() 不一定同一个单位。
+  // 秒和毫秒混着排序，整批消息会被甩到几十年前 —— 表现出来就是「消息不见了」。
+  function normTs(ts) {
+    var n = Number(ts);
+    if (!isFinite(n) || n <= 0) return 0;
+    return n < 1e12 ? n * 1000 : n;
+  }
+
   function hhmm(ts) {
-    var d = ts ? new Date(ts) : new Date();
+    var n = normTs(ts);
+    var d = n ? new Date(n) : new Date();
     var h = d.getHours(), m = d.getMinutes();
     return (h < 10 ? '0' : '') + h + ':' + (m < 10 ? '0' : '') + m;
   }
@@ -423,7 +402,6 @@ const ROOM_SCRIPT = `(function () {
   function put(el) {
     if (typingEl) stream.insertBefore(el, typingEl);
     else stream.appendChild(el);
-    toBottom();
   }
 
   function avatar(side, ghost) {
@@ -447,11 +425,12 @@ const ROOM_SCRIPT = `(function () {
     x.className = 'undo';
     x.setAttribute('data-drop', pid);
     x.setAttribute('aria-label', '收回这条');
-    x.textContent = '\\u00d7';
+    x.textContent = '×';
     return x;
   }
 
-  // 一组话。side 是 human 或 ai。返回最后一个气泡元素（流式草稿要接着往里写）。
+  // 一组话。side 是 human 或 ai。read: 'read' 已读、'unread' 未读、不传不显示。
+  // 返回最后一个气泡元素（流式草稿要接着往里写）。
   function group(side, text, ts, opts) {
     opts = opts || {};
     var lines = opts.draft ? [text] : sentences(text);
@@ -473,13 +452,22 @@ const ROOM_SCRIPT = `(function () {
       b.className = 'bub' + (opts.draft ? ' draft' : '');
       b.textContent = lines[i];
       ln.appendChild(b);
-      // 时间只跟在最后一个气泡旁边。flex-direction 已经把我这边翻过来了，
-      // 所以同样 append 就是他的在右、我的在左。
       if (i === lines.length - 1) {
+        var meta = document.createElement('div');
+        meta.className = 'meta';
         var at = document.createElement('span');
         at.className = 'at';
         at.textContent = hhmm(ts);
-        ln.appendChild(at);
+        meta.appendChild(at);
+        // 已读/未读只给自己发的。口径是「进没进了他的输入」，
+        // 不是「他真的读懂了」—— 后者我确定不了。
+        if (opts.read) {
+          var sn = document.createElement('span');
+          sn.className = 'seen' + (opts.read === 'unread' ? ' unread' : '');
+          sn.textContent = opts.read === 'unread' ? '未读' : '已读';
+          meta.appendChild(sn);
+        }
+        ln.appendChild(meta);
         if (opts.wait && opts.pid) ln.appendChild(undoBtn(opts.pid));
       }
       g.appendChild(ln);
@@ -499,7 +487,7 @@ const ROOM_SCRIPT = `(function () {
     var caret = document.createElement('span');
     caret.className = 'think-caret';
     caret.setAttribute('aria-hidden', 'true');
-    caret.textContent = '\\u25b6';
+    caret.textContent = '▶';
     var label = document.createElement('span');
     label.textContent = '想了想';
     top.appendChild(caret);
@@ -512,16 +500,47 @@ const ROOM_SCRIPT = `(function () {
     put(box);
   }
 
+  // 行动卡片。和消息按时间混排，所以这儿也是前端画。
+  var details = {};
+  function cardEl(c) {
+    var has = !!c.detail;
+    if (has) details[c.id] = c.detail;
+    var el = document.createElement(has ? 'button' : 'div');
+    el.className = 'card' + (has ? ' tap' : '');
+    if (has) {
+      el.type = 'button';
+      el.setAttribute('data-detail', c.id);
+    }
+    var w = document.createElement('span');
+    w.className = 'card-when';
+    w.textContent = c.when || '';
+    var b = document.createElement('span');
+    b.className = 'card-body';
+    b.textContent = c.body || '';
+    el.appendChild(w);
+    el.appendChild(b);
+    if (has) {
+      var m = document.createElement('span');
+      m.className = 'card-more';
+      m.setAttribute('aria-hidden', 'true');
+      m.textContent = '✦';
+      el.appendChild(m);
+    }
+    put(el);
+  }
+
   var seen = {};
   var drafts = {};
   var mine = [];
+  var pendingN = 0;
 
-  function add(m) {
-    if (!m) return;
-    if (m.id != null) {
-      if (seen[m.id]) return;
-      seen[m.id] = 1;
+  function paint(it) {
+    if (it.t === 'card') { cardEl(it.c); return; }
+    if (it.t === 'pending') {
+      group('human', it.text, it.ts, { wait: true, pid: it.id, read: 'unread' });
+      return;
     }
+    var m = it.m;
     var kind = m.kind || 'reply';
     if (kind === 'act') {
       var a = document.createElement('div');
@@ -531,7 +550,19 @@ const ROOM_SCRIPT = `(function () {
       return;
     }
     if (kind === 'thinking') { thinking(m.text || ''); return; }
-    // 自己刚发的那条：递出去之后 SSE 会把它原样推回来。
+    var human = m.from === 'human';
+    // relay 历史里我的消息都已经递过了，所以都算已读
+    group(human ? 'human' : 'ai', m.text || '', m.ts, human ? { read: 'read' } : {});
+  }
+
+  // SSE 推来的新消息：直接接在最后（它就是最新的）
+  function add(m) {
+    if (!m) return;
+    if (m.id != null) {
+      if (seen[m.id]) return;
+      seen[m.id] = 1;
+    }
+    // 自己刚递出去的那条：SSE 会把它原样推回来。
     // 认领本地已经画好的，别让同一句话出现两遍。
     if (m.from === 'human') {
       for (var i = 0; i < mine.length; i++) {
@@ -541,7 +572,8 @@ const ROOM_SCRIPT = `(function () {
         }
       }
     }
-    group(m.from === 'human' ? 'human' : 'ai', m.text || '', m.ts);
+    paint({ t: 'msg', m: m });
+    toBottom();
   }
 
   function onFrame(d) {
@@ -557,13 +589,13 @@ const ROOM_SCRIPT = `(function () {
         drafts[sid] = b;
       }
       if (d.done) {
-        // 收尾时把草稿整组换成逐句的正式气泡
         var text = d.final_text || b.textContent || '';
         var g = b.closest ? b.closest('.grp') : null;
         if (g && g.parentNode) g.parentNode.removeChild(g);
         delete drafts[sid];
         setTyping(false);
         if (text.trim()) group('ai', text, Date.now());
+        toBottom();
       } else if (typeof d.text === 'string') {
         // text 可能是累计的也可能是增量的，两种都兜着
         var cur = b.textContent || '';
@@ -576,32 +608,72 @@ const ROOM_SCRIPT = `(function () {
     add(d);
   }
 
-  function showNudge(n) {
-    if (!nudge) return;
-    if (n > 0) nudge.classList.add('on');
-    else nudge.classList.remove('on');
-    if (nudgeN) nudgeN.textContent = n > 0 ? '(' + n + ')' : '';
+  // 按钮：输入框有字 = 发送，空着 = 让他回复。同一个键。
+  function syncBtn() {
+    if (!btn) return;
+    var has = input && input.value.trim().length > 0;
+    if (has) {
+      btn.textContent = '↑';
+      btn.disabled = false;
+      btn.setAttribute('data-act', 'send');
+      btn.setAttribute('aria-label', '发送');
+    } else if (pendingN > 0) {
+      btn.textContent = '让' + who.ai.name + '回复';
+      btn.disabled = false;
+      btn.setAttribute('data-act', 'flush');
+      btn.setAttribute('aria-label', '让他读这些话并回复');
+    } else {
+      btn.textContent = '↑';
+      btn.disabled = true;
+      btn.removeAttribute('data-act');
+    }
+    fitBottom();
   }
+
+  // ── 开场：卡片 + 历史 + 攒着的，按时间排好再画 ──
+  var cards = [];
+  try {
+    var tag = document.querySelector('[data-cards]');
+    if (tag) cards = JSON.parse(tag.textContent || '[]');
+  } catch (e) { cards = []; }
 
   fetch('/chat/api/history?limit=60', { credentials: 'same-origin' })
     .then(function (r) { return r.ok ? r.json() : null; })
     .then(function (d) {
-      if (d) {
-        var list = d.messages || [];
-        for (var i = 0; i < list.length; i++) add(list[i]);
+      var msgs = (d && d.messages) || [];
+      for (var i = 0; i < msgs.length; i++) {
+        if (msgs[i].id != null) seen[msgs[i].id] = 1;
       }
-      // 攒着还没递出去的接在最后，刷页之后也还在
-      return fetch('/chat/api/pending', { credentials: 'same-origin' });
+      return fetch('/chat/api/pending', { credentials: 'same-origin' })
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (p) { return { msgs: msgs, pend: (p && p.pending) || [] }; })
+        .catch(function () { return { msgs: msgs, pend: [] }; });
     })
-    .then(function (r) { return r && r.ok ? r.json() : null; })
-    .then(function (d) {
-      if (!d) return;
-      var list = d.pending || [];
-      for (var i = 0; i < list.length; i++) {
-        group('human', list[i].text, list[i].created_at, { wait: true, pid: list[i].id });
+    .then(function (all) {
+      if (!all) return;
+      var items = [];
+      var i;
+      for (i = 0; i < cards.length; i++) {
+        items.push({ t: 'card', ts: normTs(cards[i].ts), c: cards[i] });
       }
-      showNudge(list.length);
+      for (i = 0; i < all.msgs.length; i++) {
+        items.push({ t: 'msg', ts: normTs(all.msgs[i].ts), m: all.msgs[i] });
+      }
+      for (i = 0; i < all.pend.length; i++) {
+        items.push({
+          t: 'pending', ts: normTs(all.pend[i].created_at),
+          id: all.pend[i].id, text: all.pend[i].text
+        });
+      }
+      items.sort(function (a, b) { return a.ts - b.ts; });
+      for (i = 0; i < items.length; i++) paint(items[i]);
+      pendingN = all.pend.length;
+      syncBtn();
+      fitBottom();
       toBottom();
+      // 图片（头像）加载完会推一把布局，再停一次
+      setTimeout(toBottom, 150);
+      setTimeout(toBottom, 600);
     })
     .catch(function () {});
 
@@ -614,11 +686,30 @@ const ROOM_SCRIPT = `(function () {
     es.onerror = function () { setTyping(false); };
   } catch (err) {}
 
-  // 点思考链展开 / 收回攒着的那条
+  // 点思考链展开 / 卡片详情 / 收回攒着的那条
+  var sheet = document.querySelector('[data-sheet]');
+  var sbox = sheet && sheet.querySelector('[data-sheet-body]');
+  var swhen = sheet && sheet.querySelector('[data-sheet-when]');
+  function closeSheet() {
+    if (!sheet) return;
+    sheet.classList.remove('on');
+    document.body.style.overflow = '';
+  }
   document.addEventListener('click', function (e) {
     if (!e.target.closest) return;
     var th = e.target.closest('[data-think]');
     if (th) { th.parentNode.classList.toggle('on'); return; }
+    var card = e.target.closest('.card.tap');
+    if (card && sheet && sbox) {
+      var id = card.getAttribute('data-detail');
+      sbox.textContent = details[id] || '';
+      var w = card.querySelector('.card-when');
+      if (swhen) swhen.textContent = w ? w.textContent : '';
+      sheet.classList.add('on');
+      document.body.style.overflow = 'hidden';
+      return;
+    }
+    if (e.target.closest('[data-sheet-x]') || e.target === sheet) { closeSheet(); return; }
     var dp = e.target.closest('[data-drop]');
     if (!dp) return;
     fetch('/chat/api/pending/' + dp.getAttribute('data-drop') + '/drop',
@@ -628,65 +719,90 @@ const ROOM_SCRIPT = `(function () {
         if (!d || !d.dropped) return;
         var g = dp.closest('.grp');
         if (g && g.parentNode) g.parentNode.removeChild(g);
-        showNudge(d.pending);
+        pendingN = d.pending;
+        syncBtn();
       })
       .catch(function () {});
   });
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape') closeSheet(); });
 
-  var sendForm = document.querySelector('[data-send]');
-  if (sendForm) {
-    sendForm.addEventListener('submit', function (e) {
-      e.preventDefault();
-      var input = sendForm.querySelector('input');
-      var text = input ? String(input.value || '').trim() : '';
-      if (!text) return;
-      if (input) input.value = '';
-      // 先在本地画出来，不等往返——打字发出去该立刻看见。
-      // 半透是「还没递给他」，递出去之后才变实。
-      var ph = group('human', text, Date.now(), { wait: true });
-      fetch('/chat/api/send', {
-        method: 'POST',
-        credentials: 'same-origin',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ text: text })
+  function doSend() {
+    var text = input ? String(input.value || '').trim() : '';
+    if (!text) return;
+    if (input) input.value = '';
+    // 先在本地画出来，不等往返 —— 打字发出去该立刻看见。
+    // 半透是「还没递给他」，递出去之后才变实。
+    var ph = group('human', text, Date.now(), { wait: true, read: 'unread' });
+    toBottom();
+    fetch('/chat/api/send', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ text: text })
+    })
+      .then(function (r) { return r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status)); })
+      .then(function (d) {
+        pendingN = d.pending;
+        syncBtn();
+        var g = ph && ph.closest ? ph.closest('.grp') : null;
+        if (!g || !d.id) return;
+        var lns = g.querySelectorAll('.ln');
+        if (lns.length) lns[lns.length - 1].appendChild(undoBtn(d.id));
       })
-        .then(function (r) { return r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status)); })
-        .then(function (d) {
-          showNudge(d.pending);
-          var g = ph && ph.closest ? ph.closest('.grp') : null;
-          if (!g || !d.id) return;
-          var lns = g.querySelectorAll('.ln');
-          if (lns.length) lns[lns.length - 1].appendChild(undoBtn(d.id));
-        })
-        .catch(function (err) { toast('没存下：' + err.message); });
-    });
+      .catch(function (err) { toast('没存下：' + err.message); });
+    syncBtn();
   }
 
-  // 点「让他读」：把攒着的按顺序递出去。不点就等他下次醒来自己读。
-  if (nudge) {
-    nudge.addEventListener('click', function () {
-      nudge.disabled = true;
-      fetch('/chat/api/flush', { method: 'POST', credentials: 'same-origin' })
-        .then(function (r) { return r.ok ? r.json() : null; })
-        .then(function (d) {
-          nudge.disabled = false;
-          if (!d) return;
-          showNudge(d.remaining);
-          if (d.error) { toast('没递出去：' + d.error); return; }
-          // 递出去了，那几条不再是半透的
-          var waiting = stream.querySelectorAll('.grp.wait');
-          for (var i = 0; i < waiting.length; i++) {
-            waiting[i].classList.remove('wait');
-            var x = waiting[i].querySelector('[data-drop]');
-            if (x && x.parentNode) x.parentNode.removeChild(x);
-            var txt = waiting[i].querySelector('.bub');
-            if (txt) mine.push(txt.textContent);
-          }
-          if (d.sent) setTyping(true);
-        })
-        .catch(function (err) { nudge.disabled = false; toast('没递出去：' + err.message); });
-    });
+  function doFlush() {
+    if (!btn) return;
+    btn.disabled = true;
+    fetch('/chat/api/flush', { method: 'POST', credentials: 'same-origin' })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (d) {
+        if (!d) { syncBtn(); return; }
+        pendingN = d.remaining;
+        syncBtn();
+        if (d.error) { toast('没递出去：' + d.error); return; }
+        // 递出去了：不再半透，未读改已读，小叉收走
+        var waiting = stream.querySelectorAll('.grp.wait');
+        for (var i = 0; i < waiting.length; i++) {
+          waiting[i].classList.remove('wait');
+          var x = waiting[i].querySelector('[data-drop]');
+          if (x && x.parentNode) x.parentNode.removeChild(x);
+          var sn = waiting[i].querySelector('.seen');
+          if (sn) { sn.textContent = '已读'; sn.classList.remove('unread'); }
+          var txt = waiting[i].querySelector('.bub');
+          if (txt) mine.push(txt.textContent);
+        }
+        if (d.sent) setTyping(true);
+        toBottom();
+      })
+      .catch(function (err) { syncBtn(); toast('没递出去：' + err.message); });
   }
+
+  function act() {
+    if (input && input.value.trim()) doSend();
+    else if (pendingN > 0) doFlush();
+  }
+
+  if (form) {
+    form.addEventListener('submit', function (e) { e.preventDefault(); act(); });
+  }
+  if (btn) {
+    btn.addEventListener('click', function (e) { e.preventDefault(); act(); });
+  }
+  if (input) {
+    input.addEventListener('input', syncBtn);
+    input.addEventListener('focus', function () { setTimeout(function () { fitBottom(); toBottom(); }, 300); });
+    input.addEventListener('blur', function () { setTimeout(fitBottom, 300); });
+  }
+
+  syncBtn();
+  fitBottom();
+  toBottom();
+  window.addEventListener('load', function () { fitBottom(); toBottom(); });
+  window.addEventListener('resize', fitBottom);
+  setTimeout(function () { fitBottom(); toBottom(); }, 120);
 })();`;
 
 function layout(title, style, body, script) {
@@ -739,26 +855,11 @@ function renderList(list, now) {
   <p class="foot">行动卡片只往最新那个窗里摆，老窗就是当时那一摹。</p>`;
 }
 
+// 卡片不再服务端直接写成 HTML：要和消息按时间混排，必须交给前端。
+// < 转成 \u003c：正文里如果出现 </script> 会把这个标签提前打断。
 function renderCards(cards) {
-  if (!cards.length) return '';
-  // 旧的在上、新的在下，和聊天一样从上往下读
-  return cards
-    .slice()
-    .reverse()
-    .map((c) => {
-      const has = Boolean(c.detail);
-      const inner =
-        `<span class="card-when">${escapeHtml(c.when)}</span>` +
-        `<span class="card-body">${escapeHtml(c.body)}</span>` +
-        (has ? '<span class="card-more" aria-hidden="true">✦</span>' : '');
-      if (!has) return `<div class="card">${inner}</div>`;
-      return (
-        `<button type="button" class="card tap" data-detail="${c.id}"` +
-        ` aria-label="${escapeHtml(c.body)}，点开看详情">${inner}</button>` +
-        `<template data-for="${c.id}">${escapeHtml(c.detail)}</template>`
-      );
-    })
-    .join('');
+  const json = JSON.stringify(cards).replace(/</g, '\\u003c');
+  return `<script type="application/json" data-cards>${json}</script>`;
 }
 
 export function registerChatRoutes(app, { requireBasicAuth }) {
@@ -825,19 +926,13 @@ export function registerChatRoutes(app, { requireBasicAuth }) {
           `${titleOf(w)} · 晨暮星`,
           ROOM_STYLE,
           `<div class="room-top"><span class="room-name">${escapeHtml(titleOf(w))}</span></div>
-      ${isNewest ? renderCards(cards) : ''}
+      ${renderCards(cards)}
       <div class="stream" data-stream
         data-ta-name="${escapeHtml(ta.name)}" data-ta-av="${escapeHtml(ta.avatarUrl || '')}"
         data-me-name="${escapeHtml(me.name)}" data-me-av="${escapeHtml(me.avatarUrl || '')}"></div>
-      ${
-        isNewest
-          ? ''
-          : '<p class="empty">这是个旧窗。行动卡片只往最新那个窗里摆。</p>'
-      }
-      <button type="button" class="nudge" data-nudge>↑ 让${escapeHtml(ta.name)}读 <span data-nudge-n></span></button>
       <form class="composer" data-send onsubmit="return false">
         <input type="text" placeholder="说点什么…" aria-label="输入" />
-        <button type="submit" aria-label="发送">↑</button>
+        <button type="submit" class="go" data-go aria-label="发送">↑</button>
       </form>
       <div class="tip" data-tip role="status"></div>
       <div class="sheet" data-sheet role="dialog" aria-modal="true">
