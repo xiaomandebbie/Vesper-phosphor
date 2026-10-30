@@ -3,20 +3,19 @@
 //   /chat      → 窗口列表（竖着排，每条带改名，顶上一个「开一个新窗」）
 //   /chat/<id> → 那个窗的具体界面
 //
-// ── 这个文件为什么是整个重写的 ──
+// ── 这个文件为什么反复整体重写 ──
 //
-// 2026-10-30 这一天它被七个脚本轮流改过，原文早就对不上了：.nudge 那段叠成
-// 两遍，var(--accent) 被灰度脚本吃成 `* 0 0`，最后一个脚本的「是否已改过」
-// 判据用了 data-go，而同一个脚本上一步刚把 data-go 写进 JS 里，于是
-// 输入框那一处被判成「已经改好」跳过了——两个按钮一个没动，JS 却在找
-// 一个不存在的按钮。打补丁到这儿为止，整段重写。
+// 2026-10-30 这一天它被九个脚本轮流改过。最后一次（chat_v3）把 JS 改坏了，
+// 消息和发送键同时没了——那就是整段脚本报错的样子：消息要靠脚本 fetch 回来画，
+// 按钮要靠脚本绑点击。所以不再打补丁：改这个文件一律整体重写。
 //
-// ── 聊天真的通了 ──
+// ── 聊天怎么通的 ──
 //
 // 后端是 Tidal_Echo 的 relay（见 echo-relay.js、chat-queue.js）。
 // 发出去的话先落本地队列，不立刻惊动他。两条出口：
-//   点发送键（输入框空着）→ 按顺序递给 relay，他当场回
-//   不点                  → 他下次唤醒自己读（见 gateway.js 的 injectPendingChat）
+//   点发送键（输入框空着）→ 攒着的合成一条递给 relay，他当场回
+//   不点                  → 他下次唤醒自己读（见 phosphor.js 的 handleChatReplies）
+//
 // 小满 10-30：「在输入的时候点发送键是发送。消息空的时候点发送键是让允朔回复。
 // 唤醒的时候他可以读取到我只发送未让他回复的消息。」
 //
@@ -31,11 +30,15 @@
 // 那样它们永远在最上面。现在当数据发下来，和历史消息、攒着的话一起
 // 按时间戳排好再画。
 //
-// ── 时间戳的坑 ──
+// ── 三个踩过的坑，都在下面的代码里注了 ──
 //
-// relay 那边的 ts 和我们自己的 Date.now() 不一定同一个单位。秒和毫秒
-// 混在一起排序，整批消息会被甩到几十年前，表现出来就是「消息不见了」。
-// 所以统一过一道 normTs：小于 1e12 的当秒处理。
+// 1. 时间戳单位：relay 的 ts 可能是秒，我们的 Date.now() 是毫秒。混着排序
+//    整批消息会被甩到几十年前，表现出来就是「消息不见了」。→ normTs
+// 2. 认领要用整段原文，不能用第一句：一段话被拆成几个气泡，拿第一句去比
+//    SSE 推回来的整段对不上，同一句话会被画两遍，第二遍带着发送时间。
+//    → data-full
+// 3. 进窗跳到最上面：浏览器记着滚动位置，而消息是 fetch 回来才画的——
+//    画完之前页面很短滚不动，画完了它又把记录的 0 用上。→ scrollRestoration + 哨兵
 
 import db from './state.js';
 import { listMomentsBetween, getProfile } from './moments-store.js';
@@ -185,7 +188,7 @@ const ROOM_STYLE = `
   body { margin: 0; min-height: 100vh; color: var(--ink);
     font-family: -apple-system, "PingFang SC", "Helvetica Neue", sans-serif; }
   main { position: relative; z-index: 1; max-width: 600px; margin: 0 auto;
-    padding: 60px 16px 220px; }
+    padding: 60px 16px 260px; }
 
   /* 顶条：窗的名字。返回键在左上角（tabs.js 负责插），所以这儿居中 */
   .room-top { position: fixed; top: calc(12px + env(safe-area-inset-top, 0px)); left: 0; right: 0;
@@ -308,23 +311,42 @@ const ROOM_SCRIPT = `(function () {
   var btn = document.querySelector('[data-go]');
   if (!stream) return;
 
-  // 进来停在最新那条（小满 10-30：「点击进入要定位到最新一条消息」）。
-  // 不用 smooth：那样先看见几天前的再晃到底。
+  // 浏览器自带滚动位置恢复，而消息是 fetch 回来才画的——画完之前页面很短、
+  // 滚不动，等画完了它又把记录的那个位置（0）用上。这就是「跳到最上面」。
+  try { if ('scrollRestoration' in history) history.scrollRestoration = 'manual'; } catch (e) {}
+
+  // 底部的哨兵：滚到它就是滚到最新一条。比算 scrollHeight 可靠——
+  // fixed 元素、安全区、动态 padding 都不影响它。
+  var endMark = document.createElement('div');
+  endMark.setAttribute('data-end', '');
+  endMark.style.height = '1px';
+  stream.appendChild(endMark);
+
   function toBottom() {
     try {
-      var last = stream.lastElementChild;
-      if (last && last.scrollIntoView) last.scrollIntoView({ block: 'end' });
-      window.scrollTo(0, document.documentElement.scrollHeight);
-    } catch (e) {}
+      stream.appendChild(endMark);
+      endMark.scrollIntoView({ block: 'end' });
+    } catch (e) {
+      try { window.scrollTo(0, document.documentElement.scrollHeight); } catch (e2) {}
+    }
+  }
+
+  // 连着试几次：头像图片加载完、字体换成 PingFang、fixed 元素入场，
+  // 每一步都会再推一把布局。一次不够。
+  function lockBottom() {
+    toBottom();
+    if (window.requestAnimationFrame) requestAnimationFrame(toBottom);
+    [60, 200, 500, 1000].forEach(function (ms) { setTimeout(toBottom, ms); });
   }
 
   // 底部留白：量输入框的实际位置，不写固定值。
   // 固定值总有算不准的时候（安全区、按钮文字变长、转屏），
   // 而标签栏在输入框下面，已经被这个距离包含。
+  // +72：小满 10-30「最新一条消息下面要留多一点空隙」——贴着输入框没地方透气。
   function fitBottom() {
     if (!main || !form) return;
     var top = form.getBoundingClientRect().top;
-    var need = Math.max(160, Math.round(window.innerHeight - top + 28));
+    var need = Math.max(220, Math.round(window.innerHeight - top + 72));
     main.style.paddingBottom = need + 'px';
   }
 
@@ -391,7 +413,7 @@ const ROOM_SCRIPT = `(function () {
       typingEl = document.createElement('div');
       typingEl.className = 'typing';
       typingEl.textContent = who.ai.name + ' 正在说…';
-      stream.appendChild(typingEl);
+      stream.insertBefore(typingEl, endMark);
       toBottom();
     } else if (!on && typingEl) {
       if (typingEl.parentNode) typingEl.parentNode.removeChild(typingEl);
@@ -399,9 +421,10 @@ const ROOM_SCRIPT = `(function () {
     }
   }
 
+  // 哨兵永远在最后：新元素插在它前面
   function put(el) {
     if (typingEl) stream.insertBefore(el, typingEl);
-    else stream.appendChild(el);
+    else stream.insertBefore(el, endMark);
   }
 
   function avatar(side, ghost) {
@@ -437,6 +460,10 @@ const ROOM_SCRIPT = `(function () {
     if (!lines.length) return null;
     var g = document.createElement('div');
     g.className = 'grp ' + (side === 'human' ? 'me' : 'ta') + (opts.wait ? ' wait' : '');
+    // 整段原文存在这儿。认领 SSE 推回来的那条要用它——
+    // 用 .bub 的文字只能拿到第一句，对不上，于是同一句话被画两遍，
+    // 第二遍带着 relay 那边的发送时间——这就是「时间被改写」的根。
+    g.setAttribute('data-full', String(text == null ? '' : text));
 
     var nm = document.createElement('div');
     nm.className = 'who';
@@ -670,10 +697,7 @@ const ROOM_SCRIPT = `(function () {
       pendingN = all.pend.length;
       syncBtn();
       fitBottom();
-      toBottom();
-      // 图片（头像）加载完会推一把布局，再停一次
-      setTimeout(toBottom, 150);
-      setTimeout(toBottom, 600);
+      lockBottom();
     })
     .catch(function () {});
 
@@ -763,17 +787,23 @@ const ROOM_SCRIPT = `(function () {
         pendingN = d.remaining;
         syncBtn();
         if (d.error) { toast('没递出去：' + d.error); return; }
-        // 递出去了：不再半透，未读改已读，小叉收走
+        // 递出去了：不再半透，未读改已读，小叉收走。
+        // 时间不动——小满 10-30「预存好消息之后点击发送，时间不要更新为发送时间」。
         var waiting = stream.querySelectorAll('.grp.wait');
+        var joined = [];
         for (var i = 0; i < waiting.length; i++) {
           waiting[i].classList.remove('wait');
           var x = waiting[i].querySelector('[data-drop]');
           if (x && x.parentNode) x.parentNode.removeChild(x);
           var sn = waiting[i].querySelector('.seen');
           if (sn) { sn.textContent = '已读'; sn.classList.remove('unread'); }
-          var txt = waiting[i].querySelector('.bub');
-          if (txt) mine.push(txt.textContent);
+          // 认领用整段原文，不是第一句
+          var full = waiting[i].getAttribute('data-full');
+          if (full) { mine.push(full); joined.push(full); }
         }
+        // 攒着的是合成一条递出去的（见 chat-queue.js 的 flushPending），
+        // 所以 SSE 推回来的是换行拼起来的整段——这个也要认领。
+        if (joined.length > 1) mine.push(joined.join('\\n'));
         if (d.sent) setTyping(true);
         toBottom();
       })
@@ -799,10 +829,9 @@ const ROOM_SCRIPT = `(function () {
 
   syncBtn();
   fitBottom();
-  toBottom();
-  window.addEventListener('load', function () { fitBottom(); toBottom(); });
+  lockBottom();
+  window.addEventListener('load', function () { fitBottom(); lockBottom(); });
   window.addEventListener('resize', fitBottom);
-  setTimeout(function () { fitBottom(); toBottom(); }, 120);
 })();`;
 
 function layout(title, style, body, script) {
