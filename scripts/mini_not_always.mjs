@@ -5,14 +5,17 @@
 //   「音乐小圆圈不常驻，只有打开音乐时候退回其他页面才出现」
 //   「动态不再包含动作卡片」
 //
+// 第一版这个脚本自己有语法错：我在一个字符串字面量中间塞了真的换行
+// （第 114 行）。这版改成一行写完，不插换行。
+//
 // ── 一、小圆圈 ──
 //
 // 先说清一件：那个圆圈不在各个页面上，而在**外壳页 /app** 里（shell.js）。
 // 你在动态页截图里看到它，是因为当时在 /app#/moments——动态页跑在 iframe 里，
 // 圆圈悬在外壳那一层。
 //
-// 现在的行为：#mini 带着 class="empty" 直接写在 HTML 里，所以进外壳就挂着一个 ♪。
-// 改成：默认 closed（不显示）；打开过播放器之后才出来。
+// 现在的行为：#mini 带着 class="empty" 写在 HTML 里，所以进外壳就挂着一个 ♪。
+// 改成：默认 closed（不显示），打开过播放器之后才出来。
 // 这样「打开音乐 → 退回其他页面」才有它，没碰过音乐就干净。
 //
 // 点 × 关掉仍然是 closed；又开始放歌时它回来那条逻辑留着
@@ -20,7 +23,7 @@
 //
 // ── 二、动态去掉行动卡片 ──
 //
-// 行动卡片现在在聊天页（/chat）。动态页只留人写的那些。
+// 行动卡片现在在聊天页（/chat/<id>）。动态页只留人写的那些。
 // 改一处就够：groupForDisplay 里把 kind='activity' 的滤掉。
 // 渲染函数（renderActivityCard、activityTag、那堆 CSS）都留着不动：
 // 改得越少越安全，而且收藏页、按日期查那几条路可能还调它们。
@@ -96,6 +99,7 @@ function patch(rel, steps) {
 }
 
 // ── shell.js：圆圈默认不显示 ──
+// 两处都是单行替换，不插换行——第一版就是在这儿塞了个真换行才挂的。
 const SHELL = [
   {
     what: '圆圈默认 closed（没碰过音乐就不出现）',
@@ -105,14 +109,12 @@ const SHELL = [
   },
   {
     what: '打开过播放器之后圆圈才出来',
-    done: 'mini.classList.remove(\'closed\'); }',
-    needle:
-      "function openPlayer() { player.classList.add('open'); player.setAttribute('aria-hidden', 'false'); document.body.classList.add('player-open'); }",
+    done: "add('player-open'); mini.classList.remove('closed');",
+    needle: "document.body.classList.add('player-open'); }",
     make: (line) =>
       line.replace(
         "document.body.classList.add('player-open'); }",
-        "document.body.classList.add('player-open');\n    // 碰过音乐之后圆圈才出来（2026-10-30）。退回其他页面时就能看见它
-    mini.classList.remove('closed'); }"
+        "document.body.classList.add('player-open'); mini.classList.remove('closed'); }"
       ),
   },
 ];
@@ -121,7 +123,7 @@ const SHELL = [
 const MOMENTS = [
   {
     what: '动态列表过滤掉 activity',
-    done: "行动卡片摆在聊天页",
+    done: "m.kind !== 'activity'",
     needle: 'function groupForDisplay(moments) {',
     make: (line, ind) => [
       line,
