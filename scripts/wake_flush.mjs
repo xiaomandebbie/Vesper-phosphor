@@ -1,12 +1,11 @@
 #!/usr/bin/env node
-// 小满 2026-10-30 21:31：「嘴上下文要连得上」
+// 小满 2026-10-30 21:31：「上下文要连得上」
 //
 // ── 之前那个设计错在哪 ──
 //
 // handleChatReplies 是「读走你的话 → 他自己回一句进 relay」。
-// 但你的话从来没进 relay 的库——所以 relay 里只有他的回复，
-// 前后不接。数据库里那四条 via=wake 就是这么来的：
-// 标记改了，话没递。
+// 但你的话从来没进 relay 的库——所以 relay 里只有他的回复，前后不接。
+// 数据库里那四条 via=wake 就是这么来的：标记改了，话没递。
 //
 // ── 改成走同一条路 ──
 //
@@ -19,8 +18,13 @@
 //
 // ── 废掉的那些留着不删 ──
 //
-// decide.js 里 chat_replies 的提示词还在，他写了也没人读——只是浪费
-// 几十个 token。改那个文件风险比这点浪费大，明天清醒时再摸。
+// decide.js 里 chat_replies 的提示词还在，他写了也没人读——只是浪费几十个
+// token。改那个文件风险比这点浪费大，明天清醒时再摸。
+//
+// ── 上一版为什么炸 ──
+//
+// 我写了 if (t !== before_check()) 然后把 before_check 声明在它后面，
+// 而且那个函数读的是备份文件——逻辑还是反的。这一版直接记原文。
 //
 // 重跑安全。备份在 src/.wake-flush-backup/。
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
@@ -41,8 +45,10 @@ if (!existsSync(p)) {
   console.error('✗ src/phosphor.js 不在');
   process.exit(1);
 }
-let t = readFileSync(p, 'utf8');
-writeFileSync(join(bakDir, 'phosphor.js.' + stamp), t, 'utf8');
+
+const original = readFileSync(p, 'utf8');
+writeFileSync(join(bakDir, 'phosphor.js.' + stamp), original, 'utf8');
+let t = original;
 
 function apply(label, find, repl) {
   if (t.includes(repl)) {
@@ -58,7 +64,7 @@ function apply(label, find, repl) {
   console.log('  ✓ ' + label);
 }
 
-console.log('1/2  import 换成 flushPending');
+console.log('1/3  import 换成 flushPending');
 apply('import',
   "import { listPending, markPendingRead, replyToChat } from './chat-queue.js';",
   L(
@@ -68,21 +74,18 @@ apply('import',
   ));
 
 console.log('');
-console.log('2/2  handleChatReplies 改成 flush');
+console.log('2/3  handleChatReplies 换成 flushChatOnWake');
 
-// 把整个函数换掉。起止标记都是上一个脚本插的，唯一。
 const A = '// 回她在网页聊天里攒着的话。';
 const B = '// 从 Ombre Brain 取一段文本。';
-{
+if (t.includes('async function flushChatOnWake')) {
+  console.log('  · 已经换过了');
+} else {
   const a = t.indexOf(A);
   const b = t.indexOf(B, a);
   if (a < 0 || b < 0) {
-    if (t.includes('async function flushChatOnWake')) {
-      console.log('  · 已经换过了');
-    } else {
-      console.error('  ✗ 定不到 handleChatReplies 的起止');
-      failed++;
-    }
+    console.error('  ✗ 定不到 handleChatReplies 的起止');
+    failed++;
   } else {
     const FN = L(
       '// 她在网页聊天里发了、没点「让你回复」的那几句：递给 relay。',
@@ -120,6 +123,8 @@ const B = '// 从 Ombre Brain 取一段文本。';
   }
 }
 
+console.log('');
+console.log('3/3  调用处');
 apply('调用处',
   L(
     '    try {',
@@ -136,8 +141,11 @@ apply('调用处',
     '    }'
   ));
 
-if (t !== before_check()) writeFileSync(p, t, 'utf8');
-function before_check() { return readFileSync(join(bakDir, 'phosphor.js.' + stamp), 'utf8'); }
+if (t !== original) {
+  writeFileSync(p, t, 'utf8');
+  console.log('');
+  console.log('写了 src/phosphor.js');
+}
 
 console.log('');
 if (failed) {
@@ -145,13 +153,11 @@ if (failed) {
   console.error('  cp ' + join(bakDir, 'phosphor.js.' + stamp) + ' ' + p);
   process.exitCode = 1;
 } else {
-  console.log('找 phosphor 进程名：pm2 list | grep -i phos');
-  console.log('然后：pm2 restart <那个名字> --update-env');
+  console.log('找 phosphor 进程名：pm2 list | grep -iE "phos|decide"');
+  console.log('然后重启它。');
   console.log('');
-  console.log('顺带把那四条的 via 恢复成真实状态（他确实读过，只是话没递出去）：');
+  console.log('顺带把那四条摆回「还没递出去」，下次唤醒就真的递给 relay：');
   console.log('');
   console.log('  cd /root/vesper-phosphor && sqlite3 data/state.db \\');
-  console.log('    "update chat_pending set sent=0, via=null where id in (4,6,7,8);"');
-  console.log('');
-  console.log('这样下次唤醒会把它们真的递给 relay，你那四句话就进库了。');
+  console.log('    "update chat_pending set sent=0, sent_at=null, via=null where id in (4,6,7,8);"');
 }
