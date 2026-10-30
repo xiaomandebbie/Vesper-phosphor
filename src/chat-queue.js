@@ -5,21 +5,21 @@
 //
 // 所以发出去的话不直接进 relay，先落这张表。两条出口：
 //   点「让他读」  → flushPending()，按顺序递给 relay，他当场回
-//   不点          → 他下次醒来时 phosphor 调 flushPending()，读到的是整批
+//   不点          → 他下次醒来时网关调 markPendingRead()，读到的是整批
 //
 // 为什么不改 Tidal_Echo 的 app.py：那边的 /app/send 就是「发即触发」，
 // 攒着这层是晨暮星自己的事。上游代码不动，它以后怎么更新都不受影响——
 // 和记忆库转发（memory-proxy.js）同一个做法。
 //
 // 密钥读文件，不进浏览器；这个模块是 relay 的唯一出口，echo-relay.js 和
-// phosphor 都从这儿走。
+// gateway.js 都从这儿走。
 import fs from 'fs';
 import db from './state.js';
 
 const RELAY_URL = String(process.env.ECHO_RELAY_URL || 'http://127.0.0.1:3011').replace(/\/+$/, '');
 const ENV_FILE = process.env.ECHO_RELAY_ENV || '/root/companion-relay/relay.env';
 
-// 攒着的话。sent=0 是还没递出去的；递出去之后不删，置 sent=1，
+// 攒着的话。sent=0 是还没出去的；出去之后不删，置 sent=1，
 // 万一 relay 那边丢了还能查到说过什么。
 db.exec(`
 CREATE TABLE IF NOT EXISTS chat_pending (
@@ -32,6 +32,16 @@ CREATE TABLE IF NOT EXISTS chat_pending (
 );
 CREATE INDEX IF NOT EXISTS idx_chat_pending_unsent ON chat_pending (sent, id);
 `);
+
+// 后加的列。已存在时会报错，忽略即可（和 moments-store.js 同一个做法）。
+// via：这条是怎么到他那边的。relay = 她点了「让他读」当场递的；
+// wake = 她没点，他下次醒来自己读到的。两条路径得分得清：
+// 前者进了 relay 的库、会走 SSE 回来，后者只是注入进了那一轮的输入。
+try {
+  db.exec('ALTER TABLE chat_pending ADD COLUMN via TEXT');
+} catch {
+  // column already exists
+}
 
 const cache = new Map();
 function stmt(sql) {
@@ -97,7 +107,7 @@ export function pendingCount() {
 export async function flushPending(limit = 50) {
   const rows = listPending(limit);
   if (!rows.length) return { sent: 0, failed: 0, remaining: 0 };
-  const mark = stmt('UPDATE chat_pending SET sent = 1, sent_at = ? WHERE id = ?');
+  const mark = stmt("UPDATE chat_pending SET sent = 1, sent_at = ?, via = 'relay' WHERE id = ?");
   let sent = 0;
   let failed = 0;
   let error = null;
@@ -120,6 +130,26 @@ export async function flushPending(limit = 50) {
   if (sent) console.log('chat: 递了 ' + sent + ' 条攒着的话给 relay');
   if (error) console.error('chat: 递攒着的话失败', error);
   return { sent, failed, remaining: pendingCount(), error };
+}
+
+// 他醒来自己读到了（网关把这几句注入进了那一轮的输入，见 gateway.js）。
+//
+// 读到就算读过，和动态里 markUserMomentsSeen 一个道理：没回也不重复递。
+// 这意味着这一轮如果上游报错，那几句话不会再出现在下一轮——
+// 但数据还在表里，查得到。
+//
+// 和 flushPending 的区别：这条路径不打 relay，所以那几句话不会进 relay 的库、
+// 也不会走 SSE 回来。网页上那几个半透气泡会停在半透状态，直到刷页；
+// 刷页后它们不再出现在 pending 里。
+export function markPendingRead(ids) {
+  if (!Array.isArray(ids) || !ids.length) return 0;
+  const mark = stmt("UPDATE chat_pending SET sent = 1, sent_at = ?, via = 'wake' WHERE id = ? AND sent = 0");
+  const now = Date.now();
+  let n = 0;
+  for (const id of ids) {
+    if (Number.isInteger(id)) n += mark.run(now, id).changes;
+  }
+  return n;
 }
 
 export function dropPending(id) {
