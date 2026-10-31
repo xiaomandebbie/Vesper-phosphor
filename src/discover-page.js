@@ -15,6 +15,7 @@ import {
   diaryDir,
   barEnabled,
   musicEnabled,
+  workkkEnabled,
   renderMenu,
   HEAD_SCRIPT,
   CHROME_CSS,
@@ -72,6 +73,13 @@ function spots() {
       what: '\u4e24\u4e2a\u4eba\u8bfb\u540c\u4e00\u672c\u4e66\uff0c\u5404\u81ea\u8bfb\u5230\u54ea\u91cc\u662f\u4e24\u6761\u7ebf',
       meta: '\u5171\u4eab\u6279\u6ce8 \u00b7 \u4e24\u6761\u8fdb\u5ea6\u7ebf',
       href: '/books',
+    },
+    {
+      name: '\u5c0f\u6e38\u620f',
+      what: '\u4ed6\u81ea\u5df1\u73a9\u7684\u90a3\u51e0\u4e2a\u3002WORKKK \u662f\u8c22\u4e4b\u821f\u5199\u7684\uff0c\u9875\u9762\u8f6c\u53d1\u8fc7\u6765',
+      meta: '\u4e0a\u73ed \u00b7 \u82b1\u56ed',
+      href: workkkEnabled() ? '/games' : '',
+      note: '\u6ca1\u914d WORKKK_PAGE_URL',
     },
     {
       name: '\u53f0\u706f',
@@ -152,7 +160,7 @@ function renderList() {
     .join('');
 }
 
-// 和记忆页完全同一套样式（类名也照抄），这样两页看起来是一家的
+// 和记忆页完全同一套样式（类名也照拄），这样两页看起来是一家的
 const STYLE = `
   :root { --ink: #2b2233; --muted: #665a70; --accent: #7a3e5d; --gold: #b7792f;
     --card: #fffdfb; --line: #eadfe6; }
