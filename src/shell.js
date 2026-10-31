@@ -13,6 +13,8 @@
 //   它和播放器之间用 postMessage 说话，指令见 music-proxy.js 里的 BRIDGE_SCRIPT。
 // - 只在配了 MUSIC_PLAYER_URL（见 music-proxy.js）时启用，没配时一切照旧。
 //
+// 小满 2026-10-30：配色全部换成黑白灰，所以外壳底色和播放器底色是灰白，不是粉的。
+//
 // ── 加载页和转场（2026-10-31）──
 //
 // 小满给了四个动效：一个加载页、三个转场。见 motion.js。
@@ -34,10 +36,10 @@ function shellHtml() {
 <title>\u6668\u66ae\u661f</title>
 <style>
   html, body { margin: 0; height: 100%; overflow: hidden;
-    background: linear-gradient(180deg, #efe7f4 0%, #f9f0ee 55%, #fdf8f2 100%); }
+    background: linear-gradient(180deg, #eaeaea 0%, #f2f2f2 55%, #f9f9f9 100%); }
   #page { position: fixed; inset: 0; width: 100%; height: 100%; border: 0; display: block; }
   #player { position: fixed; inset: 0; z-index: 50; box-sizing: border-box; padding-top: env(safe-area-inset-top, 0px);
-    background: #f9f0ee; transform: translateY(100%); visibility: hidden;
+    background: #f2f2f2; transform: translateY(100%); visibility: hidden;
     transition: transform .35s ease, visibility 0s linear .35s; }
   #player.open { transform: none; visibility: visible; transition: transform .35s ease; }
   #player-frame { width: 100%; height: 100%; border: 0; display: block; }
@@ -45,30 +47,30 @@ function shellHtml() {
   /* \u60ac\u6d6e\u7a97 */
   #mini { position: fixed; right: 12px; bottom: calc(env(safe-area-inset-bottom, 0px) + 24px); z-index: 40;
     display: flex; align-items: center; gap: 0; box-sizing: border-box; width: min(340px, calc(100vw - 24px)); height: 60px;
-    padding: 6px 2px 6px 6px; border-radius: 18px; overflow: hidden; background: rgba(255, 253, 251, .95);
-    border: 1px solid #eadfe6; box-shadow: 0 6px 20px rgba(60, 30, 60, .16);
-    font-family: -apple-system, "PingFang SC", "Helvetica Neue", sans-serif; color: #2b2233;
+    padding: 6px 2px 6px 6px; border-radius: 18px; overflow: hidden; background: rgba(255, 255, 255, .95);
+    border: 1px solid #e4e4e4; box-shadow: 0 6px 20px rgba(0, 0, 0, .12);
+    font-family: -apple-system, "PingFang SC", "Helvetica Neue", sans-serif; color: #1a1a1a;
     touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
   #mini.anim { transition: left .25s ease, right .25s ease, width .25s ease, border-radius .25s ease; }
-  #mini.dragging { box-shadow: 0 10px 28px rgba(60, 30, 60, .28); }
+  #mini.dragging { box-shadow: 0 10px 28px rgba(0, 0, 0, .22); }
   body.player-open #mini, #mini.closed { display: none; }
   #mini button { border: 0; background: none; padding: 0; margin: 0; color: inherit; font: inherit; cursor: pointer; }
-  #mini button:focus-visible { outline: 2px solid #7a3e5d; outline-offset: 2px; border-radius: 10px; }
+  #mini button:focus-visible { outline: 2px solid #1a1a1a; outline-offset: 2px; border-radius: 10px; }
   #mini-open { flex: 1; min-width: 0; height: 48px; display: flex; align-items: center; gap: 10px; text-align: left; }
-  #mini-cover { flex: none; width: 46px; height: 46px; border-radius: 12px; object-fit: cover; background: #f6eef3; }
-  #mini-note { display: none; font-size: 20px; color: #7a3e5d; }
+  #mini-cover { flex: none; width: 46px; height: 46px; border-radius: 12px; object-fit: cover; background: #f0f0f0; }
+  #mini-note { display: none; font-size: 20px; color: #4a4a4a; }
   #mini-text { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
   #mini-name { font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  #mini-artist { font-size: 12px; color: #665a70; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #mini-artist { font-size: 12px; color: #7a7a7a; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .mini-btn { flex: none; width: 42px; height: 44px; display: flex; align-items: center; justify-content: center;
-    border-radius: 12px; color: #7a3e5d !important; }
-  .mini-btn:active { background: rgba(122, 62, 93, .08) !important; }
+    border-radius: 12px; color: #4a4a4a !important; }
+  .mini-btn:active { background: rgba(0, 0, 0, .06) !important; }
   .mini-btn svg { width: 22px; height: 22px; fill: currentColor; }
   #mini-like svg { fill: none; stroke: currentColor; stroke-width: 1.8; }
-  #mini-like.liked svg { fill: #c2708a; stroke: #c2708a; }
-  #mini-close { width: 30px; color: #998ca2 !important; }
+  #mini-like.liked svg { fill: #6a6a6a; stroke: #6a6a6a; }
+  #mini-close { width: 30px; color: #9a9a9a !important; }
   #mini-close svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; }
-  #mini-bar { position: absolute; left: 0; bottom: 0; height: 2px; width: 0; background: #9b4a7a; pointer-events: none; }
+  #mini-bar { position: absolute; left: 0; bottom: 0; height: 2px; width: 0; background: #4a4a4a; pointer-events: none; }
   /* \u8fd8\u6ca1\u653e\u6b4c\uff1a\u7f29\u6210\u4e00\u4e2a\u5c0f\u5706\u70b9 */
   #mini.empty { width: 52px; height: 52px; padding: 0; border-radius: 50%; justify-content: center; }
   #mini.empty #mini-open { flex: none; width: 52px; height: 52px; justify-content: center; gap: 0; }
@@ -77,7 +79,7 @@ function shellHtml() {
   /* \u85cf\u5230\u8fb9\u4e0a\uff1a\u53ea\u7559\u4e00\u6761\u5c0f\u628a\u624b */
   #mini.tucked { width: 22px; height: 64px; padding: 0; justify-content: center; cursor: pointer; }
   #mini.tucked > * { display: none !important; }
-  #mini.tucked::after { content: ''; width: 4px; height: 28px; border-radius: 2px; background: #c9b3c3; }
+  #mini.tucked::after { content: ''; width: 4px; height: 28px; border-radius: 2px; background: #c4c4c4; }
   #mini.tucked-left { border-radius: 0 14px 14px 0; border-left: 0; }
   #mini.tucked-right { border-radius: 14px 0 0 14px; border-right: 0; }
   @media (prefers-reduced-motion: reduce) { #player, #player.open, #mini.anim { transition: none; } }
@@ -311,7 +313,6 @@ export function registerShellRoutes(app, { requireBasicAuth }) {
 
   app.get('/app', requireBasicAuth, (req, res) => {
     res.set('cache-control', 'no-store');
-    // \u6bcf\u6b21\u73b0\u7b97\uff1a\u52a8\u6548\u6587\u4ef6\u662f\u4e0d\u662f\u5728\u78c1\u76d8\u4e0a\u53ef\u80fd\u53d8\uff0c\u4e0d\u80fd\u5728\u6a21\u5757\u52a0\u8f7d\u65f6\u5c31\u5b9a\u6b7b
-    res.send(shellHtml());
+    // \u6bcf\u6b21\u73b0\u7b97\uff1a\u52a8\u6548\u6587\u4ef6\u662f\u4e0d\u662f\u5728\u78c1\u76d8\u4e0a\u53ef\u80fd\u53d8\uff0c\u4e0d\u80fd\u5728\u6a21\u5757\u52a0\u8f7d\u65f6\u5c31\u5b9a\u6b7b\n    res.send(shellHtml());
   });
 }
