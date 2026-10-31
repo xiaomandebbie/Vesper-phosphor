@@ -1,10 +1,16 @@
-// 动态页 /moments：标题、此刻心情、唤醒时间、小日历、按天看动态、留言、回复、点赞；自定义页 /moments/profile。
+// 动态页 /moments：标题、此刻心情、唤醒时间、动态流、留言、回复、点赞；自定义页 /moments/profile。
 // vesper.js 里挂载：registerMomentRoutes(app, { requireBasicAuth, requireApiKey })
 // 页面是服务端渲染，没有 JavaScript 也能看、能留言。JavaScript 只做锦上添花的事：
 //   语音条点击播放（没有 JS 时退回浏览器自带的播放器）；
 //   同一时间的几张动作卡片叠成一摞，左右箭头轮换（没有 JS 时一张张排开）；
 //   自定义页上传头像前在浏览器里裁成正方形；
-//   右上角菜单、换页换日期时的星星转场（见 page-chrome.js）。
+//   右上角菜单、换页时的星星转场（见 page-chrome.js）。
+//
+// 日历和按天标题拿掉了（2026-10-31）：翻日期在发现页和个人页都有入口，
+// 每条动态自己带了完整日期时间，这页就只是一条往下看的流。
+// 顺带一个连带效果：收藏和星星罐那两个入口是 flourish.js / star-entry.js
+// 按 .cal-card 做锚点异步插进来的，日历没了它们自己就不插了（两边都写了
+// 「拉不到就不插」），所以那两个文件一行都不用改。每条动态上的收藏星还在。
 //
 // 两个人都能发动态：TA 自己醒来发的（author='assistant'），和你在这一页写的（author='user'）。
 // 你发的那几条左边一道暗金，下面挂着「改一改 / 删了」，发、改、删都在 my-moments.js 里。
@@ -12,8 +18,6 @@ import fs from 'fs';
 import path from 'path';
 import { getMoment, listMoments, listMomentComments, addMomentComment, getWakeState } from './state.js';
 import {
-  listMomentsBetween,
-  listMomentTimestampsBetween,
   listAnniversaries,
   getComment,
   toggleLike,
@@ -25,16 +29,7 @@ import {
   saveProfileAvatar,
   resetProfileAvatar,
 } from './moments-store.js';
-import {
-  pad,
-  wallParts,
-  wallMidnight,
-  formatDateTime,
-  parseDate,
-  parseMonth,
-  daysInMonth,
-  firstWeekday,
-} from './wall-time.js';
+import { formatDateTime } from './wall-time.js';
 import { getTopDrives } from './drives.js';
 import { getWakeTimes } from './wake-info.js';
 import { tidyActivityContent, tidyActivityDetail } from './actions/activity.js';
@@ -45,6 +40,7 @@ import {
   MY_MOMENTS_CSS,
   registerMyMomentRoutes,
 } from './my-moments.js';
+import { renderCommentTools, MY_COMMENTS_CSS, registerMyCommentRoutes } from './my-comments.js';
 
 const MEDIA_DIR = process.env.MEDIA_DIR || '/opt/vesper/media';
 const MAX_COMMENT_CHARS = 1000;
@@ -56,7 +52,6 @@ const AUDIO_BYTES_PER_SEC = 128000 / 8;
 // 动作卡片和同一摞里最新那张相差不超过这么久、中间没夹着别的动态，就叠在一起。
 // 一次醒来逛论坛连走几步，前后一般就一两分钟
 const STACK_WINDOW_MS = 5 * 60 * 1000;
-const WEEKDAYS = ['一', '二', '三', '四', '五', '六', '日'];
 
 // 动态、留言、名字都是模型 / 用户写的文字，拼进 HTML 前必须转义
 function escapeHtml(value) {
@@ -93,21 +88,6 @@ function safeBack(value) {
   const s = String(value ?? '');
   return /^\/moments(\?[\w=&%.-]*)?$/.test(s) ? s : '/moments';
 }
-
-const ymd = (p) => `${p.y}-${pad(p.m)}-${pad(p.d)}`;
-
-function shiftMonth(y, m, delta) {
-  const t = new Date(Date.UTC(y, m - 1 + delta, 1));
-  return { y: t.getUTCFullYear(), m: t.getUTCMonth() + 1 };
-}
-
-// open：日历要不要展开。翻月份时带上，点日期时不带（看动态就收起来）
-function pageUrl(y, m, day, open = false) {
-  return `/moments?month=${y}-${pad(m)}${day ? `&day=${day}` : ''}${open ? '&open=1' : ''}`;
-}
-
-// "10月01日的动态"
-const dayTitle = (p) => `${pad(p.m)}月${pad(p.d)}日的动态`;
 
 // 头像：设置过就用图片，没设置就是名字第一个字。旁边总会写名字，所以头像本身不再给读屏读一遍
 function avatarHtml(who, size = 'md') {
@@ -189,46 +169,6 @@ function renderWakeLine() {
     .join('<span class="wake-sep" aria-hidden="true">·</span>')}</p>`;
 }
 
-// 小日历：平时只露出"2026 年 10 月"这一行，点一下展开日期。左右箭头翻月，翻月后保持展开
-function renderCalendar({ y, m, today, selected, marked, open }) {
-  const prev = shiftMonth(y, m, -1);
-  const next = shiftMonth(y, m, 1);
-  const todayKey = ymd(today);
-  const selectedKey = selected ? ymd(selected) : '';
-  const cells = [];
-  for (let i = 0; i < firstWeekday(y, m); i++) cells.push('<td></td>');
-  const total = daysInMonth(y, m);
-  for (let d = 1; d <= total; d++) {
-    const key = `${y}-${pad(m)}-${pad(d)}`;
-    const has = marked.has(d);
-    const isToday = key === todayKey;
-    const isSelected = key === selectedKey;
-    const cls = ['day', has ? 'has' : '', isToday ? 'today' : '', isSelected ? 'selected' : '']
-      .filter(Boolean)
-      .join(' ');
-    const label = `${m} 月 ${d} 日${isToday ? '，今天' : ''}${has ? '，有动态' : ''}`;
-    cells.push(
-      `<td><a class="${cls}" href="${pageUrl(y, m, key)}" aria-label="${label}"${isSelected ? ' aria-current="date"' : ''}><span aria-hidden="true">${d}</span>${has ? '<i class="dot" aria-hidden="true"></i>' : ''}</a></td>`
-    );
-  }
-  while (cells.length % 7) cells.push('<td></td>');
-  const rows = [];
-  for (let i = 0; i < cells.length; i += 7) rows.push(`<tr>${cells.slice(i, i + 7).join('')}</tr>`);
-  return `<section class="card cal-card" aria-label="日历">
-    <a class="cal-nav cal-prev" href="${pageUrl(prev.y, prev.m, null, true)}" aria-label="上个月">‹</a>
-    <a class="cal-nav cal-next" href="${pageUrl(next.y, next.m, null, true)}" aria-label="下个月">›</a>
-    <details class="cal-fold"${open ? ' open' : ''}>
-      <summary><h2 class="cal-title">${y} 年 ${m} 月</h2><span class="cal-caret" aria-hidden="true">▾</span><span class="sr-only">，点开看日期</span></summary>
-      <div class="cal-body">
-        <table class="cal">
-          <thead><tr>${WEEKDAYS.map((w) => `<th scope="col">${w}</th>`).join('')}</tr></thead>
-          <tbody>${rows.join('')}</tbody>
-        </table>
-      </div>
-    </details>
-  </section>`;
-}
-
 // 留言框。replyTo 是要回复的那条留言；不传就是直接给动态留言
 function commentForm(m, back, replyTo = null) {
   const inputId = replyTo ? `in-m${m.id}-r${replyTo.id}` : `in-m${m.id}`;
@@ -282,6 +222,7 @@ function renderComment(c, m, back, parent) {
       <div class="comment-meta">
         <span class="when">${escapeHtml(formatDateTime(c.ts))}${unseen}</span>
         <details class="reply-box"><summary aria-label="回复${escapeHtml(nameOf(c.author))}的这条留言"><span aria-hidden="true">↩️ 回复</span></summary>${commentForm(m, back, c)}</details>
+        ${mine ? renderCommentTools(c, back) : ''}
       </div>
     </div>
   </div>`;
@@ -530,6 +471,7 @@ const STACK_SCRIPT = `(function () {
 
 // 一条动态。author 决定头像、名字和边上那道色：TA 发的是粉色，你发的是暗金。
 // 你发的那几条下面挂着「改一改 / 删了」，TA 还没醒来看过时标一句"还没看到"（和留言一个做法）。
+// 时间写全（2026-10-31）：日历和按天标题去掉之后，这里是唯一能看出哪天的地方
 function renderMoment(m, back) {
   if (m.kind === 'activity') return renderActivityCard(m);
 
@@ -543,7 +485,7 @@ function renderMoment(m, back) {
   return `<article class="moment post${mine ? ' mine' : ''}" id="m${m.id}">
     ${avatarHtml(who)}
     <div class="moment-main">
-      <div class="moment-head"><span class="moment-name">${escapeHtml(nameOf(who))}</span><span class="ts">${escapeHtml(formatDateTime(m.ts).slice(11))}</span>${unseen}</div>
+      <div class="moment-head"><span class="moment-name">${escapeHtml(nameOf(who))}</span><span class="ts">${escapeHtml(formatDateTime(m.ts))}</span>${unseen}</div>
       <div class="content">${escapeHtml(m.content)}</div>
       ${img ? `<img class="moment-img" src="${img}" alt="动态配图" loading="lazy" />` : ''}
       ${audio ? renderVoice(audio) : ''}
@@ -553,29 +495,6 @@ function renderMoment(m, back) {
       ${commentForm(m, back)}
     </div>
   </article>`;
-}
-
-// 按天分组（列表是新的在前），每天一个"MM月DD日的动态"标题
-function groupByDay(moments) {
-  const out = [];
-  for (const m of moments) {
-    const key = formatDateTime(m.ts).slice(0, 10);
-    const last = out[out.length - 1];
-    if (last?.key === key) last.items.push(m);
-    else out.push({ key, p: wallParts(m.ts), items: [m] });
-  }
-  return out;
-}
-
-function renderDayGroup(g, back) {
-  const id = `day-${g.key}`;
-  const items = groupForDisplay(g.items)
-    .map((x) => (x.type === 'stack' ? renderStack(x.items) : renderMoment(x.m, back)))
-    .join('');
-  return `<section class="day-group" aria-labelledby="${id}">
-    <h2 id="${id}" class="list-title">${dayTitle(g.p)}</h2>
-    ${items}
-  </section>`;
 }
 
 const STYLE = `
@@ -615,31 +534,6 @@ const STYLE = `
   .section-title { font-size: 15px; margin: 0 0 10px; color: var(--accent); letter-spacing: 0.1em; }
   input { padding: 9px 10px; border: 1px solid #cbbfc9; border-radius: 10px; font-size: 16px; background: #fff; color: var(--ink); }
   button { padding: 9px 14px; border: none; border-radius: 10px; background: var(--accent); color: #fff; font-size: 15px; }
-  /* 日历：平时只有月份这一行，点开才露出日期 */
-  .cal-card { position: relative; padding: 0; }
-  .cal-fold > summary { list-style: none; display: flex; align-items: center; justify-content: center; gap: 6px;
-    min-height: 56px; padding: 6px 56px; cursor: pointer; border-radius: 16px; }
-  .cal-fold > summary::-webkit-details-marker { display: none; }
-  .cal-title { margin: 0; font-size: 15px; color: var(--accent); letter-spacing: 0.1em; }
-  .cal-caret { color: var(--gold); font-size: 12px; transition: transform 0.2s ease; }
-  .cal-fold[open] .cal-caret { transform: rotate(180deg); }
-  .cal-fold[open] .cal-body { animation: cal-in 0.24s ease-out; }
-  @keyframes cal-in { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
-  .cal-body { padding: 0 16px 14px; }
-  .cal-nav { position: absolute; top: 6px; z-index: 1; display: inline-flex; align-items: center; justify-content: center;
-    width: 44px; height: 44px; font-size: 26px; color: var(--accent); text-decoration: none; border-radius: 50%; }
-  .cal-prev { left: 8px; }
-  .cal-next { right: 8px; }
-  .cal { width: 100%; border-collapse: collapse; table-layout: fixed; }
-  .cal th { font-size: 12px; color: var(--muted); font-weight: 500; padding: 6px 0; }
-  .cal td { text-align: center; padding: 2px; }
-  .day { position: relative; display: flex; align-items: center; justify-content: center; height: 42px; border-radius: 12px;
-    color: var(--ink); text-decoration: none; font-size: 15px; }
-  .day.today { box-shadow: inset 0 0 0 1.5px var(--accent); font-weight: 700; }
-  .day.selected { background: var(--accent); color: #fff; }
-  .dot { position: absolute; bottom: 5px; left: 50%; width: 5px; height: 5px; margin-left: -2.5px; border-radius: 50%; background: var(--gold); }
-  .day.selected .dot { background: #fff; }
-  .list-title { font-size: 15px; color: var(--accent); margin: 22px 4px 10px; letter-spacing: 0.1em; }
   /* 头像：设置过就是图片，没设置是名字首字，TA 粉色、我黄色 */
   .avatar { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; overflow: hidden;
     object-fit: cover; border-radius: 10px; color: #fff; font-weight: 600; line-height: 1; }
@@ -655,7 +549,7 @@ const STYLE = `
   .moment-main { min-width: 0; }
   .moment-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 2px 8px; margin-bottom: 4px; }
   .moment-name { font-size: 15px; font-weight: 600; color: var(--accent); }
-  .moment .ts { color: var(--muted); font-size: 12px; }
+  .moment .ts { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
   /* 你发的、TA 还没醒来看过的，标一句。和留言那个"还没看到"一个意思 */
   .post-unseen { font-size: 11px; color: var(--muted); }
   .moment .content { display: block; font-size: 15px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
@@ -727,8 +621,8 @@ const STYLE = `
   @media (prefers-reduced-motion: reduce) {
     .playing .w1, .playing .w2 { animation: none; }
     .voice-bar.playing { background: var(--voice-press); }
-    .stack-item.in-next, .stack-item.in-prev, .activity-detail[open] .detail, .cal-fold[open] .cal-body { animation: none; }
-    .stack-dot, .stack-arrow, .hint-arrow, .cal-caret { transition: none; }
+    .stack-item.in-next, .stack-item.in-prev, .activity-detail[open] .detail { animation: none; }
+    .stack-dot, .stack-arrow, .hint-arrow { transition: none; }
   }
   .like-bar { display: flex; align-items: center; gap: 4px; margin-top: 8px; }
   .like-btn { background: none; color: var(--accent); font-size: 22px; line-height: 1; min-width: 44px; min-height: 44px;
@@ -769,7 +663,8 @@ const STYLE = `
 
 // head 里那一小段给 html 加上 js 标记：有 JavaScript 才显示语音条，不然留着浏览器自带的播放器。
 // 菜单和星星转场每个页面都有（见 page-chrome.js），current 是菜单里高亮哪一项。
-// MY_MOMENTS_CSS 是你发动态那几处的样式（见 my-moments.js）
+// MY_MOMENTS_CSS 是你发动态那几处的样式（见 my-moments.js），
+// MY_COMMENTS_CSS 是留言那个「删」的样式（见 my-comments.js）
 function layout(title, body, script = '', current = '/moments') {
   return `<!DOCTYPE html>
 <html lang="zh">
@@ -778,32 +673,19 @@ function layout(title, body, script = '', current = '/moments') {
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>${escapeHtml(title)}</title>
 <script>document.documentElement.className += ' js';${HEAD_SCRIPT}</script>
-<style>${STYLE}${MY_MOMENTS_CSS}${CHROME_CSS}</style>
+<style>${STYLE}${MY_MOMENTS_CSS}${MY_COMMENTS_CSS}${CHROME_CSS}</style>
 </head>
 <body><main>${renderMenu(current)}${body}</main><script>${script}${CHROME_SCRIPT}</script></body>
 </html>`;
 }
 
-function renderPage({ today, month, selected, marked, moments, back, mood, top, calOpen }) {
-  let list;
-  if (selected) {
-    const items = groupForDisplay(moments)
-      .map((x) => (x.type === 'stack' ? renderStack(x.items) : renderMoment(x.m, back)))
-      .join('');
-    list = `<section class="day-group" aria-labelledby="day-sel">
-      <h2 id="day-sel" class="list-title">${dayTitle(selected)}</h2>
-      ${items || '<p class="empty">这一天还没有动态。</p>'}
-    </section>`;
-  } else if (moments.length) {
-    list = groupByDay(moments)
-      .map((g) => renderDayGroup(g, back))
-      .join('');
-  } else {
-    list = `<section class="day-group" aria-labelledby="day-today">
-      <h2 id="day-today" class="list-title">${dayTitle(today)}</h2>
-      <p class="empty">还没有动态。</p>
-    </section>`;
-  }
+// 一条往下看的流，不按天分段。每条动态自己带了完整日期时间
+function renderPage({ moments, back, mood, top }) {
+  const list = moments.length
+    ? groupForDisplay(moments)
+        .map((x) => (x.type === 'stack' ? renderStack(x.items) : renderMoment(x.m, back)))
+        .join('')
+    : '<p class="empty">还没有动态。</p>';
   return layout(
     '晨暮星',
     `<header class="hero">
@@ -812,7 +694,6 @@ function renderPage({ today, month, selected, marked, moments, back, mood, top, 
       ${renderMoodLine(mood, top)}
       ${renderWakeLine()}
     </header>
-    ${renderCalendar({ y: month.y, m: month.m, today, selected, marked, open: calOpen })}
     ${renderComposeBox(back)}
     ${list}`,
     VOICE_SCRIPT + STACK_SCRIPT
@@ -928,6 +809,9 @@ export function registerMomentRoutes(app, { requireBasicAuth, requireApiKey }) {
   // 你发动态的那几个路由（发、改、删），见 my-moments.js。
   // 挂在最前面：/moments/mine 要比下面的 /moments/:id/* 先匹配到
   registerMyMomentRoutes(app, { requireBasicAuth });
+  // 删我自己留的那条留言，见 my-comments.js。
+  // /moments/comments/:id/delete 是四段，和下面 /moments/:id/comments 不会撞上
+  registerMyCommentRoutes(app, { requireBasicAuth });
 
   // ---- 程序化访问（快捷指令、以后的前端）----
   app.get('/wake/moments', requireApiKey, (req, res) => {
@@ -954,39 +838,15 @@ export function registerMomentRoutes(app, { requireBasicAuth, requireApiKey }) {
   // async：要等 Drivesoid 给出此刻最明显的三项。只读现成快照，不触发分类，Drivesoid 没开时立刻返回 null。
   app.get('/moments', requireBasicAuth, async (req, res) => {
     try {
-      const now = wallParts();
-      const today = { y: now.y, m: now.m, d: now.d };
-      const selected = parseDate(req.query.day);
-      const month =
-        parseMonth(req.query.month) ?? (selected ? { y: selected.y, m: selected.m } : { y: today.y, m: today.m });
-
-      const monthStart = wallMidnight(month.y, month.m, 1);
-      const monthEnd = wallMidnight(month.y, month.m + 1, 1);
-      const marked = new Set(listMomentTimestampsBetween(monthStart, monthEnd).map((r) => wallParts(r.ts).d));
-
-      const moments = selected
-        ? listMomentsBetween(wallMidnight(selected.y, selected.m, selected.d), wallMidnight(selected.y, selected.m, selected.d + 1))
-        : listMoments(RECENT_LIMIT);
-
-      const back = selected
-        ? pageUrl(month.y, month.m, ymd(selected))
-        : req.query.month
-          ? pageUrl(month.y, month.m)
-          : '/moments';
-
+      const moments = listMoments(RECENT_LIMIT);
       const top = await getTopDrives();
 
       res.send(
         renderPage({
-          today,
-          month,
-          selected,
-          marked,
           moments,
-          back,
+          back: '/moments',
           mood: currentMood(),
           top,
-          calOpen: req.query.open === '1',
         })
       );
     } catch (err) {
