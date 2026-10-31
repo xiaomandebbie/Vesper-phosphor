@@ -39,19 +39,15 @@
 // dawn/day 走 light，dusk/night 走 dark。这条是它自己支持的，一定生效。
 // 再叠一层 SKIN_CSS 做贴色：只追加覆盖，不改它的布局和交互。
 //
-// ── 导览（2026-10-31）──
+// ── 这页不放底栅（2026-10-31）──
 //
-// 底栅导览不在 CHROME_CSS / CHROME_SCRIPT 里，是各页自己 import TABS_CSS +
-// renderTabs 的（见 me-page.js、discover-page.js）。这页当初漏了那一步，
-// 所以进来只有右上角那个三条杠，没有底栅、也没有返回键。现在补上。
+// 试过把底栅导览注进来，被打回来了：NEST 书架自己底部就有一条栅，
+// 我那条盖在它上面，把它的按钮挡住了点不到。tabs.js 开头就写过这事：
+// 那些不是我们自己排版的页面，强塞东西进去反而挡他们自己的按钮。
 //
-// 三条杠没有一起撤掉，留着作保底：它 z-index 9990，比底栅（90）高很多，
-// NEST 自己的元素压不住它。要是哪天底栅被它的阅读器盖住了，还有一条路出去。
-//
-// 底栅是浮在最下面的（毛玻璃、离底 10px），没给 NEST 的内容垫 padding-bottom——
-// 它是 React 单页，滚的到底是 body 还是里面某个容器这边看不到，
-// 硬加 !important 的 padding 有可能把它的整屏布局挤变形。先让它浮着，
-// 真挡住了底部按钮再针对那个容器单独垫。
+// 现在只给两样东西：左上角返回键，和右上角那个可拖的三条杠。
+// 两个都在角上、都不压它的内容，要去别的页从三杠菜单进。
+// TABS_CSS 还是要引：.vp-back 的样式在里头。
 
 import express from 'express';
 import fs from 'fs';
@@ -75,7 +71,7 @@ import {
   addReply,
 } from './books.js';
 import { renderMenu, CHROME_CSS, CHROME_SCRIPT } from './page-chrome.js';
-import { renderTabs, TABS_CSS } from './tabs.js';
+import { TABS_CSS } from './tabs.js';
 import { faceAt } from './sun-time.js';
 import { formatDate } from './wall-time.js';
 
@@ -355,8 +351,8 @@ function renderShell(html) {
     `document.documentElement.dataset.theme=p==='light'||p==='dark'?p:'${dark ? 'dark' : 'light'}';}catch(e){}<\/script>`;
 
   let out = html;
-  // TABS_CSS 要跟着：底栅和返回键的样式都在里头
-  const style = `<style id="vesper-skin">${CHROME_CSS}${TABS_CSS}${SKIN_CSS}</style>`;
+  // TABS_CSS 要跟着：.vp-back 的样式在里头
+const style = `<style id="vesper-skin">${CHROME_CSS}${TABS_CSS}${SKIN_CSS}</style>`;
   const headEnd = out.search(/<\/head>/i);
   out = headEnd >= 0 ? out.slice(0, headEnd) + themeInit + style + out.slice(headEnd) : themeInit + style + out;
 
@@ -367,10 +363,9 @@ function renderShell(html) {
   const bodyOpen = /<body(\s[^>]*)?>/i;
   out = bodyOpen.test(out) ? out.replace(bodyOpen, (m) => m + bridge + menu) : bridge + menu + out;
 
-  // 底栅和返回键排在最后：它们是 fixed 的，放哪都一样，
-  // 但放末尾可以压在 NEST 自己的元素上面（同一个 z-index 时后来的在上）
+  // 只放返回键，不放底栅：NEST 自己底部就有一条栅，盖上去会把它挡住
   const bodyEnd = out.toLowerCase().lastIndexOf('</body>');
-  const tail = `${renderTabs(PREFIX)}${BACK_LINK}<script>${CHROME_SCRIPT}<\/script>`;
+  const tail = `${BACK_LINK}<script>${CHROME_SCRIPT}<\/script>`;
   return bodyEnd >= 0 ? out.slice(0, bodyEnd) + tail + out.slice(bodyEnd) : out + tail;
 }
 
