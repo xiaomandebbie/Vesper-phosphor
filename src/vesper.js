@@ -37,6 +37,11 @@ import { registerGameRoutes } from './game-page.js';
 const app = express();
 // 点击星星（见 sparkles.js）：最先挂，转发来的记忆库、音乐页面和我们自己的页面都能加上
 registerSparkles(app);
+// 项目自带的静态文件（public/）：加载页和转场的动效就在 public/motion 下。
+// 挂在最前面、不走 requireBasicAuth —— 登录页自己也要用这些素材，挡住就白屏了。
+// 之前漏了这一行，于是 /motion/load.webm 一直是 Cannot GET，
+// 而外壳那层遮罩等着视频，视频永远不来，整个 /app 就白着。
+app.use(express.static(path.join(process.cwd(), 'public'), { maxAge: '7d' }));
 // 记忆库 /memory/ 是把 Ombre Brain 的管理页转发过来（见 memory-proxy.js），要原样拿到请求体，
 // 所以必须挂在下面的 body 解析之前。音乐 /music/ 同理（见 music-proxy.js）
 const memoryProxy = registerMemoryProxy(app, { requireBasicAuth });
