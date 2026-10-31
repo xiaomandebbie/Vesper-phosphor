@@ -38,6 +38,20 @@
 // 所以主路是：早晚四张脸（sun-time.js 按长沙真实的日出日落算）映到这两套——
 // dawn/day 走 light，dusk/night 走 dark。这条是它自己支持的，一定生效。
 // 再叠一层 SKIN_CSS 做贴色：只追加覆盖，不改它的布局和交互。
+//
+// ── 导览（2026-10-31）──
+//
+// 底栅导览不在 CHROME_CSS / CHROME_SCRIPT 里，是各页自己 import TABS_CSS +
+// renderTabs 的（见 me-page.js、discover-page.js）。这页当初漏了那一步，
+// 所以进来只有右上角那个三条杠，没有底栅、也没有返回键。现在补上。
+//
+// 三条杠没有一起撤掉，留着作保底：它 z-index 9990，比底栅（90）高很多，
+// NEST 自己的元素压不住它。要是哪天底栅被它的阅读器盖住了，还有一条路出去。
+//
+// 底栅是浮在最下面的（毛玻璃、离底 10px），没给 NEST 的内容垫 padding-bottom——
+// 它是 React 单页，滚的到底是 body 还是里面某个容器这边看不到，
+// 硬加 !important 的 padding 有可能把它的整屏布局挤变形。先让它浮着，
+// 真挡住了底部按钮再针对那个容器单独垫。
 
 import express from 'express';
 import fs from 'fs';
@@ -61,6 +75,7 @@ import {
   addReply,
 } from './books.js';
 import { renderMenu, CHROME_CSS, CHROME_SCRIPT } from './page-chrome.js';
+import { renderTabs, TABS_CSS } from './tabs.js';
 import { faceAt } from './sun-time.js';
 import { formatDate } from './wall-time.js';
 
@@ -151,6 +166,16 @@ const SKIN_CSS = `
     --line: #4b3d63; --line-strong: #604e76; --card-line: #4b3d63;
   }
 `;
+
+// 左上角返回键。TABS_SCRIPT 不在这一页跑（它跟着各页自己的 layout 走，
+// 这边是注进别人的 index.html），所以这个键是写死的 HTML，不是脚本插的。
+// 带 data-back：万一哪天这页也跑上了 TABS_SCRIPT，它看到就不会再插一个。
+// 有来处就退回去，直接打开这一页的（比如从主屏幕）就回发现页。
+const BACK_LINK =
+  `<a class="vp-back" data-back data-no-stars href="/discover" aria-label="返回"` +
+  ` onclick="if(window.history.length&gt;1){event.preventDefault();window.history.back();}">` +
+  `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.6 5.4l-6.6 6.6 6.6 6.6 1.5-1.5-5.1-5.1 5.1-5.1z"/></svg>` +
+  `<span>返回</span></a>`;
 
 // ── 转接层 ──
 //
@@ -327,22 +352,25 @@ function renderShell(html) {
   // 不改地址栏、也不触发跳转（原来用 location.replace 会把 #hash 路由搞乱）
   const themeInit =
     `<script>try{var p=new URLSearchParams(location.search).get('theme');` +
-    `document.documentElement.dataset.theme=p==='light'||p==='dark'?p:'${dark ? 'dark' : 'light'}';}catch(e){}</script>`;
+    `document.documentElement.dataset.theme=p==='light'||p==='dark'?p:'${dark ? 'dark' : 'light'}';}catch(e){}<\/script>`;
 
   let out = html;
-  const style = `<style id="vesper-skin">${CHROME_CSS}${SKIN_CSS}</style>`;
+  // TABS_CSS 要跟着：底栅和返回键的样式都在里头
+  const style = `<style id="vesper-skin">${CHROME_CSS}${TABS_CSS}${SKIN_CSS}</style>`;
   const headEnd = out.search(/<\/head>/i);
   out = headEnd >= 0 ? out.slice(0, headEnd) + themeInit + style + out.slice(headEnd) : themeInit + style + out;
 
   // 转接层要在它自己的脚本跑之前装好（loadDemoBooks() 是初始化时同步读的），
   // 所以挤在 body 开头，不是 </body> 前
   const menu = renderMenu(`${PREFIX}`, { fixed: true });
-  const bridge = `<script id="vesper-books-bridge">${BRIDGE_SCRIPT}</script>`;
+  const bridge = `<script id="vesper-books-bridge">${BRIDGE_SCRIPT}<\/script>`;
   const bodyOpen = /<body(\s[^>]*)?>/i;
   out = bodyOpen.test(out) ? out.replace(bodyOpen, (m) => m + bridge + menu) : bridge + menu + out;
 
+  // 底栅和返回键排在最后：它们是 fixed 的，放哪都一样，
+  // 但放末尾可以压在 NEST 自己的元素上面（同一个 z-index 时后来的在上）
   const bodyEnd = out.toLowerCase().lastIndexOf('</body>');
-  const tail = `<script>${CHROME_SCRIPT}</script>`;
+  const tail = `${renderTabs(PREFIX)}${BACK_LINK}<script>${CHROME_SCRIPT}<\/script>`;
   return bodyEnd >= 0 ? out.slice(0, bodyEnd) + tail + out.slice(bodyEnd) : out + tail;
 }
 
