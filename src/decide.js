@@ -22,6 +22,7 @@ import { booksSection, booksStatusLine, booksFromHerBlock } from './books.js';
 import { markSeen as markBooksSeen } from './books.js';
 import { gardenSection } from './garden.js';
 import { workkkSection } from './workkk.js';
+import { letoSection } from './leto.js';
 
 const LLM_BASE_URL =
   process.env.LLM_BASE_URL || 'https://api.deepseek.com/v1/chat/completions';
@@ -367,7 +368,7 @@ mode 有 normal / low-frequency / silent 三种，只影响非精确唤醒的节
 ## 情绪怎么读
 如果用户消息里给了"你此刻最明显的情绪"：那是情绪系统算出来的、你此刻最强的三项，数值 0–100，低于 25 很淡，25–45 平常，45–65 明显，高于 65 强烈。没列出来的那些就是平常水平。
 几个不太直白的词：思慕是想念对方，渴求是欲望，护卫是想保护对方，探求是想找点事做或想找人，落寞是低落。
-这三项是你这次心情和想做什么的底色；为什么会这样，去"最近的对话"和你的记忆里找。不要把数字写进推送、动态和留言回复里。
+这三项是你这次心情和想做什么的底色；为什么会这样，去"最近的对话"和"你记得什么"里找。不要把数字写进推送、动态和留言回复里。
 
 ## 动态下的留言
 用户消息里如果有"有人在你的动态下留言了"，回留言不占这次的动作。想回哪条就写在 comment_replies 里，你的回复会挂在那条留言下面；不想回的可以不写；这次没回的，下次不会再出现。
@@ -576,11 +577,11 @@ const RULE_3 =
 const FMT = '只返回一个JSON对象，不要任何其他文字：{"share": "..." 或 null}';
 
 // ---------- 第二阶段：正事定完了，再问消遣 ----------
-// 这四件事只在这一步出现。它们不跟论坛、记忆库同台竞争，所以不会再把那些挤掉。
+// 这五件事只在这一步出现。它们不跟论坛、记忆库同台竞争，所以不会再把那些挤掉。
 async function askPlay(messages) {
   const head = `正事你已经定好了（就是上面那些）。现在单独问一句消遣。
 
-下面这些是你的消遣：上班、花园、锈潮、共读书架。刚才那一轮里你看不见它们，是故意的——
+下面这些是你的消遣：上班、花园、锈潮、Leto、共读书架。刚才那一轮里你看不见它们，是故意的——
 它们每次都比逛论坛、翻记忆来得有意思，摆在一起选，那些就永远排不上。所以正事先定，消遣后说。`;
 
   const tail = `想做就写进 play_actions，不想做就给空数组。想做哪件就做哪件，做与不做都行，按你此刻真想做的来。
@@ -591,6 +592,7 @@ async function askPlay(messages) {
     workkkSection(),
     gardenSection(),
     xiuchaoSection(),
+    letoSection(),
     booksSection(),
     '',
     budgetStatusLine(),
@@ -648,7 +650,7 @@ export async function askShare(messages, results) {
 }
 
 export async function decideWithMessages(context) {
-  // 第一阶段：菜单上没有上班、花园、锈潮、共读（见上面那段注释）
+  // 第一阶段：菜单上没有上班、花园、锈潮、共读、Leto（见上面那段注释）
   const messages = [
     systemMessage(buildSystemPrompt(context, false)),
     { role: 'user', content: buildUserPrompt(context, false) },
@@ -719,6 +721,8 @@ export async function musicNextStep(messages, { tool, resultText, isError, remai
 
 这次醒来你还可以在点歌台再走 ${remaining} 步，比如：
 - 想知道这首歌你们写过什么：memo_read {"query":"歌名 歌手"}
+- 想读整篇歌词：lyric_read {"query":"歌名 歌手"}
+- 想看看大家怎么说：song_comments {"query":"歌名 歌手"}
 - 想读整篇歌词：lyric_read {"query":"歌名 歌手"}
 - 想看看大家怎么说：song_comments {"query":"歌名 歌手"}
 - 想认真听一遍（频谱、BPM、鼓点）：song_listen {"query":"歌名 歌手"}
