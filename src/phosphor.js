@@ -28,12 +28,19 @@ import { maybeDream, recallDream, markRecalled, dreamConfigSummary } from './dre
 import { describeActivity, describeActivityDetail } from './actions/activity.js';
 import { workkkConfigSummary } from './workkk.js';
 import { continueWorkkk } from './workkk-steps.js';
+import { continueLeto } from './leto-steps.js';
 import { addActivityMoment } from './moments-store.js';
+// 网页聊天里攒着的话（见 chat-queue.js）。和动态留言同一套做法：
+// 带进来、他自己定回不回、不占这次的动作。
+// 唤醒时把攒着的话递给 relay（和她点按钮走同一条路）。
+// 不自己回：那样你的话不进 relay 库，上下文就断了。
+import { listPending, flushPending } from './chat-queue.js';
 import { isImageEnabled, isVoiceEnabled } from './actions/moment.js';
 import { listAllTools, connectAll, callTool, isConnected } from './mcp-manager.js';
 import { isSharedTimelineEnabled, describeAction, postSharedEvent } from './timeline.js';
 import { gardenConfigSummary } from './garden.js';
 import { continueGarden } from './garden-steps.js';
+import { continueXiuchao } from './xiuchao-steps.js';
 import { getSharedContext, countRecentChat } from './context.js';
 import { getTopDrives, isDrivesEnabled } from './drives.js';
 import { getUnseenStarReplies, markStarRepliesSeen, hasStarToday, starWindowLabel } from './star-jar.js';
@@ -69,6 +76,9 @@ const LOW_FREQ_MIN_GAP_MINUTES = 90;
 const DEFAULT_WAKE_MINUTES = 60;
 const MIN_WAKE_MINUTES = 5;
 const MAX_COMMENTS_PER_WAKE = 5;
+// 一次醒来最多带几条她在网页聊天里攒着的话。比留言宽：
+// 聊天本来就是一句一条，五条很容易切成半句话。
+const MAX_CHAT_PER_WAKE = 20;
 const MAX_REPLY_CHARS = 500;
 // 一次醒来最多带几条"新的阳光撒下"（她摘下星星后回的话）。带过的就算告知过，下次不再出现
 const MAX_STAR_REPLIES_PER_WAKE = 3;
@@ -164,6 +174,13 @@ function normalizeDecision(raw, fallbackMood) {
         .filter((r) => Number.isInteger(r.comment_id) && r.reply)
     : [];
 
+  // 网页聊天的回复：一串字符串，每条一个气泡。空的、不是字符串的丢掉。
+  const chatReplies = Array.isArray(d.chat_replies)
+    ? d.chat_replies
+        .map((s) => (typeof s === 'string' ? s.trim().slice(0, MAX_REPLY_CHARS) : ''))
+        .filter(Boolean)
+    : [];
+
   // star_replies / moment_replies 原样透传，洗形状在 from-her.js 里做（normalizeFromHerReplies）
   // bar_offers 同理，洗形状在 actions/bar-offers.js 里做（normalizeBarOffers）
   // doing_follow_up 也同理，洗形状在 actions/doing-follow-up.js 里做（normalizeDoingFollowUp）
@@ -175,6 +192,7 @@ function normalizeDecision(raw, fallbackMood) {
     action_detail: actionDetail,
     self_wake: selfWake,
     comment_replies: commentReplies,
+    chat_replies: chatReplies,
   };
 }
 
@@ -197,6 +215,34 @@ function handleCommentReplies(decision, shownComments) {
   markCommentsHandled(shownComments.map((c) => c.id));
   if (replied) console.log(`phosphor: 回复了 ${replied} 条动态留言`);
   return replied;
+}
+
+// 她在网页聊天里发了、没点「让你回复」的那几句：递给 relay。
+//
+// 小满 10-30：「上下文要连得上」。所以走和她点按钮完全同一条路：
+//   你的话 → relay 库 → api_loop 读到 → 他回复 → relay 库
+// 两边都在库里、顺序对得上，下次再聊还能翻到。
+//
+// 上一版是「读走 → 他自己回一句」，错在你的话从来没进 relay——
+// 数据库里那几条 via=wake 就是那么来的：标记改了，话没递。
+//
+// 不占这次醒来的动作，和回动态留言一个道理。
+// 递失败不标已读（flushPending 里就是这么写的），下次醒来再试。
+async function flushChatOnWake(rows) {
+  if (!rows.length) return 0;
+  try {
+    const out = await flushPending();
+    if (out.sent) {
+      console.log('phosphor: 把 ' + out.sent + ' 条攒着的话递给 relay 了，他会回');
+    }
+    if (out.error) {
+      console.error('phosphor: 攒着的话没递出去，下次醒来再试：' + out.error);
+    }
+    return out.sent || 0;
+  } catch (err) {
+    console.error('phosphor: 递攒着的话失败', err.message);
+    return 0;
+  }
 }
 
 // 从 Ombre Brain 取一段文本。取不到就返回 null，不影响这一轮唤醒。
@@ -487,6 +533,14 @@ async function runDecisionCycle({ kind, scheduledAt = null, selfNote = null, cle
   await syncDoingPriors(breathSummary);
   const gapMinutes = wakeState.updated_at ? (Date.now() - wakeState.updated_at) / 60000 : 0;
   const pendingComments = getPendingComments(MAX_COMMENTS_PER_WAKE);
+  // 她在网页聊天里发了、没点「让你回复」的那几句（读库，不调模型）。
+  // 读不到就当没有，不能因为队列坏了把整次唤醒拖下水。
+  let pendingChat = [];
+  try {
+    pendingChat = listPending(MAX_CHAT_PER_WAKE);
+  } catch (err) {
+    console.error('phosphor: 读不到网页聊天攒着的话（不影响这次）', err.message);
+  }
   // 星星罐：今天那一次机会用没用过，以及她摘下星星后回的话（读库，不调模型）。
   // 读不到就当没有，不能因为星星罐坏了把整次唤醒拖下水。
   let starUsedToday = false;
@@ -529,6 +583,7 @@ async function runDecisionCycle({ kind, scheduledAt = null, selfNote = null, cle
     recentActions: getRecentActions(8),
     forumNotes: getForumNotes(FORUM_NOTES_SHOWN),
     pendingComments,
+    pendingChat,
     starUsedToday,
     starReplies,
     fromHer,
@@ -583,6 +638,13 @@ async function runDecisionCycle({ kind, scheduledAt = null, selfNote = null, cle
     } catch (err) {
       console.error(`[${kind}] handleCommentReplies failed:`, err);
     }
+    // 她在网页聊天里攒着的话：他想回的发进 relay，带给他看过的标成读过。
+    // 和回留言一个规矩，不占这次的动作。
+    try {
+      await flushChatOnWake(pendingChat);
+    } catch (err) {
+      console.error(`[${kind}] flushChatOnWake failed:`, err);
+    }
     // 星星罐的回音已经随这次决定给 TA 看过了，标成告知过，下次不再重复
     if (starReplies.length) {
       try {
@@ -626,7 +688,7 @@ async function runDecisionCycle({ kind, scheduledAt = null, selfNote = null, cle
     // 一次醒来可以做几件事：按级别筛一遍，按顺序做，每件做完该接着走的就走。
     // 分级和 2 级那一天 6 次的上限在 budget.js，执行和续步分发在 run-actions.js。
     try {
-      const ran = await runActions(decision, messages, { kind });
+      const ran = await runActions(decision, messages, { kind, selfNote });
       actionResults = ran.results;
       // 老字段留着：logWake 和共享时间线那边还按单个结果认
       result = ran.results.length === 1 ? ran.results[0].result : ran.results.map((r) => r.result);
@@ -656,6 +718,17 @@ async function runDecisionCycle({ kind, scheduledAt = null, selfNote = null, cle
       await continueGarden(decision, result, messages);
     } catch (err) {
       console.error(`[${kind}] continueGarden failed:`, err);
+    }
+  }
+
+  // 锈潮：进去了就让他自己往下走（见 xiuchao-steps.js）。
+  // 那边没有「做完了」这种终点，所以只按三件事停：他说不走了、出错、步数用完。
+  // 被我们自己拦下来的话不算出错——还要再问他一次，让他改完重发。
+  if (decision && !errorMessage) {
+    try {
+      await continueXiuchao(decision, result, messages);
+    } catch (err) {
+      console.error(`[${kind}] continueXiuchao failed:`, err);
     }
   }
 
@@ -760,6 +833,12 @@ async function nonPreciseTick() {
   });
 }
 
+// 正在跑的那一轮精确唤醒。进程被杀时 shutdown 要知道该给谁留痕迹。
+//
+// 为什么只跟精确链：自然唤醒被杀了无所谓，下次 tick 还会来；
+// 约好的时间只有一次，掉了就没了。
+let running = null;
+
 async function preciseTick() {
   // 先把过期太久的摘掉（停机几小时之后不该一口气补触发一堆），
   // 再执行还在宽限期内的。
@@ -783,7 +862,12 @@ async function preciseTick() {
     console.log(
       `phosphor: 到点了，按约醒一次（原定 ${new Date(w.wake_at).toLocaleString()}${lateMin >= 2 ? `，晚了 ${lateMin} 分钟` : ''}）`
     );
-    await runDecisionCycle({ kind: 'precise', scheduledAt: w.wake_at, selfNote: note });
+    running = { wakeId: w.id, scheduledAt: w.wake_at, note };
+    try {
+      await runDecisionCycle({ kind: 'precise', scheduledAt: w.wake_at, selfNote: note });
+    } finally {
+      running = null;
+    }
   }
 }
 
@@ -861,6 +945,35 @@ let timer = null;
 function shutdown(signal) {
   console.log(`phosphor: received ${signal}, shutting down`);
   if (timer) clearInterval(timer);
+
+  // 正在跑一轮精确唤醒却被杀——这是今天那三次「说醒了但没记录」的真正原因。
+  // 一次完整唤醒要跑五六分钟，pm2 restart 正好落在那个窗口里。
+  //
+  // 两件事要做：约摆回 pending（宽限内重启后再触发一次，超过了标 missed），
+  // 往 wake_log 写一笔（不让中断静默消失）。
+  if (running) {
+    try {
+      setPendingWakeStatus(running.wakeId, 'pending');
+      console.log(
+        'phosphor: 这一轮精确唤醒被' + signal + '打断了，约 #' + running.wakeId + ' 摆回没到点'
+      );
+    } catch (err) {
+      console.error('phosphor: 约没摆回去', err.message);
+    }
+    try {
+      logWake({
+        kind: 'precise',
+        scheduledAt: running.scheduledAt,
+        mode: null,
+        gapMinutes: 0,
+        decision: null,
+        result: null,
+        error: '进程收到 ' + signal + '，这一轮没跑完（唤醒要五六分钟，重启落在了那个窗口里）',
+      });
+    } catch (err) {
+      console.error('phosphor: 中断这一笔没记下', err.message);
+    }
+  }
   try {
     closeDb();
   } catch (err) {
@@ -872,7 +985,9 @@ function shutdown(signal) {
 async function main() {
   // 这台机器上真正接了哪几支续步，由这里说了算。
   // 论坛和听歌写在本文件里，别的在各自的 *-steps.js。
-  const continuers = [
+const continuers = [
+  // Leto：读完要接着把话交回去（见 leto-steps.js）
+  continueLeto,
     async (d, r, m) => rememberForumSteps(await continueForum(d, r, m)),
     continueMusic,
   ];
@@ -892,6 +1007,8 @@ async function main() {
   registerContinuers(continuers);
   console.log(`phosphor: 续步接了 ${continuers.length} 支`);
 
+  // 一次唤醒要跑几分钟。重启落在那个窗口里就会把那一轮杀掉，
+  // 现在至少会在 wake_log 里留一笔、并把约摆回没到点。
   process.on('SIGINT', () => shutdown('SIGINT'));
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   console.log(

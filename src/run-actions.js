@@ -65,7 +65,33 @@ function isNoopCall(action, detail) {
 // 做完这一次该做的事。
 // 返回 { results, dropped }。results 每项带 action / action_detail / result，
 // logWake 和共享时间线那边要用 action_detail 重建一个 decision 形状。
-export async function runActions(decision, messages, { kind = 'non_precise' } = {}) {
+// 被 Leto 叫醒的那一轮，只放行和 Leto 有关的事 + 存记忆。
+// 判断口径只看 note 开头，不看 kind：他自己约的续场也是 precise，
+// note 同样以 [Leto 开头，也该受限。
+function isLetoWake(selfNote) {
+  return /^\s*\[Leto/.test(String(selfNote ?? ''));
+}
+
+// 这一件事算不算「Leto 的事」。mcp_call 要看 action_detail 里的 server，
+// 他写大小写不定（leto / Leto 都出现过），所以转小写比。
+function allowedUnderLetoWake(item) {
+  const a = String(item?.action ?? '').trim();
+  if (a === 'noop' || a === 'ombre_brain') return true;
+  if (a !== 'mcp_call') return false;
+  try {
+    const raw = typeof item.action_detail === 'string'
+      ? item.action_detail
+      : JSON.stringify(item.action_detail ?? '');
+    const j = JSON.parse(raw);
+    const server = String(j?.server ?? '').trim().toLowerCase();
+    const tool = String(j?.tool ?? '').trim().toLowerCase();
+    return server === 'leto' || tool.startsWith('leto_');
+  } catch {
+    return false;
+  }
+}
+
+export async function runActions(decision, messages, { kind = 'non_precise', selfNote = null } = {}) {
   // 只给了单个 action 的老形状也认：模型有时候不写 actions 数组
   const list =
     Array.isArray(decision?.actions) && decision.actions.length
@@ -80,7 +106,20 @@ export async function runActions(decision, messages, { kind = 'non_precise' } = 
     return { ...item, action: 'noop', action_detail: '' };
   });
 
-  const { allowed, dropped } = pickActions(cleaned);
+  // Leto 那一轮先过这道，摆在 pickActions 之前：筛掉的不进账、不扣额度。
+  let gated = cleaned;
+  if (isLetoWake(selfNote)) {
+    const keep = cleaned.filter(allowedUnderLetoWake);
+    for (const item of cleaned) {
+      if (!keep.includes(item)) {
+        console.log(`[${kind}] 没做：${item?.action}——这次是 Leto 叫醒的，先把那边的事结掉`);
+      }
+    }
+    // 全被筛掉时留一个 noop，别让这一轮变成空数组走到底
+    gated = keep.length ? keep : [{ action: 'noop', action_detail: '' }];
+  }
+
+  const { allowed, dropped } = pickActions(gated);
   for (const d of dropped) console.log(`[${kind}] 没做：${d.action}——${d.why}`);
 
   const results = [];

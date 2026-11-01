@@ -49,26 +49,26 @@ const PATCH_SCRIPT =
 // 晨暮星配色，覆盖 Ombre Brain 管理页的颜色变量。布局、字体、功能都不动
 const SKIN_CSS = `
   html:root {
-    --bg: #f4ecf2;
-    --bg-gradient: linear-gradient(180deg, #efe7f4 0%, #f9f0ee 55%, #fdf8f2 100%);
-    --surface: #fffdfb;
-    --surface-solid: #faf3f6;
-    --border: #eadfe6;
-    --border-strong: #d8c4d0;
-    --text: #2b2233;
-    --text-dim: #665a70;
-    --text-light: #998ca2;
-    --accent: #7a3e5d;
-    --accent-light: #9b4a7a;
-    --accent-glow: rgba(122, 62, 93, 0.18);
-    --warning: #b7792f;
+    --bg: #eeeeee;
+    --bg-gradient: linear-gradient(180deg, #eaeaea 0%, #f2f2f2 55%, #f9f9f9 100%);
+    --surface: #fdfdfd;
+    --surface-solid: #f5f5f5;
+    --border: #e2e2e2;
+    --border-strong: #c9c9c9;
+    --text: #252525;
+    --text-dim: #5e5e5e;
+    --text-light: #909090;
+    --accent: #4d4d4d;
+    --accent-light: #5f5f5f;
+    --accent-glow: rgba(77, 77, 77, 0.18);
+    --warning: #818181;
     --shadow-light: rgba(255, 255, 255, 0.9);
-    --shadow-dark: rgba(90, 50, 80, 0.16);
-    --shadow-dark-subtle: rgba(90, 50, 80, 0.08);
-    --lcd: #fbeef3;
-    --lcd-text: #5b2e52;
-    --lcd-dim: #8f6a84;
-    --lcd-glow: rgba(155, 74, 122, 0.14);
+    --shadow-dark: rgba(61, 61, 61, 0.16);
+    --shadow-dark-subtle: rgba(61, 61, 61, 0.08);
+    --lcd: #f1f1f1;
+    --lcd-text: #3a3a3a;
+    --lcd-dim: #747474;
+    --lcd-glow: rgba(95, 95, 95, 0.14);
   }
   html body { background: var(--bg-gradient); background-attachment: fixed; }
 `;
@@ -95,7 +95,10 @@ function injectChrome(html) {
   const headClose = out.search(/<\/head>/i);
   out = headClose >= 0 ? out.slice(0, headClose) + style + out.slice(headClose) : style + out;
 
-  const menu = renderMenu(`${PREFIX}/`, { fixed: true });
+  // 这页是转发过来的 Ombre Brain，不再摆整套导航（2026-10-30）。
+  // 左上角一个返回键就够：点一下回记忆页。
+  // data-back 让 TABS_SCRIPT 知道已经有返回键，不要再插一个。
+  const menu = `<a class="vp-back vp-back-memory" href="/memories" data-back data-no-stars aria-label="\u8fd4\u56de"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M14.6 5.4l-6.6 6.6 6.6 6.6 1.5-1.5-5.1-5.1 5.1-5.1z\"/></svg><span>\u8fd4\u56de</span></a>`;
   const bodyOpen = /<body(\s[^>]*)?>/i;
   out = bodyOpen.test(out) ? out.replace(bodyOpen, (m) => m + menu) : out + menu;
 
@@ -123,10 +126,10 @@ function rewriteCookie(cookie) {
 function errorPage(message) {
   return `<!DOCTYPE html><html lang="zh"><head><meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>记忆库 · 晨暮星</title><style>${CHROME_CSS}
-  body { margin: 0; min-height: 100vh; font-family: -apple-system, "PingFang SC", sans-serif; color: #2b2233;
-    background: linear-gradient(180deg, #efe7f4 0%, #f9f0ee 55%, #fdf8f2 100%); }
+  body { margin: 0; min-height: 100vh; font-family: -apple-system, "PingFang SC", sans-serif; color: #252525;
+    background: linear-gradient(180deg, #eaeaea 0%, #f2f2f2 55%, #f9f9f9 100%); }
   main { max-width: 600px; margin: 0 auto; padding: 80px 16px; }
-  .card { background: #fffdfb; border-radius: 16px; padding: 16px; border-left: 4px solid #b7792f; font-size: 14px; line-height: 1.6; }
+  .card { background: #fdfdfd; border-radius: 16px; padding: 16px; border-left: 4px solid #818181; font-size: 14px; line-height: 1.6; }
 </style></head><body><main>${renderMenu(`${PREFIX}/`)}<div class="card" role="alert">${message}</div></main><script>${CHROME_SCRIPT}</script></body></html>`;
 }
 

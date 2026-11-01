@@ -24,6 +24,7 @@
 import { FACE_CSS, FACE_SCRIPT } from './sun-time.js';
 import { FLOURISH_CSS, FLOURISH_SCRIPT } from './flourish.js';
 import { STAR_ENTRY_CSS, STAR_ENTRY_SCRIPT } from './star-entry.js';
+import { TABS_CSS, TABS_SCRIPT } from './tabs.js';
 import fs from 'fs';
 import path from 'path';
 
@@ -117,6 +118,22 @@ export function booksEnabled() {
 // 小酒馆排在音乐下面（小满定的位置）：配了 Proof 才能点，没配是灰色「没配置」。
 // 购物排在小钱包后面：那两页说的是同一件事的两头（账和东西）。
 // 购物页不需要配任何东西就能看：没配本机的手时心愿单照样记，只是不能真去买（见 shopping.js）
+// 台灯配好了没有。判断口径和 light-proxy.js 的 lightPageBase() 一致：
+// 配了 LIGHT_MCP_URL（或单独的 LIGHT_PAGE_URL）就有站内页 /lamp。
+// 两个地方各说一套的话，就是音乐那个坏毛病：转发正常，菜单里却写着「没配置」。
+export function lightPageEnabled() {
+  const explicit = env('LIGHT_PAGE_URL');
+  if (/^(off|0|false|no)$/i.test(explicit)) return false;
+  const raw = explicit || env('LIGHT_MCP_URL');
+  if (!raw) return false;
+  try {
+    const u = new URL(raw);
+    return u.protocol === 'http:' || u.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
 function navGroups() {
   const diary = diaryDir()
     ? { href: '/diary', label: '日记' }
@@ -141,6 +158,11 @@ function navGroups() {
     scroll: [
       { href: '/moments', label: '动态' },
       diary,
+      // 台灯排在日记后面（小满定的位置）。配了灯才能点，没配是灰色「没配置」。
+      // noStars：那页是转发过来的，不跑 HEAD_SCRIPT，不该留进场动画的记号。
+      lightPageEnabled()
+        ? { href: '/lamp', label: '台灯', noStars: true }
+        : { href: '', label: '台灯', note: '没配置' },
       { href: '/dreams', label: '梦境' },
       music,
       books,
@@ -151,6 +173,7 @@ function navGroups() {
         ? { href: '/games', label: '小游戏' }
         : { href: '', label: '小游戏', note: '没配置' },
       { href: '/wallet', label: '小钱包' },
+      { href: '/shopping', label: '购物' },
       { href: '/logs', label: '后台日志' },
       { href: externalUrl('NAV_FORUM_URL'), label: '论坛', external: true, note: '没配置' },
     ],
@@ -214,8 +237,8 @@ const FACE_PATCH_CSS = `
   html[data-face="night"] .vp-veil::before, html[data-face="dusk"] .vp-veil::before {
     background:
       radial-gradient(40% 35% at 25% 30%, rgba(255, 255, 255, 0.16), transparent 70%),
-      radial-gradient(35% 30% at 75% 65%, rgba(226, 166, 196, 0.22), transparent 70%),
-      radial-gradient(30% 25% at 60% 20%, rgba(196, 178, 246, 0.2), transparent 70%); }
+      radial-gradient(35% 30% at 75% 65%, rgba(181, 181, 181, 0.22), transparent 70%),
+      radial-gradient(30% 25% at 60% 20%, rgba(187, 187, 187, 0.2), transparent 70%); }
   html[data-face="night"] .vp-menu-soon, html[data-face="dusk"] .vp-menu-soon { color: var(--muted); }
   html[data-face="night"] .vp-menu-soon small, html[data-face="dusk"] .vp-menu-soon small { color: var(--muted); }
   html[data-face="night"] .vp-menu-fixed .vp-menu-btn, html[data-face="dusk"] .vp-menu-fixed .vp-menu-btn {
@@ -230,20 +253,20 @@ export const CHROME_CSS = `
   .vp-menu { position: absolute; top: 14px; right: 12px; z-index: 20; margin: 0; padding: 0; }
   .vp-menu.vp-menu-fixed { position: fixed; top: 10px; right: 10px; z-index: 9990; }
   .vp-menu-btn { list-style: none; display: flex; align-items: center; justify-content: center; width: 44px; height: 44px;
-    margin: 0; padding: 0; border-radius: 12px; cursor: pointer; color: #7a3e5d; }
+    margin: 0; padding: 0; border-radius: 12px; cursor: pointer; color: #4d4d4d; }
   .vp-menu-btn::-webkit-details-marker { display: none; }
   .vp-menu-btn::marker { content: ''; }
-  .vp-menu-fixed .vp-menu-btn { background: rgba(255, 253, 251, 0.94); box-shadow: 0 2px 10px rgba(60, 30, 60, 0.16);
+  .vp-menu-fixed .vp-menu-btn { background: rgba(253, 253, 253, 0.94); box-shadow: 0 2px 10px rgba(39, 39, 39, 0.16);
     touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
-  .vp-menu-fixed.vp-dragging .vp-menu-btn { cursor: grabbing; box-shadow: 0 6px 18px rgba(60, 30, 60, 0.28); }
-  .vp-menu-btn:active { background: rgba(122, 62, 93, 0.08); }
+  .vp-menu-fixed.vp-dragging .vp-menu-btn { cursor: grabbing; box-shadow: 0 6px 18px rgba(39, 39, 39, 0.28); }
+  .vp-menu-btn:active { background: rgba(77, 77, 77, 0.08); }
   .vp-bars { display: grid; gap: 4px; width: 20px; }
   .vp-bars i { display: block; height: 2px; border-radius: 1px; background: currentColor; transition: transform 0.25s ease, opacity 0.2s ease; }
   .vp-menu[open] .vp-bars i:nth-child(1) { transform: translateY(6px) rotate(45deg); }
   .vp-menu[open] .vp-bars i:nth-child(2) { opacity: 0; }
   .vp-menu[open] .vp-bars i:nth-child(3) { transform: translateY(-6px) rotate(-45deg); }
-  .vp-menu-panel { position: absolute; right: 0; top: 48px; min-width: 10em; padding: 6px; background: #fffdfb;
-    border: 1px solid #eadfe6; border-radius: 14px; box-shadow: 0 8px 24px rgba(60, 30, 60, 0.16);
+  .vp-menu-panel { position: absolute; right: 0; top: 48px; min-width: 10em; padding: 6px; background: #fdfdfd;
+    border: 1px solid #e2e2e2; border-radius: 14px; box-shadow: 0 8px 24px rgba(39, 39, 39, 0.16);
     animation: vp-menu-in 0.2s ease-out; transform-origin: top right; }
   /* 菜单被拖到左半边就往右展开，拖到下半边就往上展开，免得跑出屏幕 */
   .vp-menu.vp-menu-left .vp-menu-panel { right: auto; left: 0; transform-origin: top left; }
@@ -253,38 +276,51 @@ export const CHROME_CSS = `
   .vp-menu-panel li { margin: 0; padding: 0; list-style: none; }
   /* 中间那段只露三项，剩下的滑着看。两条细线把钉住的头尾分开 */
   .vp-menu-scroll { max-height: 132px; overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch;
-    margin: 4px 0; padding: 4px 0; border-top: 1px solid #f0e6ed; border-bottom: 1px solid #f0e6ed; }
+    margin: 4px 0; padding: 4px 0; border-top: 1px solid #e9e9e9; border-bottom: 1px solid #e9e9e9; }
   .vp-menu-scroll::-webkit-scrollbar { width: 3px; }
-  .vp-menu-scroll::-webkit-scrollbar-thumb { background: #e3d2de; border-radius: 3px; }
+  .vp-menu-scroll::-webkit-scrollbar-thumb { background: #d6d6d6; border-radius: 3px; }
   .vp-menu-panel a, .vp-menu-soon { display: flex; align-items: center; min-height: 44px; padding: 0 14px; border-radius: 10px;
     font-size: 15px; font-weight: 400; white-space: nowrap; }
-  .vp-menu-panel a { color: #2b2233; text-decoration: none; background: none; }
-  .vp-menu-panel a:hover, .vp-menu-panel a:focus-visible { background: #f6eef3; }
-  .vp-menu-panel a[aria-current="page"] { color: #7a3e5d; font-weight: 600; }
-  .vp-menu-panel a[aria-current="page"]::before { content: '✦'; margin-right: 6px; font-size: 12px; color: #b7792f; }
-  .vp-menu-soon { justify-content: space-between; gap: 12px; color: #8f8296; cursor: default; }
-  .vp-menu-soon small { font-size: 11px; color: #a597ab; }
-  .vp-menu-btn:focus-visible, .vp-menu-panel a:focus-visible { outline: 2px solid #7a3e5d; outline-offset: 2px; }
+  .vp-menu-panel a { color: #252525; text-decoration: none; background: none; }
+  .vp-menu-panel a:hover, .vp-menu-panel a:focus-visible { background: #f0f0f0; }
+  .vp-menu-panel a[aria-current="page"] { color: #4d4d4d; font-weight: 600; }
+  .vp-menu-panel a[aria-current="page"]::before { content: '✦'; margin-right: 6px; font-size: 12px; color: #818181; }
+  .vp-menu-soon { justify-content: space-between; gap: 12px; color: #868686; cursor: default; }
+  .vp-menu-soon small { font-size: 11px; color: #9b9b9b; }
+  .vp-menu-btn:focus-visible, .vp-menu-panel a:focus-visible { outline: 2px solid #4d4d4d; outline-offset: 2px; }
   @keyframes vp-menu-in { from { opacity: 0; transform: translateY(-4px) scale(0.96); } to { opacity: 1; transform: none; } }
 
   /* 星星转场 */
   html.vp-stars-in body::after { content: ''; position: fixed; inset: 0; z-index: 99998; pointer-events: none;
-    background: linear-gradient(160deg, #fde6ee 0%, #f9d4e1 55%, #fbe3ea 100%);
+    background: linear-gradient(160deg, #ebebeb 0%, #dddddd 55%, #e9e9e9 100%);
     animation: vp-cover-out 0.4s ease 1.6s forwards; }
   @keyframes vp-cover-out { to { opacity: 0; visibility: hidden; } }
   .vp-veil { position: fixed; inset: 0; z-index: 99999; overflow: hidden; pointer-events: none; opacity: 0;
-    background: linear-gradient(160deg, #fde6ee 0%, #f9d4e1 55%, #fbe3ea 100%); transition: opacity 0.35s ease; }
+    background: linear-gradient(160deg, #ebebeb 0%, #dddddd 55%, #e9e9e9 100%); transition: opacity 0.35s ease; }
   .vp-veil.on { opacity: 1; pointer-events: auto; }
   .vp-veil.instant { transition: none; }
   .vp-veil::before { content: ''; position: absolute; inset: -20%;
     background:
       radial-gradient(40% 35% at 25% 30%, rgba(255, 255, 255, 0.75), transparent 70%),
-      radial-gradient(35% 30% at 75% 65%, rgba(255, 192, 214, 0.7), transparent 70%),
-      radial-gradient(30% 25% at 60% 20%, rgba(255, 236, 242, 0.8), transparent 70%);
+      radial-gradient(35% 30% at 75% 65%, rgba(207, 207, 207, 0.7), transparent 70%),
+      radial-gradient(30% 25% at 60% 20%, rgba(240, 240, 240, 0.8), transparent 70%);
     animation: vp-veil-drift 2s ease-in-out forwards; }
+
+  /* 转场的画面（小满给的三个动效）。用 CSS 背景图当底、video 盖上去：
+     视频取不到就剩那张图，不会白屏——这是上次 /app 白屏的教训。
+     三个随机：靠 nth-child 做不到随机，所以用 animation-delay 错开同时放三层，
+     只显示其中一层（opacity 由 JS 之外的 :nth-of-type 配合 --pick 决定）。
+     实际做法更简单：JS 在建 veil 时挑一个，写进 --pick。*/
+  .vp-veil { background-color: #14101a; }
+  .vp-veil-media { position: absolute; inset: 0; width: 100%; height: 100%;
+    object-fit: cover; display: block; z-index: 0; }
+  .vp-veil-media.vp-veil-img { z-index: 0; }
+  .vp-veil-media.vp-veil-vid { z-index: 1; }
+  .vp-veil::before { z-index: 2; }
+  .vp-tstar { z-index: 3; }
   @keyframes vp-veil-drift { from { transform: none; } to { transform: translate3d(-3%, 2%, 0) scale(1.06); } }
-  .vp-tstar { position: absolute; z-index: 1; width: var(--s); height: var(--s); color: #ffd45c; opacity: 0;
-    filter: drop-shadow(0 0 6px rgba(255, 212, 92, 0.65)); animation: vp-tstar 1.1s ease-in-out var(--d) forwards; }
+  .vp-tstar { position: absolute; z-index: 1; width: var(--s); height: var(--s); color: #d4d4d4; opacity: 0;
+    filter: drop-shadow(0 0 6px rgba(212, 212, 212, 0.65)); animation: vp-tstar 1.1s ease-in-out var(--d) forwards; }
   .vp-tstar svg { display: block; width: 100%; height: 100%; }
   @keyframes vp-tstar {
     0% { opacity: 0; transform: scale(0.3) rotate(-20deg); }
@@ -295,9 +331,11 @@ export const CHROME_CSS = `
     .vp-veil::before, .vp-menu-panel { animation: none; }
     .vp-bars i { transition: none; }
   }
-${FACE_CSS}${FACE_PATCH_CSS}${FLOURISH_CSS}${STAR_ENTRY_CSS}`;
+${FACE_CSS}${FACE_PATCH_CSS}${FLOURISH_CSS}${STAR_ENTRY_CSS}${TABS_CSS}`;
 
 // 放在 </body> 前：铺上夜空的星星层，菜单点外面收起，站内链接和菜单里的外部页面走星星转场，固定的菜单可以拖
+import { PWA_SCRIPT } from './pwa.js';
+
 export const CHROME_SCRIPT = `(function () {
   var KEY = 'vp-stars';
   var SVG = '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2.5l2.6 6.1 6.6.6-5 4.4 1.5 6.5L12 16.7 6.3 20.1l1.5-6.5-5-4.4 6.6-.6z"/></svg>';
@@ -385,6 +423,35 @@ export const CHROME_SCRIPT = `(function () {
     var v = document.createElement('div');
     v.className = 'vp-veil';
     v.setAttribute('aria-hidden', 'true');
+    // 三个转场动效随机一个。图先铺上，视频盖在图上；视频起不来就剩图
+    // 离场时挑一个记进 sessionStorage，进场那层读同一个 ——
+    // 不然离场 t31、进场 t30，一次换页看见两张不同的画
+    var pick;
+    try { pick = sessionStorage.getItem('vp-pick'); } catch (e) {}
+    if (!pick) {
+      pick = ['30', '31', '32'][Math.floor(Math.random() * 3)];
+      try { sessionStorage.setItem('vp-pick', pick); } catch (e) {}
+    }
+    var bg = document.createElement('img');
+    bg.className = 'vp-veil-media vp-veil-img';
+    bg.src = '/motion/p' + pick + '.jpg';
+    bg.alt = '';
+    v.appendChild(bg);
+    if (!reduce) {
+      var vid = document.createElement('video');
+      vid.className = 'vp-veil-media vp-veil-vid';
+      vid.muted = true;
+      vid.setAttribute('muted', '');
+      vid.setAttribute('playsinline', '');
+      vid.setAttribute('webkit-playsinline', '');
+      vid.setAttribute('autoplay', '');
+      vid.setAttribute('loop', '');
+      vid.setAttribute('preload', 'auto');
+      vid.src = '/motion/t' + pick + '.webm';
+      vid.addEventListener('error', function () { if (vid.parentNode) vid.remove(); });
+      v.appendChild(vid);
+      try { var pr = vid.play(); if (pr && pr.catch) pr.catch(function () {}); } catch (e) {}
+    }
     for (var i = 0; i < count; i++) {
       var s = document.createElement('span');
       s.className = 'vp-tstar';
@@ -407,10 +474,24 @@ export const CHROME_SCRIPT = `(function () {
     root.classList.remove('vp-stars-in');
     void arrive.offsetWidth;
     arrive.classList.remove('instant');
-    setTimeout(function () {
+    // 等视频放完再淡出，没视频就按时间走。
+    // 原来写死 650ms，和离场的 2s 不配套，所以画面总像被截断
+    var left = false;
+    function leaveArrive() {
+      if (left) return;
+      left = true;
+      try { sessionStorage.removeItem('vp-pick'); } catch (e) {}
       arrive.classList.remove('on');
       setTimeout(function () { arrive.remove(); }, 400);
-    }, reduce ? 60 : 650);
+    }
+    var av = arrive.querySelector('video');
+    if (av && !reduce) {
+      av.removeAttribute('loop');
+      av.addEventListener('ended', leaveArrive);
+      setTimeout(leaveArrive, 4600);
+    } else {
+      setTimeout(leaveArrive, reduce ? 60 : 650);
+    }
   }
 
   // 离场：先盖上雾面、星星闪出来，再跳。站外链接只有带 data-stars 的（菜单里的外部页面）才走
@@ -436,7 +517,7 @@ export const CHROME_SCRIPT = `(function () {
     var leave = veil(reduce ? 0 : 12, 0.06);
     void leave.offsetWidth;
     leave.classList.add('on');
-    setTimeout(function () { location.href = url.href; }, reduce ? 150 : 900);
+    setTimeout(function () { location.href = url.href; }, reduce ? 150 : 2000);
     // 过了好一会儿还在这一页（比如点的是下载链接，页面没换），就把雾面撕掉，不然会一直盖着
     setTimeout(function () {
       leaving = false;
@@ -456,4 +537,6 @@ export const CHROME_SCRIPT = `(function () {
   });
 })();
 ${FLOURISH_SCRIPT}
-${STAR_ENTRY_SCRIPT}`;
+${STAR_ENTRY_SCRIPT}
+${PWA_SCRIPT}
+${TABS_SCRIPT}`;

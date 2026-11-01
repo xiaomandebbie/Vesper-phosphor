@@ -206,17 +206,17 @@ function renderDayNav(days, key) {
 }
 
 const STYLE = `
-  :root { --ink: #2b2233; --muted: #665a70; --accent: #7a3e5d; --gold: #b7792f; --card: #fffdfb; --line: #eadfe6; }
+  :root { --ink: #252525; --muted: #5e5e5e; --accent: #4d4d4d; --gold: #818181; --card: #fdfdfd; --line: #e2e2e2; }
   * { box-sizing: border-box; }
   body { margin: 0; min-height: 100vh; color: var(--ink); font-family: -apple-system, "PingFang SC", "Helvetica Neue", sans-serif;
-    background: linear-gradient(180deg, #efe7f4 0%, #f9f0ee 55%, #fdf8f2 100%); }
+    background: linear-gradient(180deg, #eaeaea 0%, #f2f2f2 55%, #f9f9f9 100%); }
   main { max-width: 600px; margin: 0 auto; padding: 28px 16px 48px; }
   .hero { margin: 10px 0 20px; }
-  .card { background: var(--card); border-radius: 16px; padding: 16px; margin-bottom: 14px; box-shadow: 0 1px 3px rgba(60, 30, 60, 0.08); }
+  .card { background: var(--card); border-radius: 16px; padding: 16px; margin-bottom: 14px; box-shadow: 0 1px 3px rgba(39, 39, 39, 0.08); }
   .notice { font-size: 14px; line-height: 1.6; border-left: 4px solid var(--gold); }
-  .notice code { font-size: 12px; background: #f6eef3; padding: 1px 4px; border-radius: 4px; word-break: break-all; }
+  .notice code { font-size: 12px; background: #f0f0f0; padding: 1px 4px; border-radius: 4px; word-break: break-all; }
   /* heartbeat 运行状态：和 heartbeat 管理页那张卡片一样的两行 */
-  .hb-status { padding: 18px 22px; border: 1px solid var(--line); background: rgba(255, 253, 251, 0.88);
+  .hb-status { padding: 18px 22px; border: 1px solid var(--line); background: rgba(253, 253, 253, 0.88);
     font-family: "Songti SC", "STSong", "Noto Serif SC", Georgia, serif; font-size: 15px; line-height: 1.9; color: var(--accent); }
   .hb-status p { margin: 0; }
   .hb-label { text-transform: uppercase; letter-spacing: 0.06em; }
@@ -243,13 +243,13 @@ const STYLE = `
   .day { position: relative; display: flex; align-items: center; justify-content: center; height: 42px; border-radius: 12px;
     color: var(--ink); text-decoration: none; font-size: 15px; }
   .day.today { box-shadow: inset 0 0 0 1.5px var(--accent); font-weight: 700; }
-  .day.selected { background: var(--accent); color: #fff; }
+  .day.selected { background: var(--accent); color: #ffffff; }
   .dot { position: absolute; bottom: 5px; left: 50%; width: 5px; height: 5px; margin-left: -2.5px; border-radius: 50%; background: var(--gold); }
-  .day.selected .dot { background: #fff; }
+  .day.selected .dot { background: #ffffff; }
   .list-title { font-size: 15px; color: var(--accent); margin: 22px 4px 10px; letter-spacing: 0.1em; }
   /* 一篇日记：平时只有时间这一行，点开是全文，正文用宋体，像写在本子上 */
   .entry { background: var(--card); border-radius: 14px; margin-bottom: 10px;
-    box-shadow: 0 1px 3px rgba(60, 30, 60, 0.08); border-left: 3px solid #e3b7cb; }
+    box-shadow: 0 1px 3px rgba(39, 39, 39, 0.08); border-left: 3px solid #c2c2c2; }
   .entry-head { list-style: none; display: flex; align-items: center; justify-content: space-between; gap: 10px;
     min-height: 48px; padding: 0 18px; cursor: pointer; border-radius: 14px; }
   .entry-head::-webkit-details-marker { display: none; }
@@ -262,7 +262,7 @@ const STYLE = `
   .entry-body b { color: var(--accent); }
   .day-nav { display: flex; justify-content: space-between; margin: 6px 4px 0; }
   .day-nav-link { display: inline-flex; align-items: center; min-height: 44px; padding: 0 6px; font-size: 14px; color: var(--accent); }
-  .day-nav-link.off { color: #c8bccb; }
+  .day-nav-link.off { color: #c0c0c0; }
   .empty { color: var(--muted); font-size: 14px; margin: 0 4px; }
   .hint { color: var(--muted); font-size: 12px; margin: 4px 4px 0; }
   a:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

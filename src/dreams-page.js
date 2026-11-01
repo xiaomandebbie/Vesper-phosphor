@@ -217,7 +217,7 @@ function renderNightIndex(groups) {
 }
 
 const STYLE = `
-  :root { --ink: #2b2233; --muted: #665a70; --accent: #7a3e5d; --gold: #b7792f; --card: #fffdfb; --line: #eadfe6; }
+  :root { --ink: #252525; --muted: #5e5e5e; --accent: #4d4d4d; --gold: #818181; --card: #fdfdfd; --line: #e2e2e2; }
   * { box-sizing: border-box; }
   body { margin: 0; min-height: 100vh; color: var(--ink);
     font-family: -apple-system, "PingFang SC", "Helvetica Neue", sans-serif; }
@@ -228,12 +228,12 @@ const STYLE = `
   .haze {
     background:
       radial-gradient(42% 32% at 22% 28%, rgba(255, 255, 255, 0.5), transparent 70%),
-      radial-gradient(38% 30% at 74% 62%, rgba(226, 190, 220, 0.4), transparent 72%);
+      radial-gradient(38% 30% at 74% 62%, rgba(200, 200, 200, 0.4), transparent 72%);
     animation: haze-a 38s ease-in-out infinite; }
   .haze2 {
     background:
-      radial-gradient(36% 26% at 62% 18%, rgba(214, 198, 248, 0.38), transparent 70%),
-      radial-gradient(44% 34% at 18% 76%, rgba(255, 232, 240, 0.42), transparent 72%);
+      radial-gradient(36% 26% at 62% 18%, rgba(205, 205, 205, 0.38), transparent 70%),
+      radial-gradient(44% 34% at 18% 76%, rgba(237, 237, 237, 0.42), transparent 72%);
     animation: haze-b 53s ease-in-out -14s infinite; }
   /* 云：模糊的白团，极慢地飘过去 */
   .clouds {
@@ -270,8 +270,8 @@ const STYLE = `
     border: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
     backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
   .tab b { font-family: Georgia, "Times New Roman", serif; font-size: 13px; color: var(--gold); font-weight: 700; }
-  .tab.on { color: #fff; background: var(--accent); border-color: transparent; }
-  .tab.on b { color: #ffe6b8; }
+  .tab.on { color: #ffffff; background: var(--accent); border-color: transparent; }
+  .tab.on b { color: #e8e8e8; }
   .tab-wide { flex-basis: 100%; color: var(--accent); }
   @supports not (backdrop-filter: blur(1px)) { .tab { background: var(--card); } }
 
@@ -297,7 +297,7 @@ const STYLE = `
     backdrop-filter: blur(14px) saturate(1.1);
     -webkit-backdrop-filter: blur(14px) saturate(1.1);
     border: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
-    box-shadow: 0 2px 20px rgba(80, 50, 90, 0.08);
+    box-shadow: 0 2px 20px rgba(59, 59, 59, 0.08);
     animation: dream-in 0.7s ease-out backwards; animation-delay: calc(var(--i, 0) * 60ms); }
   @supports not (backdrop-filter: blur(1px)) {
     .dream { background: var(--tint, transparent); }
@@ -306,7 +306,7 @@ const STYLE = `
   .dream.is-recalled { opacity: 0.86; border-style: dashed; }
   /* 已消散的：更轻，轮廓是点的——像已经不完整了 */
   .dream.is-gone { opacity: 0.74; border-style: dotted;
-    box-shadow: 0 1px 10px rgba(80, 50, 90, 0.05); }
+    box-shadow: 0 1px 10px rgba(59, 59, 59, 0.05); }
   @keyframes dream-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
 
   /* ── 还锁着的：主旋律 + 只言片语。没有可展开的东西，不是 <details> ── */
@@ -314,12 +314,12 @@ const STYLE = `
   .sealed-head { display: flex; align-items: center; gap: 8px; }
   .tone-chip { flex: none; padding: 3px 10px; border-radius: 999px; font-size: 12px; letter-spacing: 0.1em;
     color: color-mix(in srgb, var(--ink) 78%, transparent);
-    background: color-mix(in srgb, #fff 55%, transparent);
+    background: color-mix(in srgb, #ffffff 55%, transparent);
     border: 1px solid color-mix(in srgb, var(--line) 80%, transparent); }
-  .dream[data-tone="good"] .tone-chip { color: #8a3d63; }
-  .dream[data-tone="bad"] .tone-chip { color: #3f5285; }
-  .dream[data-tone="good"] .dream-dot { color: #c4709b; }
-  .dream[data-tone="bad"] .dream-dot { color: #6b83bd; }
+  .dream[data-tone="good"] .tone-chip { color: #505050; }
+  .dream[data-tone="bad"] .tone-chip { color: #525252; }
+  .dream[data-tone="good"] .dream-dot { color: #858585; }
+  .dream[data-tone="bad"] .dream-dot { color: #828282; }
   .dream.is-gone .dream-dot { color: var(--muted); }
   .sealed-head .dream-time { margin-left: auto; }
   .fragment { margin: 10px 0 0; font-family: "Songti SC", "STSong", "Noto Serif SC", Georgia, serif;

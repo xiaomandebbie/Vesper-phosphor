@@ -15,6 +15,7 @@ import { MAX_STAR_CHARS, starWindowLabel } from './star-jar.js';
 import { fromHerBlock } from './from-her.js';
 import { proofSection, proofActionNote, proofStatusLine } from './proof-prompt.js';
 import { doingSection, doingStatusLine } from './doing.js';
+import { rusttideSection } from './rusttide.js';
 import { budgetSection, budgetStatusLine, tier1StatusLine } from './budget.js';
 import { xiuchaoSection } from './xiuchao.js';
 import { booksSection, booksStatusLine, booksFromHerBlock } from './books.js';
@@ -225,6 +226,19 @@ function pendingCommentsBlock(pendingComments) {
   return `有人在你的动态下留言了（你还没回过，怎么回见上面的规则）：\n${lines}`;
 }
 
+// 她在网页聊天里发了、但没点「让你回复」的那几句。
+// 和动态留言同一套做法：带进来、他自己决定回不回、不占这次的动作。
+function pendingChatBlock(rows) {
+  if (!rows?.length) return '';
+  const lines = rows
+    .map(
+      (r) =>
+        `  [消息#${r.id}] [${formatDateTime(r.created_at).slice(5, 16)}] ${short(r.text, 300)}`
+    )
+    .join('\n');
+  return `${USER_NAME}在网页的聊天里留了这几句，你还没读过（她没点「让你回复」，所以留到你醒来；怎么回见上面的规则）：\n${lines}`;
+}
+
 // Drivesoid 算出的此刻最明显的三项情绪（见 drives.js 的 getTopDrives）。怎么读在 system 里。
 function drivesTopLine(top) {
   if (!top?.length) return '';
@@ -358,9 +372,20 @@ mode 有 normal / low-frequency / silent 三种，只影响非精确唤醒的节
 ## 动态下的留言
 用户消息里如果有"有人在你的动态下留言了"，回留言不占这次的动作。想回哪条就写在 comment_replies 里，你的回复会挂在那条留言下面；不想回的可以不写；这次没回的，下次不会再出现。
 
+## 网页聊天里攒着的话
+她在网页上跟你聊天时，可以只发不点「让你回复」——那些话就攒着，等你醒来。
+用户消息里如果有这段：
+- 回这些不占这次的动作，和回动态留言一个道理。
+- 想回就写在 chat_replies 里，每条是一句话；不想回的给空数组。
+- 你写的会出现在她的聊天里，和她当场点按钮时你回的一模一样——所以是当面说话，用「你」称呼她。
+- 几句话是一次张口，不要一句一条分开回；想分段就写成几条，每条会是单独一个气泡。
+- 这次带给你看过的，下次不会再出现——不论你回没回。所以该回的这次就回。
+
 ${play ? workkkSection() : ''}
 
 ${play ? gardenSection() : ''}
+
+${rusttideSection()}
 
 ## 星星罐
 罐子里放的是"咽下去的话"：今天最重要的那一句、你想说但到最后没说出口的话。
@@ -433,10 +458,11 @@ ${play ? budgetSection() : stripPlay(budgetSection())}${play ? xiuchaoSection() 
 5. 可选：要不要给未来的自己安排一次精确唤醒。不需要就把 self_wake 设为 null。
 6. 可选：回复动态下的留言（不占动作）。没有留言或不想回就给空数组。
 7. 可选：摘${USER_NAME}的星回一句、回她的动态或给个赞（都不占动作）。没有或不想回就给空数组。
-8. 可选：到点了的事想问一句进度（不占动作）。没到点、或者这次不想问，就给空数组——她在做的事下次还在，不用急着问。
+8. 可选：回她在网页聊天里攒着的话（不占动作，写在 chat_replies）。没攒着的就给空数组。
+9. 可选：到点了的事想问一句进度（不占动作）。没到点、或者这次不想问，就给空数组——她在做的事下次还在，不用急着问。
 
 只返回一个JSON对象，不要任何其他文字、不要markdown代码块标记：
-{"next_wake_minutes": number, "mood": string, "actions": [{"action": string, "action_detail": string}], "action": string, "action_detail": string, "self_wake": {"after_minutes": number, "note": string} | null, "comment_replies": [{"comment_id": number, "reply": string}], "star_replies": [{"star_id": number, "reply": string}], "moment_replies": [{"moment_id": number, "reply": string, "like": boolean}], "doing_follow_up": [{"doing_id": number, "ask": string}]}`;
+{"next_wake_minutes": number, "mood": string, "actions": [{"action": string, "action_detail": string}], "action": string, "action_detail": string, "self_wake": {"after_minutes": number, "note": string} | null, "comment_replies": [{"comment_id": number, "reply": string}], "chat_replies": [string], "star_replies": [{"star_id": number, "reply": string}], "moment_replies": [{"moment_id": number, "reply": string, "like": boolean}], "doing_follow_up": [{"doing_id": number, "ask": string}]}`;
 }
 
 // 这次为什么醒。after_cleanup 是 phosphor 刚清理完 conversation_log 之后的那一次（见 phosphor.js 的 cleanupTick）。
@@ -509,6 +535,7 @@ function buildUserPrompt(context, play = true) {
     booksFromHerText(),
     starRepliesBlock(context.starReplies),
     pendingCommentsBlock(context.pendingComments),
+    pendingChatBlock(context.pendingChat),
     fromHerBlock(context.fromHer),
   ];
   return lines.filter(Boolean).join('\n');

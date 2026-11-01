@@ -12,12 +12,12 @@
 import { FACE_CSS, FACE_SCRIPT } from './sun-time.js';
 
 const STYLE = `
-  :root { --ink: #2b2233; --muted: #665a70; --accent: #7a3e5d; --gold: #b7792f;
-    --card: #fffdfb; --line: #eadfe6;
-    --bg1: #efe7f4; --bg2: #f9f0ee; --bg3: #fdf8f2;
-    --t1: #463a7c; --t2: #9b4a7a; --t3: #c4832f;
-    --activity: #e6b652; --activity-ink: #8a5a14; --place: #9a6412;
-    --card-soft: #f3eef2; --detail-bg: #fdf6e6; --hl: rgba(230, 182, 82, 0.38); }
+  :root { --ink: #252525; --muted: #5e5e5e; --accent: #4d4d4d; --gold: #818181;
+    --card: #fdfdfd; --line: #e2e2e2;
+    --bg1: #eaeaea; --bg2: #f2f2f2; --bg3: #f9f9f9;
+    --t1: #414141; --t2: #5f5f5f; --t3: #8b8b8b;
+    --activity: #b9b9b9; --activity-ink: #5f5f5f; --place: #6a6a6a;
+    --card-soft: #efefef; --detail-bg: #f6f6f6; --hl: rgba(185, 185, 185, 0.38); }
   * { box-sizing: border-box; }
   html, body { height: 100%; }
   body { margin: 0; color: var(--ink);
@@ -39,12 +39,12 @@ const STYLE = `
 
   .gate { margin: 28px 0 0; padding: 20px 18px; background: var(--card);
     border: 1px solid var(--line); border-radius: 16px;
-    box-shadow: 0 1px 3px rgba(60, 30, 60, 0.08); }
+    box-shadow: 0 1px 3px rgba(39, 39, 39, 0.08); }
   .gate p { margin: 0; font-size: 14px; line-height: 1.75; color: var(--muted); }
   .gate .lock { display: block; margin-bottom: 10px; font-size: 20px; color: var(--gold); }
   .retry { display: inline-flex; align-items: center; justify-content: center; gap: 6px;
     min-height: 44px; margin-top: 16px; padding: 0 22px;
-    background: var(--accent); color: #fff; text-decoration: none;
+    background: var(--accent); color: #ffffff; text-decoration: none;
     border-radius: 12px; font-size: 15px;
     transition: transform 0.16s ease, opacity 0.2s ease; }
   .retry:active { transform: scale(0.98); opacity: 0.9; }

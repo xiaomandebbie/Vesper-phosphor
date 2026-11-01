@@ -53,7 +53,7 @@ const SKIN_CSS = `
     background: color-mix(in srgb, var(--card) 82%, transparent);
     backdrop-filter: blur(18px) saturate(1.08);
     -webkit-backdrop-filter: blur(18px) saturate(1.08);
-    box-shadow: 0 2px 10px rgba(80, 50, 90, 0.06), 0 16px 44px rgba(80, 50, 90, 0.14),
+    box-shadow: 0 2px 10px rgba(59, 59, 59, 0.06), 0 16px 44px rgba(59, 59, 59, 0.14),
       0 0 0 1px color-mix(in srgb, var(--line) 60%, transparent) inset;
   }
   html body h2 { color: var(--accent); }
@@ -89,10 +89,10 @@ const SKIN_CSS = `
   html body .preset-btn span, html body .hint, html body .note,
   html body .diary-entry summary em, html body .diary-empty { color: var(--muted); }
   html body button.save, html body .add-preset button {
-    background: linear-gradient(135deg, var(--accent) 0%, color-mix(in srgb, var(--accent) 80%, #000) 100%);
+    background: linear-gradient(135deg, var(--accent) 0%, color-mix(in srgb, var(--accent) 80%, #000000) 100%);
   }
   html body button.restart {
-    background: linear-gradient(135deg, var(--gold) 0%, color-mix(in srgb, var(--gold) 82%, #000) 100%);
+    background: linear-gradient(135deg, var(--gold) 0%, color-mix(in srgb, var(--gold) 82%, #000000) 100%);
   }
   html body .diary-entry {
     background: color-mix(in srgb, var(--card) 58%, transparent);

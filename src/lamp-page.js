@@ -81,7 +81,7 @@ function parseStatus(text) {
 // 色温→一个大概的颜色，给那个圆点用。
 // 2700K 暖黄、5100K 冷白，中间线性插。只是个示意，不追求准
 function kelvinColor(k) {
-  if (!Number.isFinite(k)) return '#f0d9a6';
+  if (!Number.isFinite(k)) return '#dadada';
   const t = Math.min(Math.max((k - 2700) / (5100 - 2700), 0), 1);
   const r = Math.round(255 - t * 20);
   const g = Math.round(190 + t * 55);
@@ -136,19 +136,19 @@ function renderActions() {
 }
 
 const STYLE = `
-  :root { --ink: #2b2233; --muted: #665a70; --accent: #7a3e5d; --gold: #b7792f;
-    --card: #fffdfb; --line: #eadfe6; }
+  :root { --ink: #252525; --muted: #5e5e5e; --accent: #4d4d4d; --gold: #818181;
+    --card: #fdfdfd; --line: #e2e2e2; }
   * { box-sizing: border-box; }
   body { margin: 0; min-height: 100vh; color: var(--ink);
     font-family: -apple-system, "PingFang SC", "Helvetica Neue", sans-serif; }
   main { position: relative; z-index: 1; max-width: 600px; margin: 0 auto; padding: 18px 16px 48px; }
   .card { background: var(--card); border: 1px solid var(--line); border-radius: 16px;
-    padding: 16px; margin-bottom: 14px; box-shadow: 0 1px 3px rgba(60, 30, 60, 0.07); }
+    padding: 16px; margin-bottom: 14px; box-shadow: 0 1px 3px rgba(39, 39, 39, 0.07); }
   .notice { font-size: 13px; line-height: 1.7; color: var(--muted); border-left: 3px solid var(--gold); }
   .now { display: flex; align-items: center; gap: 14px; }
   /* 灯泡：关着是个空圈，开着按色温发光 */
   .bulb { flex: none; width: 46px; height: 46px; border-radius: 50%;
-    border: 2px solid var(--line); background: #f6f2f5; }
+    border: 2px solid var(--line); background: #f3f3f3; }
   .bulb.on { border-color: transparent; background: var(--glow);
     box-shadow: 0 0 0 6px color-mix(in srgb, var(--glow) 28%, transparent),
       0 0 22px color-mix(in srgb, var(--glow) 60%, transparent); }
@@ -161,27 +161,27 @@ const STYLE = `
   .guard .sub { margin-top: 0; }
   .guard-text { margin: 0; font-size: 13px; line-height: 1.75; white-space: pre-wrap;
     word-break: break-word; color: var(--ink); }
-  .guard-note { margin: 10px 0 0; font-size: 11px; line-height: 1.65; color: #a597ab; }
+  .guard-note { margin: 10px 0 0; font-size: 11px; line-height: 1.65; color: #9b9b9b; }
   .scenes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
   .sc { margin: 0; }
   .sc button { width: 100%; display: flex; flex-direction: column; align-items: center; gap: 3px;
     min-height: 62px; padding: 10px 6px; border-radius: 15px; border: 1px solid var(--line);
-    background: var(--card); box-shadow: 0 1px 3px rgba(60, 30, 60, 0.06); }
-  .sc button:active { background: #f6eef3; }
+    background: var(--card); box-shadow: 0 1px 3px rgba(39, 39, 39, 0.06); }
+  .sc button:active { background: #f0f0f0; }
   .sc-name { font-size: 14px; font-weight: 600; color: var(--accent); }
   .sc-hint { font-size: 10px; color: var(--gold); font-variant-numeric: tabular-nums; }
   .acts { display: flex; gap: 10px; }
   .acts form { flex: 1; margin: 0; }
   .acts button { width: 100%; min-height: 46px; border-radius: 15px; border: none;
-    background: var(--accent); color: #fffdfb; font-size: 14px; font-weight: 600; }
+    background: var(--accent); color: #fdfdfd; font-size: 14px; font-weight: 600; }
   .acts button:active { opacity: 0.84; }
   .acts button.quiet { background: var(--card); border: 1px solid var(--line); color: var(--muted);
     font-weight: 400; }
-  .done { margin: 0 4px 14px; padding: 11px 14px; border-radius: 14px; background: #fff6e3;
-    border: 1px solid #f0d9a6; font-size: 13px; line-height: 1.6; color: #6b4513; }
-  .foot { margin: 20px 6px 0; font-size: 11px; line-height: 1.7; color: #a597ab; }
+  .done { margin: 0 4px 14px; padding: 11px 14px; border-radius: 14px; background: #f7f7f7;
+    border: 1px solid #dadada; font-size: 13px; line-height: 1.6; color: #494949; }
+  .foot { margin: 20px 6px 0; font-size: 11px; line-height: 1.7; color: #9b9b9b; }
   html[data-face="night"] .done, html[data-face="dusk"] .done {
-    background: rgba(240, 217, 166, 0.12); border-color: #6b5a3a; color: #f0d9a6; }
+    background: rgba(218, 218, 218, 0.12); border-color: #5b5b5b; color: #dadada; }
 `;
 
 function layout(body) {

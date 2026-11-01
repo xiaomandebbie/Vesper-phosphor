@@ -13,7 +13,7 @@
 //   还在等——虚线边框
 //
 // 颜色全走 var(--ink) / var(--muted) 这套（见 sun-time.js 的早晚四张脸）。
-// 2026-10-13 踩过坑：酒架那几张卡片用了 #fff 做底色，天黑了底色跟着变深、
+// 2026-10-13 踩过坑：酒架那几张卡片用了 #ffffff 做底色，天黑了底色跟着变深、
 // 字还是深色，就看不见了。别再写死颜色。
 //
 // 原料表和经典配方是从 Proof 内容包抄来的快捷清单，只为了不用记名字。
@@ -461,7 +461,7 @@ const FORM_SCRIPT = `(function () {
 })();`;
 
 const STYLE = `
-  :root { --ink: #2b2233; --muted: #665a70; --accent: #7a3e5d; --gold: #b7792f; --card: #fffdfb; --line: #eadfe6; }
+  :root { --ink: #252525; --muted: #5e5e5e; --accent: #4d4d4d; --gold: #818181; --card: #fdfdfd; --line: #e2e2e2; }
   * { box-sizing: border-box; }
   body { margin: 0; min-height: 100vh; color: var(--ink);
     font-family: -apple-system, "PingFang SC", "Helvetica Neue", sans-serif; }
@@ -470,12 +470,12 @@ const STYLE = `
   /* 暖光：两层橙金径向渐变慢慢漂，像吧台上那盏灯 */
   .warm, .warm2 { position: fixed; inset: -25%; z-index: 0; pointer-events: none; }
   .warm { background:
-      radial-gradient(40% 30% at 24% 22%, rgba(255, 206, 148, 0.42), transparent 70%),
-      radial-gradient(36% 28% at 76% 64%, rgba(226, 150, 170, 0.34), transparent 72%);
+      radial-gradient(40% 30% at 24% 22%, rgba(212, 212, 212, 0.42), transparent 70%),
+      radial-gradient(36% 28% at 76% 64%, rgba(168, 168, 168, 0.34), transparent 72%);
     animation: warm-a 44s ease-in-out infinite; }
   .warm2 { background:
-      radial-gradient(34% 24% at 64% 16%, rgba(206, 166, 232, 0.3), transparent 70%),
-      radial-gradient(42% 32% at 16% 78%, rgba(255, 226, 206, 0.36), transparent 72%);
+      radial-gradient(34% 24% at 64% 16%, rgba(179, 179, 179, 0.3), transparent 70%),
+      radial-gradient(42% 32% at 16% 78%, rgba(231, 231, 231, 0.36), transparent 72%);
     animation: warm-b 61s ease-in-out -18s infinite; }
   @keyframes warm-a { 0%,100% { transform: translate3d(-2%,0,0) scale(1); } 50% { transform: translate3d(3%,-1.5%,0) scale(1.07); } }
   @keyframes warm-b { 0%,100% { transform: translate3d(2%,1%,0) scale(1.05); } 50% { transform: translate3d(-3%,-1%,0) scale(1); } }
@@ -521,7 +521,7 @@ const STYLE = `
   .row-ops button:active { opacity: 0.8; }
   .hint { margin: 6px 0 0; font-size: 11.5px; line-height: 1.7; color: var(--muted); }
   .go-row { display: flex; gap: 8px; }
-  .go { flex: 1; font-family: inherit; font-size: 15px; font-weight: 600; color: #fffdfb;
+  .go { flex: 1; font-family: inherit; font-size: 15px; font-weight: 600; color: #fdfdfd;
     background: var(--accent); border: none; border-radius: 13px; min-height: 46px; cursor: pointer; }
   .go.ghost { flex: 0 0 auto; padding: 0 16px; color: var(--accent);
     background: color-mix(in srgb, var(--accent) 10%, transparent);
@@ -530,7 +530,7 @@ const STYLE = `
   .mix-note { margin: 12px 0 0; font-size: 11.5px; line-height: 1.7; color: var(--muted); }
   .flash { margin: 6px 0 10px; padding: 10px 12px; border-radius: 12px; font-size: 13px; line-height: 1.7;
     background: color-mix(in srgb, var(--gold) 18%, transparent); color: var(--ink); word-break: break-word; }
-  .flash.bad { background: color-mix(in srgb, #c0392b 16%, transparent); }
+  .flash.bad { background: color-mix(in srgb, #555555 16%, transparent); }
 
   /* 收起来的那几块：我的配方、经典配方、原料架、隐藏款 */
   .sh { margin: 0 0 8px; }
@@ -543,7 +543,7 @@ const STYLE = `
   .shelf-group { margin: 4px 0 12px; }
   .shelf-group h4 { margin: 0 0 7px; font-size: 12px; font-weight: 600; letter-spacing: 0.1em; color: var(--muted); }
   .chips { display: flex; flex-wrap: wrap; gap: 7px; }
-  /* 原料片和配方卡：底色用 --card 调出来，不写死 #fff——
+  /* 原料片和配方卡：底色用 --card 调出来，不写死 #ffffff——
      不然入夜后底色变深、字还是深色，就看不见了（小满 2026-10-13 反馈） */
   .chip { font-family: inherit; font-size: 13.5px; color: var(--ink); cursor: pointer;
     background: color-mix(in srgb, var(--card) 82%, transparent); border: 1px solid var(--line);
@@ -580,7 +580,7 @@ const STYLE = `
     background: color-mix(in srgb, var(--card) 72%, transparent);
     backdrop-filter: blur(14px) saturate(1.1); -webkit-backdrop-filter: blur(14px) saturate(1.1);
     border: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
-    box-shadow: 0 2px 20px rgba(80, 50, 90, 0.08);
+    box-shadow: 0 2px 20px rgba(59, 59, 59, 0.08);
     animation: pour-in 0.7s ease-out backwards; animation-delay: calc(var(--i, 0) * 70ms); }
   @keyframes pour-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
   .pour.is-pending { border-style: dashed; }

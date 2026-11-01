@@ -4,3 +4,15 @@ data/*.db
 data/*.db-journal
 *.log
 *.bak*
+
+# vim 临时文件会带着 .env 的明文内容（含 API Key），不能进仓库
+.env.swp
+.env.*.swp
+*.swp
+*.swo
+
+# vim 临时文件会带着 .env 的明文内容（含 API Key），不能进仓库
+.env.swp
+.env.*.swp
+*.swp
+*.swo

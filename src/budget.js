@@ -142,7 +142,7 @@ const ACTION_TIER = {
 // 它不该占 2 级那 6 次，却也不能随便读（每翻一小段都是一次模型调用）。
 const ONCE = new Set(['read_book', 'ombre_brain']);
 
-function serverOf(detail) {
+function parseDetail(detail) {
   try {
     const j = JSON.parse(detail);
     return j && typeof j === 'object' ? j : null;

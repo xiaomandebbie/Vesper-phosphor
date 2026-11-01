@@ -1,0 +1,27 @@
+ .env.example                   |  35 [32m+[m[31m-[m
+ .gitignore                     |   1 [32m+[m
+ src/actions/activity.js        |  69 [32m+[m[31m-[m
+ src/actions/bark.js.bak-saylog |  48 [32m++[m
+ src/actions/index.js           |   2 [32m+[m
+ .../index.js.bak-wallet        |  48 [32m++[m
+ src/books-mcp.js               |  62 [32m+[m[31m-[m
+ src/books-page.js              | 264 [32m++++++[m[31m-[m
+ src/books-steps.js             |  85 [32m++[m[31m-[m
+ src/books.js                   | 205 [32m+++++[m[31m-[m
+ src/budget.js                  | 267 [32m+++++++[m[31m-[m
+ src/decide.js                  | 242 [32m+++++[m[31m--[m
+ src/doing-detect.js            |  67 [32m+[m[31m-[m
+ src/doing.js                   |  14 [32m+[m[31m-[m
+ src/favorites.js               |   2 [32m+[m[31m-[m
+ src/game-page.js               |  27 [32m+[m
+ src/logs-page.js               |  11 [32m+[m[31m-[m
+ src/mcp-manager.js             |  83 [32m++[m[31m-[m
+ src/moments-page.js            |  35 [32m+[m[31m-[m
+ src/page-chrome.js             |  38 [32m+[m
+ src/phosphor.js                | 181 [32m++++[m[31m-[m
+ src/run-actions.js             |  58 [32m+[m[31m-[m
+ src/star-jar.js                |   2 [32m+[m[31m-[m
+ src/vesper.js                  |  70 [32m+[m[31m-[m
+ src/workkk-steps.js            | 102 [32m+++[m
+ src/workkk.js                  |   5 [32m+[m[31m-[m
+ 26 files changed, 1706 insertions(+), 317 deletions(-)

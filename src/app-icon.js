@@ -176,22 +176,22 @@ function defaultIcon() {
 // ---------- 「自定义」页里的主屏幕图标卡片 ----------
 
 const CARD_CSS = `
-  .vp-icon-card h2 { margin: 0 0 4px; font-size: 16px; color: #7a3e5d; }
-  .vp-icon-note, .vp-icon-hint { margin: 0; font-size: 13px; line-height: 1.6; color: #665a70; }
+  .vp-icon-card h2 { margin: 0 0 4px; font-size: 16px; color: #4d4d4d; }
+  .vp-icon-note, .vp-icon-hint { margin: 0; font-size: 13px; line-height: 1.6; color: #5e5e5e; }
   .vp-icon-hint { margin-top: 12px; font-size: 12px; }
-  .vp-icon-ok { margin: 8px 0 0; font-size: 13px; color: #9a6412; }
+  .vp-icon-ok { margin: 8px 0 0; font-size: 13px; color: #6a6a6a; }
   .vp-icon-row { display: flex; align-items: center; gap: 16px; margin-top: 12px; }
-  .vp-icon-img { flex: none; width: 96px; height: 96px; border-radius: 22px; object-fit: cover; background: #3b2f63;
-    box-shadow: 0 2px 8px rgba(60, 30, 60, 0.18); }
+  .vp-icon-img { flex: none; width: 96px; height: 96px; border-radius: 22px; object-fit: cover; background: #353535;
+    box-shadow: 0 2px 8px rgba(39, 39, 39, 0.18); }
   .vp-icon-actions { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
   .vp-icon-actions form { display: flex; flex-wrap: wrap; gap: 8px; margin: 0; }
   .vp-icon-btn { display: inline-flex; align-items: center; justify-content: center; min-height: 44px; padding: 0 16px;
-    border: 1px solid #eadfe6; border-radius: 12px; background: #fffdfb; color: #7a3e5d; font: inherit; font-size: 15px; cursor: pointer; }
-  .vp-icon-save { background: #7a3e5d; border-color: #7a3e5d; color: #fff; }
+    border: 1px solid #e2e2e2; border-radius: 12px; background: #fdfdfd; color: #4d4d4d; font: inherit; font-size: 15px; cursor: pointer; }
+  .vp-icon-save { background: #4d4d4d; border-color: #4d4d4d; color: #ffffff; }
   .vp-icon-save:disabled { opacity: 0.45; cursor: default; }
-  .vp-icon-link { min-height: 44px; padding: 0; border: 0; background: none; color: #665a70; font: inherit; font-size: 13px;
+  .vp-icon-link { min-height: 44px; padding: 0; border: 0; background: none; color: #5e5e5e; font: inherit; font-size: 13px;
     text-decoration: underline; cursor: pointer; }
-  .vp-icon-btn:focus-within, .vp-icon-btn:focus-visible, .vp-icon-link:focus-visible { outline: 2px solid #7a3e5d; outline-offset: 2px; }
+  .vp-icon-btn:focus-within, .vp-icon-btn:focus-visible, .vp-icon-link:focus-visible { outline: 2px solid #4d4d4d; outline-offset: 2px; }
   .vp-sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 `;
 
@@ -279,8 +279,8 @@ function sameOrigin(req) {
 
 function errorPage(message) {
   return `<!DOCTYPE html><html lang="zh"><head><meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>出错了</title></head><body style="margin:0;padding:48px 20px;font-family:-apple-system,'PingFang SC',sans-serif;color:#2b2233;background:#f9f0ee">
-<p>${escapeHtml(message)}</p><p><a href="/moments/profile#app-icon" style="color:#7a3e5d">回到自定义</a></p></body></html>`;
+<title>出错了</title></head><body style="margin:0;padding:48px 20px;font-family:-apple-system,'PingFang SC',sans-serif;color:#252525;background:#f2f2f2">
+<p>${escapeHtml(message)}</p><p><a href="/moments/profile#app-icon" style="color:#4d4d4d">回到自定义</a></p></body></html>`;
 }
 
 export function registerAppIconRoutes(app, { requireBasicAuth }) {
@@ -322,8 +322,8 @@ export function registerAppIconRoutes(app, { requireBasicAuth }) {
         scope: '/',
         // browser：从主屏幕打开也还是在 Safari 里，不单独全屏，登录状态和 Safari 共用
         display: 'browser',
-        background_color: '#f9f0ee',
-        theme_color: '#f9f0ee',
+        background_color: '#f2f2f2',
+        theme_color: '#f2f2f2',
         icons: [
           {
             src: '/apple-touch-icon.png',

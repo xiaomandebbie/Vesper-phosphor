@@ -113,46 +113,46 @@ function renderRows() {
 }
 
 const STYLE = `
-  :root { --ink: #2b2233; --muted: #665a70; --accent: #7a3e5d; --gold: #b7792f;
-    --card: #fffdfb; --line: #eadfe6; }
+  :root { --ink: #252525; --muted: #5e5e5e; --accent: #4d4d4d; --gold: #818181;
+    --card: #fdfdfd; --line: #e2e2e2; }
   * { box-sizing: border-box; }
   body { margin: 0; min-height: 100vh; color: var(--ink);
     font-family: -apple-system, "PingFang SC", "Helvetica Neue", sans-serif; }
   main { position: relative; z-index: 1; max-width: 600px; margin: 0 auto; padding: 18px 16px 48px; }
   .hero { text-align: center; margin: 6px 0 18px; }
   .title { margin: 0; font-size: 26px; font-weight: 200; letter-spacing: 0.3em; padding-left: 0.3em;
-    color: #5b2e52; }
+    color: #3a3a3a; }
   .subtitle { margin: 5px 0 0; font-family: "Cormorant Garamond", Georgia, serif; font-style: italic;
     font-size: 12px; letter-spacing: 0.18em; color: var(--muted); }
 
   .who { text-align: center; margin: 0 0 20px; }
   .who-pair { display: flex; align-items: center; justify-content: center; gap: -10px; }
   .face { width: 54px; height: 54px; border-radius: 50%; object-fit: cover;
-    border: 2px solid var(--card); box-shadow: 0 2px 8px rgba(60, 30, 60, 0.14); }
+    border: 2px solid var(--card); box-shadow: 0 2px 8px rgba(39, 39, 39, 0.14); }
   .face.blank { display: flex; align-items: center; justify-content: center;
-    background: #f3e9ef; color: var(--accent); font-size: 20px; }
+    background: #ececec; color: var(--accent); font-size: 20px; }
   .who-pair .face + .face { margin-left: -12px; }
   .who-names { margin: 8px 0 0; font-size: 13px; color: var(--muted); }
 
   .row { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; padding: 14px 16px;
     background: var(--card); border: 1px solid var(--line); border-radius: 16px;
-    box-shadow: 0 1px 3px rgba(60, 30, 60, 0.07); color: inherit; text-decoration: none; }
-  .row:active { background: #faf4f7; }
+    box-shadow: 0 1px 3px rgba(39, 39, 39, 0.07); color: inherit; text-decoration: none; }
+  .row:active { background: #f5f5f5; }
   .row.off { opacity: 0.62; }
   .row.flat { box-shadow: none; }
   .row-in { flex: 1; min-width: 0; }
   .row-name { display: block; font-size: 15px; font-weight: 600; color: var(--accent); }
   .row-what { display: block; margin-top: 4px; font-size: 12px; line-height: 1.6; color: var(--muted); }
   .row-val { flex: none; font-size: 12px; color: var(--gold); }
-  .row-note { flex: none; font-size: 11px; color: #a597ab; border: 1px solid var(--line);
+  .row-note { flex: none; font-size: 11px; color: #9b9b9b; border: 1px solid var(--line);
     border-radius: 999px; padding: 1px 9px; }
   .row-go { flex: none; color: var(--gold); font-size: 18px; }
 
   .out { margin: 22px 0 0; text-align: center; }
   .out button { min-height: 40px; padding: 0 22px; border-radius: 14px; border: 1px solid var(--line);
     background: var(--card); color: var(--muted); font-size: 13px; }
-  .out button:active { background: #faf4f7; }
-  .foot { margin: 16px 6px 0; font-size: 11px; line-height: 1.7; color: #a597ab; text-align: center; }
+  .out button:active { background: #f5f5f5; }
+  .foot { margin: 16px 6px 0; font-size: 11px; line-height: 1.7; color: #9b9b9b; text-align: center; }
 `;
 
 function layout(body) {

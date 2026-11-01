@@ -50,7 +50,7 @@ const TABS = [
 // 哪些路径算在某个栅目下面——进了动态页，底栅上该亮「发现」，
 // 返回键也知道没有历史时该退到哪里。
 const UNDER = {
-  '/discover': ['/moments', '/diary', '/dreams', '/music', '/bar', '/drives', '/books', '/wallet'],
+  '/discover': ['/moments', '/diary', '/dreams', '/music', '/bar', '/drives', '/books', '/wallet', '/lamp'],
   '/me': ['/logs', '/moments/profile', '/moments/favorites'],
   '/memories': ['/memory'],
 };
@@ -83,18 +83,23 @@ export const TABS_CSS = `
   .vp-tabs, .vp-tabs *, .vp-back { box-sizing: border-box;
     font-family: -apple-system, "PingFang SC", "Helvetica Neue", sans-serif; letter-spacing: normal; }
   .vp-tabs { position: fixed; z-index: 90; left: 50%; transform: translateX(-50%);
-    bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+    bottom: calc(20px + env(safe-area-inset-bottom, 0px));
     display: flex; align-items: stretch; gap: 2px; width: calc(100% - 24px); max-width: 420px;
-    padding: 6px; background: rgba(255, 253, 251, 0.94); backdrop-filter: blur(12px);
-    border: 1px solid #eadfe6; border-radius: 22px; box-shadow: 0 6px 22px rgba(60, 30, 60, 0.13); }
+    padding: 6px; background: rgba(253, 253, 253, 0.94); backdrop-filter: blur(12px);
+    border: 1px solid #e2e2e2; border-radius: 22px; box-shadow: 0 6px 22px rgba(39, 39, 39, 0.13); }
   .vp-tab { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
     gap: 2px; min-height: 48px; padding: 4px 2px; border-radius: 16px;
-    color: #8f8296; text-decoration: none; font-size: 11px; line-height: 1.2; }
+    color: #868686; text-decoration: none; font-size: 11px; line-height: 1.2; }
   .vp-tab svg { width: 22px; height: 22px; fill: currentColor; }
-  .vp-tab.on { color: #7a3e5d; background: #f6eef3; font-weight: 600; }
-  .vp-tab:active { background: rgba(122, 62, 93, 0.07); }
-  .vp-tab:focus-visible { outline: 2px solid #7a3e5d; outline-offset: 1px; }
+  .vp-tab.on { color: #4d4d4d; background: #f0f0f0; font-weight: 600; }
+  .vp-tab:active { background: rgba(77, 77, 77, 0.07); }
+  .vp-tab:focus-visible { outline: 2px solid #4d4d4d; outline-offset: 1px; }
   body.vp-has-tabs main { padding-bottom: calc(96px + env(safe-area-inset-bottom, 0px)) !important; }
+
+  /* 音乐播放器全屏盖上来时，底栅会从它下面透出来、和播放器自己的控制条叠在一起，
+     两个都点不准（小满 10-31）。播放器是外壳的 #player，底栅在 iframe 里，
+     外壳 CSS 管不到，所以由外壳 postMessage 过来给 body 加这个类。 */
+  body.vp-player-open .vp-tabs { display: none; }
 
   /* 右上角那个三条杠：底栅替代了它。
      转发过来的页面（.vp-menu-fixed，比如记忆库）留着——那几页没有底栅，
@@ -112,21 +117,21 @@ export const TABS_CSS = `
   .vp-back { position: fixed; z-index: 92;
     top: calc(12px + env(safe-area-inset-top, 0px)); left: 12px;
     display: flex; align-items: center; justify-content: center; gap: 4px;
-    min-width: 44px; height: 38px; padding: 0 13px 0 10px; border: 1px solid #eadfe6;
-    border-radius: 999px; background: rgba(255, 253, 251, 0.94); backdrop-filter: blur(10px);
-    color: #7a3e5d; font-size: 13px; text-decoration: none;
-    box-shadow: 0 2px 10px rgba(60, 30, 60, 0.12); }
+    min-width: 44px; height: 38px; padding: 0 13px 0 10px; border: 1px solid #e2e2e2;
+    border-radius: 999px; background: rgba(253, 253, 253, 0.94); backdrop-filter: blur(10px);
+    color: #4d4d4d; font-size: 13px; text-decoration: none;
+    box-shadow: 0 2px 10px rgba(39, 39, 39, 0.12); }
   .vp-back svg { width: 16px; height: 16px; fill: currentColor; }
-  .vp-back:active { background: #f6eef3; }
-  .vp-back:focus-visible { outline: 2px solid #7a3e5d; outline-offset: 2px; }
+  .vp-back:active { background: #f0f0f0; }
+  .vp-back:focus-visible { outline: 2px solid #4d4d4d; outline-offset: 2px; }
 
   html[data-face="night"] .vp-tabs, html[data-face="dusk"] .vp-tabs,
   html[data-face="night"] .vp-back, html[data-face="dusk"] .vp-back {
-    background: rgba(60, 47, 82, 0.92); border-color: #4b3d63; }
-  html[data-face="night"] .vp-tab, html[data-face="dusk"] .vp-tab { color: #9a8ead; }
+    background: rgba(52, 52, 52, 0.92); border-color: #434343; }
+  html[data-face="night"] .vp-tab, html[data-face="dusk"] .vp-tab { color: #939393; }
   html[data-face="night"] .vp-tab.on, html[data-face="dusk"] .vp-tab.on {
-    color: #ecb0ce; background: rgba(236, 176, 206, 0.14); }
-  html[data-face="night"] .vp-back, html[data-face="dusk"] .vp-back { color: #ecb0ce; }
+    color: #bfbfbf; background: rgba(191, 191, 191, 0.14); }
+  html[data-face="night"] .vp-back, html[data-face="dusk"] .vp-back { color: #bfbfbf; }
 `;
 
 // 跑在 CHROME_SCRIPT 末尾：补底栅、按页面层级决定要不要返回键。
@@ -145,6 +150,10 @@ export const TABS_SCRIPT = `(function () {
       });
     });
   }
+
+  // 书架那页不插：NEST 自己底部就有一条栅（书架/书签/我），
+  // 两条叠在一起会把它压住点不到。那页有左上角返回键和三条杠，够用了。
+  if (path.indexOf('/books') === 0) return;
 
   // 底栅：页面自己渲染过就不重复插
   if (!document.querySelector('[data-tabs]')) {

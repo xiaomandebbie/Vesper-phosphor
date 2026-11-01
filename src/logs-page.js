@@ -215,63 +215,63 @@ function renderEntries(entries) {
 }
 
 const STYLE = `
-  :root { --ink: #2b2233; --muted: #665a70; --accent: #7a3e5d; --gold: #b7792f; --card: #fffdfb; --line: #eadfe6; }
+  :root { --ink: #252525; --muted: #5e5e5e; --accent: #4d4d4d; --gold: #818181; --card: #fdfdfd; --line: #e2e2e2; }
   * { box-sizing: border-box; }
   body { margin: 0; min-height: 100vh; color: var(--ink); font-family: -apple-system, "PingFang SC", "Helvetica Neue", sans-serif;
-    background: linear-gradient(180deg, #efe7f4 0%, #f9f0ee 55%, #fdf8f2 100%); }
+    background: linear-gradient(180deg, #eaeaea 0%, #f2f2f2 55%, #f9f9f9 100%); }
   body::before { content: ''; position: fixed; inset: 0; pointer-events: none; z-index: 0;
     background-image:
-      radial-gradient(1.5px 1.5px at 12% 18%, rgba(230, 182, 82, 0.9) 50%, transparent 51%),
-      radial-gradient(1px 1px at 78% 9%, rgba(215, 121, 159, 0.8) 50%, transparent 51%),
-      radial-gradient(2px 2px at 88% 36%, rgba(230, 182, 82, 0.7) 50%, transparent 51%),
-      radial-gradient(1px 1px at 30% 62%, rgba(215, 121, 159, 0.7) 50%, transparent 51%),
-      radial-gradient(1.5px 1.5px at 64% 78%, rgba(230, 182, 82, 0.8) 50%, transparent 51%),
-      radial-gradient(1px 1px at 8% 88%, rgba(155, 74, 122, 0.6) 50%, transparent 51%); }
+      radial-gradient(1.5px 1.5px at 12% 18%, rgba(185, 185, 185, 0.9) 50%, transparent 51%),
+      radial-gradient(1px 1px at 78% 9%, rgba(144, 144, 144, 0.8) 50%, transparent 51%),
+      radial-gradient(2px 2px at 88% 36%, rgba(185, 185, 185, 0.7) 50%, transparent 51%),
+      radial-gradient(1px 1px at 30% 62%, rgba(144, 144, 144, 0.7) 50%, transparent 51%),
+      radial-gradient(1.5px 1.5px at 64% 78%, rgba(185, 185, 185, 0.8) 50%, transparent 51%),
+      radial-gradient(1px 1px at 8% 88%, rgba(95, 95, 95, 0.6) 50%, transparent 51%); }
   main { position: relative; z-index: 1; max-width: 760px; margin: 0 auto; padding: 22px 16px 48px; }
   .hero { text-align: center; margin: 6px 0 18px; }
   .sparkles { margin: 0 0 4px; height: 18px; color: var(--gold); font-size: 14px; letter-spacing: 0.6em; padding-left: 0.6em; }
   .sparkles span { display: inline-block; animation: twinkle 3.2s ease-in-out infinite; }
-  .sparkles span:nth-child(2) { animation-delay: 1s; color: #d7799f; }
+  .sparkles span:nth-child(2) { animation-delay: 1s; color: #909090; }
   .sparkles span:nth-child(3) { animation-delay: 2s; }
   @keyframes twinkle { 0%, 100% { opacity: 0.35; transform: scale(0.85); } 50% { opacity: 1; transform: scale(1.1); } }
   @media (prefers-reduced-motion: reduce) { .sparkles span { animation: none; opacity: 0.8; } }
   .title { margin: 0; font-family: "Songti SC", "STSong", serif; font-size: 42px; font-weight: 700;
-    letter-spacing: 0.35em; padding-left: 0.35em; color: #5b2e52; }
+    letter-spacing: 0.35em; padding-left: 0.35em; color: #3a3a3a; }
   @supports ((-webkit-background-clip: text) or (background-clip: text)) {
-    .title { background: linear-gradient(100deg, #463a7c 0%, #9b4a7a 52%, #c4832f 100%);
+    .title { background: linear-gradient(100deg, #414141 0%, #5f5f5f 52%, #8b8b8b 100%);
       -webkit-background-clip: text; background-clip: text; color: transparent; }
   }
   .subtitle { margin: 6px 0 0; font-family: "Cormorant Garamond", Georgia, serif; font-style: italic;
     font-size: 14px; letter-spacing: 0.2em; color: var(--muted); }
   .stamp { margin: 10px 0 0; font-size: 12px; color: var(--muted); }
-  .stamp .dot { color: #6aa84f; }
+  .stamp .dot { color: #949494; }
   .tabs { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 16px; }
   .tab { display: inline-flex; align-items: center; min-height: 38px; padding: 0 14px; border-radius: 999px;
     background: var(--card); border: 1px solid var(--line); color: var(--ink); text-decoration: none;
-    font-size: 14px; box-shadow: 0 1px 2px rgba(60, 30, 60, 0.06); }
-  .tab:hover { border-color: #d9c9d4; }
-  .tab.on { background: var(--accent); border-color: var(--accent); color: #fffdfb; font-weight: 600; }
-  .tab.on::before { content: '\u2726'; margin-right: 6px; font-size: 11px; color: #f0d9a6; }
+    font-size: 14px; box-shadow: 0 1px 2px rgba(39, 39, 39, 0.06); }
+  .tab:hover { border-color: #cdcdcd; }
+  .tab.on { background: var(--accent); border-color: var(--accent); color: #fdfdfd; font-weight: 600; }
+  .tab.on::before { content: '\u2726'; margin-right: 6px; font-size: 11px; color: #dadada; }
   .tab:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .note { font-size: 12px; line-height: 1.6; color: var(--muted); margin: -6px 2px 16px; }
   .lines { list-style: none; margin: 0; padding: 0; }
-  .line { background: var(--card); border: 1px solid var(--line); border-left: 4px solid #cbb8c6;
-    border-radius: 12px; padding: 10px 14px 12px; margin-bottom: 10px; box-shadow: 0 1px 2px rgba(60, 30, 60, 0.05); }
-  .line.err { border-left-color: #c2607f; background: rgba(194, 96, 127, 0.05); }
+  .line { background: var(--card); border: 1px solid var(--line); border-left: 4px solid #bdbdbd;
+    border-radius: 12px; padding: 10px 14px 12px; margin-bottom: 10px; box-shadow: 0 1px 2px rgba(39, 39, 39, 0.05); }
+  .line.err { border-left-color: #777777; background: rgba(119, 119, 119, 0.05); }
   .meta { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
   .meta .t { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
   .meta .tag { font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted);
     border: 1px solid var(--line); border-radius: 999px; padding: 1px 7px; }
-  .line.err .meta .tag { color: #c2607f; border-color: #c2607f; }
+  .line.err .meta .tag { color: #777777; border-color: #777777; }
   .msg { margin: 0; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     font-size: 13px; line-height: 1.7; white-space: pre-wrap; word-break: break-word; color: var(--ink); }
   .empty, .notice { background: var(--card); border-radius: 14px; padding: 16px; font-size: 14px; line-height: 1.6;
     border-left: 4px solid var(--gold); }
   /* 夜里底色是深紫，红线和标签要提亚才看得见；卡底透一点红，和普通条区分开 */
   html[data-face="night"] .line.err, html[data-face="dusk"] .line.err {
-    border-left-color: #e08ba8; background: rgba(226, 138, 168, 0.1); }
+    border-left-color: #9f9f9f; background: rgba(159, 159, 159, 0.1); }
   html[data-face="night"] .line.err .meta .tag, html[data-face="dusk"] .line.err .meta .tag {
-    color: #f0a9c0; border-color: #c2738f; }
+    color: #bababa; border-color: #868686; }
   @media (max-width: 420px) { .title { font-size: 34px; } .msg { font-size: 12px; } }
 `;
 

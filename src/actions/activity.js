@@ -61,6 +61,57 @@ const SHOPPING_OPS = {
 // 这几个在卡片上带一下东西的名字
 const SHOPPING_WITH_NAME = new Set(['shopping_browse', 'shopping_wish', 'shopping_takeout']);
 
+// 台灯（server 叫 light，见 https://github.com/xiaomandebbie/Vesper-light）的工具 → 给人看的说法。
+// 和点歌台同一个口径：动态页是给小满看的，所以用「你」。
+// 灯调多少、什么时候调、停在哪，全在 Vesper-light 那个库里；这里只负责说人话。
+const LIGHT_OPS = {
+  light_status: '看了一眼你桌上那盏灯',
+  light_on: '把你桌上的灯打开了',
+  light_off: '把你桌上的灯关了',
+  light_brightness: '调了灯的亮度',
+  light_dim: '把灯调暗了一档',
+  light_color_temp: '调了灯的色温',
+  light_scene: '把灯调成了配好的一套光',
+  light_schedule: '给灯排了一个定时',
+  light_schedules: '翻了翻灯的定时',
+  light_schedule_cancel: '撒了一个灯的定时',
+  light_schedule_move: '改了一个灯定时的时间',
+  light_guard: '看了看今夜的睡前守护安排',
+  light_history: '翻了翻灯最近被动过的记录',
+  light_devices: '列了列米家里的设备',
+};
+
+// 自带一个截断，不调这个文件里的 short()——服务器上那份有没有它我不该赌。
+function lightShort(value, n = 30) {
+  const chars = Array.from(String(value ?? '').replace(/\s+/g, ' ').trim());
+  return chars.length > n ? `${chars.slice(0, n).join('')}…` : chars.join('');
+}
+
+function lightSummary(tool, args) {
+  const label = LIGHT_OPS[tool] || `用了台灯那边的 ${tool}`;
+  if (tool === 'light_scene') {
+    const name = String(args?.name ?? '').trim();
+    return name ? `${label}：「${lightShort(name)}」` : label;
+  }
+  const v = Number(args?.value);
+  if (!Number.isFinite(v)) return label;
+  if (tool === 'light_brightness') return `${label}，调到 ${v}`;
+  if (tool === 'light_color_temp') return `${label}，调到 ${v}K`;
+  return label;
+}
+
+// 详情里放他自己写下的话和定时的安排；灯当时的状态在「返回」里。
+// mode=wake 要标出来：那种定时到点是叫他自己来决定，不是直接调灯。
+function lightWritingDetail(args) {
+  const parts = [];
+  if (args?.note) parts.push(`当时记下的：${args.note}`);
+  if (args?.at) parts.push(`定在：${args.at}`);
+  if (args?.after_minutes) parts.push(`${args.after_minutes} 分钟后`);
+  if (args?.repeat && args.repeat !== 'none') parts.push(`重复：${args.repeat}`);
+  if (args?.mode === 'wake') parts.push('到点叫他自己来决定，不是直接调灯。');
+  return parts.join('\n') || null;
+}
+
 function short(value, n = 80) {
   const chars = Array.from(String(value ?? '').replace(/\s+/g, ' ').trim());
   return chars.length > n ? `${chars.slice(0, n).join('')}…` : chars.join('');
@@ -189,6 +240,7 @@ export function describeActivity(decision, result) {
         return `${AI_NAME}刚刚逛了 Lutopia 论坛，${forumSummary(cmd)}`;
       }
       if (j.server === 'music') return `${AI_NAME}刚刚${musicSummary(j.tool, j.args)}`;
+      if (j.server === 'light') return `${AI_NAME}刚刚${lightSummary(j.tool, j.args)}`;
       // 花园：第一步走这里，续步在 garden-steps.js 自己记，两边口径一致。
       if (j.server === 'garden') {
         const scene = { garden: '花园', greenhouse: '花房', cathome: '小窝' }[j.args?.scene] || '花园';
@@ -243,6 +295,9 @@ export function describeActivityDetail(decision, result) {
       const j = tryJson(detail) ?? {};
       if (/lutopia/i.test(String(j.server ?? ''))) {
         const writing = forumWritingDetail(String(j.args?.command ?? ''));
+        if (writing) parts.push(writing);
+      } else if (j.server === 'light') {
+        const writing = lightWritingDetail(j.args);
         if (writing) parts.push(writing);
       } else if (j.server === 'music') {
         const writing = musicWritingDetail(j.args);

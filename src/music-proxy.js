@@ -49,17 +49,21 @@ const FULL_LAYOUT = [
 // 晨暮星配色：覆盖播放器的颜色变量和底色。布局、动效都不动
 const SKIN_CSS = `
   html:root {
-    --ink: #2b2233; --ink-soft: #4a3d52; --muted: #665a70; --faint: #b9adbf;
-    --rose: #9b4a7a; --rose-deep: #7a3e5d; --butter: #f6e6bf;
-    --accent: #7a3e5d; --accent-soft: #9b4a7a; --btn: #7a3e5d; --accent-tint: rgba(122, 62, 93, 0.12);
-    --bg: #f9f0ee; --milk: rgba(255, 253, 251, 0.72); --milk-strong: rgba(255, 253, 251, 0.92);
-    --hairline: rgba(122, 62, 93, 0.14);
-    --shadow-soft: 0 12px 32px rgba(90, 50, 80, 0.14); --shadow-sm: 0 4px 14px rgba(60, 30, 60, 0.1);
+    --ink: #252525; --ink-soft: #414141; --muted: #5e5e5e; --faint: #b1b1b1;
+    --rose: #5f5f5f; --rose-deep: #4d4d4d; --butter: #e7e7e7;
+    --accent: #4d4d4d; --accent-soft: #5f5f5f; --btn: #4d4d4d; --accent-tint: rgba(77, 77, 77, 0.12);
+    --bg: #f2f2f2; --milk: rgba(253, 253, 253, 0.72); --milk-strong: rgba(253, 253, 253, 0.92);
+    --hairline: rgba(77, 77, 77, 0.14);
+    --shadow-soft: 0 12px 32px rgba(61, 61, 61, 0.14); --shadow-sm: 0 4px 14px rgba(39, 39, 39, 0.1);
   }
-  html, html body { background: linear-gradient(180deg, #efe7f4 0%, #f9f0ee 55%, #fdf8f2 100%) fixed; }
-  html .memory-view { background: linear-gradient(180deg, #efe7f4 0%, #f9f0ee 55%, #fdf8f2 100%); }
+  html, html body { background: linear-gradient(180deg, #eaeaea 0%, #f2f2f2 55%, #f9f9f9 100%) fixed; }
+  html .memory-view { background: linear-gradient(180deg, #eaeaea 0%, #f2f2f2 55%, #f9f9f9 100%); }
   /* 播放器自己的顶栏（music 标题、回主页、缩成迷你窗）占视野，换成晨暮星的三条杠菜单 */
   html .topbar { display: none !important; }
+  /* 音乐页有自己的底部导览（首页/发现/歌单），晨暮星那条五栏在它上面叠着，
+     两条都点不准（小满 10-31）。这页只留播放器自己那条。
+     注：上次我反过来藏了播放器的，把搜歌看歌单弄没了，撤了。 */
+  html .vp-tabs { display: none !important; }
 `;
 
 // 控制桥：播放器嵌在晨暮星页面里（iframe）时，父页面发这些消息就能遥控它。只认同源消息。

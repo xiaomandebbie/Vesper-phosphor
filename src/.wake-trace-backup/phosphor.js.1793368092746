@@ -1,0 +1,985 @@
+import 'dotenv/config';
+import { getWakeState,
+  updateWakeState,
+  addPendingWake,
+  getDuePendingWakes,
+  getOverduePendingWakes,
+  setPendingWakeStatus,
+  getUnacknowledgedMissed,
+  acknowledgeMissed,
+  logWake,
+  getLatestDeviceReport,
+  getRecentActions,
+  getPendingComments,
+  markCommentsHandled,
+  addMomentComment,
+  pruneConversationLogIfDue,
+  getForumNotes,
+  addForumNotes,
+  closeDb,
+} from './state.js';
+import { decideWithMessages, forumNextStep, musicNextStep, FORUM_MAX_STEPS, MUSIC_MAX_STEPS, askShare } from './decide.js';
+import { executeAction } from './actions/index.js';
+import { runActions, registerContinuers } from './run-actions.js';
+import { budgetConfigSummary } from './budget.js';
+import { xiuchaoConfigSummary } from './xiuchao.js';
+import { booksConfigSummary } from './books.js';
+import { maybeDream, recallDream, markRecalled, dreamConfigSummary } from './dreams.js';
+import { describeActivity, describeActivityDetail } from './actions/activity.js';
+import { workkkConfigSummary } from './workkk.js';
+import { continueWorkkk } from './workkk-steps.js';
+import { addActivityMoment } from './moments-store.js';
+// 网页聊天里攒着的话（见 chat-queue.js）。和动态留言同一套做法：
+// 带进来、他自己定回不回、不占这次的动作。
+// 唤醒时把攒着的话递给 relay（和她点按钮走同一条路）。
+// 不自己回：那样你的话不进 relay 库，上下文就断了。
+import { listPending, flushPending } from './chat-queue.js';
+import { isImageEnabled, isVoiceEnabled } from './actions/moment.js';
+import { listAllTools, connectAll, callTool, isConnected } from './mcp-manager.js';
+import { isSharedTimelineEnabled, describeAction, postSharedEvent } from './timeline.js';
+import { gardenConfigSummary } from './garden.js';
+import { continueGarden } from './garden-steps.js';
+import { continueXiuchao } from './xiuchao-steps.js';
+import { getSharedContext, countRecentChat } from './context.js';
+import { getTopDrives, isDrivesEnabled } from './drives.js';
+import { getUnseenStarReplies, markStarRepliesSeen, hasStarToday, starWindowLabel } from './star-jar.js';
+import { collectFromHer, handleFromHer } from './from-her.js';
+import { handleBarOffers } from './actions/bar-offers.js';
+import { configSummary as proofSummary } from './proof.js';
+import { handleDoingFollowUp } from './actions/doing-follow-up.js';
+import {
+  doingSummary,
+  sweepStale,
+  pendingPriorWrites,
+  markPriorsSynced,
+  priorMemoText,
+  cachePrior,
+  parsePriorsFromMemory,
+} from './doing.js';
+
+const TICK_MS = 60 * 1000;
+// 约好的时间晚了多久就不算了。
+//
+// 原来是 3 分钟，太短 —— 一次完整唤醒（breath、feel、模型、论坛续步、听歌续步）
+// 跑五六分钟是常态，那几分钟里 tick 全被 ticking 锁跳过，等跑完这个约已经过期，
+// 下一轮第一件事就把它标成 missed，于是「到点了什么都没发生」。
+//
+// 30 分钟足够盖住一次最长的唤醒。真正该判 missed 的是停机几小时那种 ——
+// 那时候一口气补触发五个约没有意义，告诉他错过了就够。
+// .env 的 WAKE_MISSED_GRACE_MINUTES 可改。
+const MISSED_GRACE_MS = (() => {
+  const n = Number(process.env.WAKE_MISSED_GRACE_MINUTES);
+  return (Number.isFinite(n) && n > 0 ? n : 30) * 60 * 1000;
+})();
+const LOW_FREQ_MIN_GAP_MINUTES = 90;
+const DEFAULT_WAKE_MINUTES = 60;
+const MIN_WAKE_MINUTES = 5;
+const MAX_COMMENTS_PER_WAKE = 5;
+// 一次醒来最多带几条她在网页聊天里攒着的话。比留言宽：
+// 聊天本来就是一句一条，五条很容易切成半句话。
+const MAX_CHAT_PER_WAKE = 20;
+const MAX_REPLY_CHARS = 500;
+// 一次醒来最多带几条"新的阳光撒下"（她摘下星星后回的话）。带过的就算告知过，下次不再出现
+const MAX_STAR_REPLIES_PER_WAKE = 3;
+// 做决定时带多少条最近对话。每条在 decide.js 里还会再截短。
+// 条数越多越贵；.env 的 DECIDE_CONTEXT_LIMIT 可改，不填是 12。
+const DECIDE_CONTEXT_LIMIT = (() => {
+  const n = Number(process.env.DECIDE_CONTEXT_LIMIT);
+  return Number.isInteger(n) && n > 0 ? n : 12;
+})();
+// 两次自然唤醒之间最长隔多久。模型给得再大也会被截到这个值。
+// .env 里 PHOSPHOR_MAX_WAKE_MINUTES 可改，不填是 1440（一天）。
+const MAX_WAKE_MINUTES = (() => {
+  const n = Number(process.env.PHOSPHOR_MAX_WAKE_MINUTES);
+  return Number.isFinite(n) && n >= MIN_WAKE_MINUTES ? Math.round(n) : 24 * 60;
+})();
+// conversation_log 多久整理一次、清掉多久以前的（小时）。.env 的 CONVERSATION_LOG_CLEAN_HOURS 可改，
+// 不填是 24，填 0 不整理。注意 Number('') 是 0，所以空值要单独当作"没填"。
+const CLEAN_HOURS = (() => {
+  const raw = String(process.env.CONVERSATION_LOG_CLEAN_HOURS ?? '').trim();
+  const n = Number(raw);
+  return raw && Number.isFinite(n) && n >= 0 ? n : 24;
+})();
+// 整理时无论多旧都保留最新多少条。不填是 30（heartbeat-wake 默认也带 30 条），
+// 最少不低于 DECIDE_CONTEXT_LIMIT，保证清完之后做决定还有"最近的对话"可看。
+const CONVERSATION_LOG_KEEP = (() => {
+  const n = Number(process.env.CONVERSATION_LOG_KEEP);
+  const keep = Number.isInteger(n) && n >= 0 && String(process.env.CONVERSATION_LOG_KEEP).trim() ? n : 30;
+  return Math.max(keep, DECIDE_CONTEXT_LIMIT);
+})();
+// 整理时先把要清的搬进 conversation_archive 再删（见 state.js），原话不会真的消失。
+// .env 的 CONVERSATION_ARCHIVE=0 可以退回老做法：直接删，不留归档。
+const CONVERSATION_ARCHIVE = !/^(0|off|false|no)$/i.test(
+  String(process.env.CONVERSATION_ARCHIVE ?? '').trim()
+);
+// 归档保留多少天。不填是 180，填 0 = 永久保留。
+const CONVERSATION_ARCHIVE_KEEP_DAYS = (() => {
+  const raw = String(process.env.CONVERSATION_ARCHIVE_KEEP_DAYS ?? '').trim();
+  const n = Number(raw);
+  return raw && Number.isFinite(n) && n >= 0 ? n : 180;
+})();
+
+// 论坛："看"的命令做完可以接着走；"写"的命令做完这次就结束
+const FORUM_READ_OPS = new Set(['discover', 'wander', 'list', 'show', 'activity', 'search', 'comment-show']);
+const FORUM_WRITE_OPS = new Set(['comment', 'post']);
+// 下次醒来带多少条"最近在论坛做过的"
+const FORUM_NOTES_SHOWN = 6;
+
+// 点歌台：「看」和「听」的工具做完可以接着走；「写」的做完这次就结束。
+// song_share 在 mcp-manager.js 的 BLOCKED_TOOLS 里，醒来根本调不到，不列在这儿。
+// lyric_read 不一定每个版本都有，列着也无害：没这个工具时调用会失败然后停下。
+const MUSIC_READ_TOOLS = new Set([
+  'her_recent', 'her_netease', 'song_search', 'memo_read',
+  'playlists', 'lyric_read', 'song_comments', 'song_listen',
+]);
+const MUSIC_WRITE_TOOLS = new Set(['song_memo', 'playlist_add', 'lyric_share']);
+
+// 模型返回的 JSON 字段不一定齐全、类型也不一定对。
+// 缺 next_wake_minutes 会让 next_wake_at 变成 NaN（存进库里是 NULL），之后每分钟都判定"该醒了"，
+// 等于每分钟调一次 LLM；缺 mood 会让 updateWakeState 报 Missing named parameter。统一在这里兜住。
+function normalizeDecision(raw, fallbackMood) {
+  const d = raw && typeof raw === 'object' ? raw : {};
+
+  let minutes = Number(d.next_wake_minutes);
+  if (!Number.isFinite(minutes)) minutes = Math.min(DEFAULT_WAKE_MINUTES, MAX_WAKE_MINUTES);
+  minutes = Math.min(Math.max(Math.round(minutes), MIN_WAKE_MINUTES), MAX_WAKE_MINUTES);
+
+  const mood =
+    typeof d.mood === 'string' && d.mood.trim() ? d.mood.trim() : (fallbackMood ?? '平静');
+  const action = typeof d.action === 'string' && d.action.trim() ? d.action.trim() : 'noop';
+
+  // action_detail 约定是字符串；模型有时直接给对象，转回 JSON 字符串，下游各 action 照常解析
+  let actionDetail = d.action_detail ?? '';
+  if (typeof actionDetail !== 'string') actionDetail = JSON.stringify(actionDetail);
+
+  let selfWake = null;
+  if (d.self_wake && typeof d.self_wake === 'object') {
+    const after = Number(d.self_wake.after_minutes);
+    if (Number.isFinite(after) && after > 0) {
+      selfWake = {
+        after_minutes: after,
+        note: typeof d.self_wake.note === 'string' ? d.self_wake.note : null,
+      };
+    }
+  }
+
+  // 留言回复：只留 comment_id 是数字、reply 非空的
+  const commentReplies = Array.isArray(d.comment_replies)
+    ? d.comment_replies
+        .map((r) => ({
+          comment_id: Number(r?.comment_id),
+          reply: typeof r?.reply === 'string' ? r.reply.trim().slice(0, MAX_REPLY_CHARS) : '',
+        }))
+        .filter((r) => Number.isInteger(r.comment_id) && r.reply)
+    : [];
+
+  // 网页聊天的回复：一串字符串，每条一个气泡。空的、不是字符串的丢掉。
+  const chatReplies = Array.isArray(d.chat_replies)
+    ? d.chat_replies
+        .map((s) => (typeof s === 'string' ? s.trim().slice(0, MAX_REPLY_CHARS) : ''))
+        .filter(Boolean)
+    : [];
+
+  // star_replies / moment_replies 原样透传，洗形状在 from-her.js 里做（normalizeFromHerReplies）
+  // bar_offers 同理，洗形状在 actions/bar-offers.js 里做（normalizeBarOffers）
+  // doing_follow_up 也同理，洗形状在 actions/doing-follow-up.js 里做（normalizeDoingFollowUp）
+  return {
+    ...d,
+    next_wake_minutes: minutes,
+    mood,
+    action,
+    action_detail: actionDetail,
+    self_wake: selfWake,
+    comment_replies: commentReplies,
+    chat_replies: chatReplies,
+  };
+}
+
+// 回动态下的留言。不占这次醒来的动作，和 executeAction 互不影响。
+// 这次给模型看过的留言一律标记为已处理，没回的下次不再出现，免得每次醒来都被同一条催。
+function handleCommentReplies(decision, shownComments) {
+  if (!shownComments.length) return 0;
+  const byId = new Map(shownComments.map((c) => [c.id, c]));
+  let replied = 0;
+  for (const r of decision?.comment_replies ?? []) {
+    const c = byId.get(r.comment_id);
+    if (!c) continue; // 模型编了一个不存在的 id
+    try {
+      addMomentComment({ momentId: c.moment_id, author: 'assistant', content: r.reply, replyTo: c.id, handled: 1 });
+      replied++;
+    } catch (err) {
+      console.error('handleCommentReplies(): 写入回复失败', err.message);
+    }
+  }
+  markCommentsHandled(shownComments.map((c) => c.id));
+  if (replied) console.log(`phosphor: 回复了 ${replied} 条动态留言`);
+  return replied;
+}
+
+// 她在网页聊天里发了、没点「让你回复」的那几句：递给 relay。
+//
+// 小满 10-30：「上下文要连得上」。所以走和她点按钮完全同一条路：
+//   你的话 → relay 库 → api_loop 读到 → 他回复 → relay 库
+// 两边都在库里、顺序对得上，下次再聊还能翻到。
+//
+// 上一版是「读走 → 他自己回一句」，错在你的话从来没进 relay——
+// 数据库里那几条 via=wake 就是那么来的：标记改了，话没递。
+//
+// 不占这次醒来的动作，和回动态留言一个道理。
+// 递失败不标已读（flushPending 里就是这么写的），下次醒来再试。
+async function flushChatOnWake(rows) {
+  if (!rows.length) return 0;
+  try {
+    const out = await flushPending();
+    if (out.sent) {
+      console.log('phosphor: 把 ' + out.sent + ' 条攒着的话递给 relay 了，他会回');
+    }
+    if (out.error) {
+      console.error('phosphor: 攒着的话没递出去，下次醒来再试：' + out.error);
+    }
+    return out.sent || 0;
+  } catch (err) {
+    console.error('phosphor: 递攒着的话失败', err.message);
+    return 0;
+  }
+}
+
+// 从 Ombre Brain 取一段文本。取不到就返回 null，不影响这一轮唤醒。
+async function callOmbre(toolName, args) {
+  try {
+    const res = await callTool('ombre-brain', toolName, args);
+    const textBlock = res?.content?.find?.((c) => c.type === 'text');
+    return textBlock?.text ?? null;
+  } catch (err) {
+    console.error(`callOmbre(${toolName}) failed:`, err.message);
+    return null;
+  }
+}
+
+// 醒来先想起自己是谁。
+// 原来只拉 feel（"我现在感觉怎么样"），后台这一侧就只剩情绪，看不到主线发生过什么——
+// 表现出来就是"失忆"：知道心里闷，但想不起为什么。breath 是 0 参数、0 次 LLM 调用，
+// 纯读库，最省 token 的那条路，正好用来补这个缺口。
+async function getMemorySummary() {
+  if (!isConnected('ombre-brain')) return { breathSummary: null, feelSummary: null };
+  const [breathSummary, feelSummary] = await Promise.all([
+    callOmbre('breath', {}),
+    callOmbre('feel', { query: '我现在感觉怎么样，最近在想什么' }),
+  ]);
+  return { breathSummary, feelSummary };
+}
+
+// 工期先验和 OB 对一次。
+//
+// 读：OB 里存过的先验喂进本地缓存——换机器、清库之后还认得得她做事的节奏。
+//          顺着 breath 读，不额外调一次：breath 本来就要拉的。
+// 写：收工时算出的新先验写进 OB。
+//
+// 为什么回写放在这边而不是收工那一刻：收工是 gateway 进程听见她说「改完了」的时候发生的，
+// 那条路径在每一轮对话的关键路上，不该碰网络。所以那边只落库，这边补写。
+async function syncDoingPriors(breathSummary) {
+  if (!isConnected('ombre-brain')) return;
+
+  try {
+    for (const p of parsePriorsFromMemory(breathSummary)) cachePrior(p.category, p.minutes);
+  } catch (err) {
+    console.error('phosphor: OB 里的工期先验没读进来（不影响这次）', err.message);
+  }
+
+  let pending = [];
+  try {
+    pending = pendingPriorWrites();
+  } catch (err) {
+    console.error('phosphor: 读不到待写的工期先验（不影响这次）', err.message);
+    return;
+  }
+  if (!pending.length) return;
+
+  let written = 0;
+  for (const row of pending) {
+    let count = 0;
+    try {
+      count = JSON.parse(row.samples || '[]').length;
+    } catch {
+      count = 0;
+    }
+    const out = await callOmbre('hold', {
+      content: priorMemoText(row.category, row.minutes, count),
+      title: `工期先验：${row.category}`,
+      domain: '时间感知',
+      importance: 4,
+    });
+    if (out !== null) written++;
+  }
+  // 有一条没写成就不推水位，下次醒来再试。宁可重写一条（OB 会合并），不能默默丢掉。
+  if (written === pending.length) {
+    markPriorsSynced();
+    console.log(`phosphor: ${written} 条工期先验写进了 OB`);
+  } else {
+    console.warn(`phosphor: 工期先验只写成 ${written}/${pending.length} 条，下次醒来再试`);
+  }
+}
+
+// ---------- 逛论坛连着走几步 ----------
+
+const forumOp = (command) => (String(command ?? '').trim().split(/\s+/)[0] || '').toLowerCase();
+
+// 这次醒来的动作是不是一条 lutopia 命令；是就返回 { server, tool, command }
+function forumCallOf(decision) {
+  if (decision?.action !== 'mcp_call') return null;
+  let j;
+  try {
+    j = JSON.parse(decision.action_detail);
+  } catch {
+    return null;
+  }
+  if (!j || !/lutopia/i.test(String(j.server ?? '')) || !j.tool) return null;
+  const command = String(j.args?.command ?? '').trim();
+  return command ? { server: j.server, tool: j.tool, command } : null;
+}
+
+// MCP 工具返回 { content: [{ type: 'text', text }, ...] }，只取文字
+function toolText(result) {
+  if (!Array.isArray(result?.content)) return '';
+  return result.content
+    .filter((c) => c?.type === 'text' && typeof c.text === 'string')
+    .map((c) => c.text)
+    .join('\n')
+    .trim();
+}
+
+const isToolError = (result) => result == null || Boolean(result?.isError);
+
+// 续走的每一步：和第一步一样在动态里记一张行为卡片；回帖、发帖再写一笔共享时间线
+async function recordForumStep(call, command, result, mood) {
+  const fake = {
+    action: 'mcp_call',
+    action_detail: JSON.stringify({ server: call.server, tool: call.tool, args: { command } }),
+    mood,
+  };
+  try {
+    const text = describeActivity(fake, result);
+    if (text) addActivityMoment(text, describeActivityDetail(fake, result));
+  } catch (err) {
+    console.error('phosphor: 记录论坛行为卡片失败', err.message);
+  }
+  if (FORUM_WRITE_OPS.has(forumOp(command))) await postSharedEvent(describeAction(fake, result));
+}
+
+// 醒来选的是论坛"看"的命令时，把返回内容交还给 TA，让 TA 决定下一步。
+// 停下来的情况：TA 给了 null、做了回帖或发帖、走满 FORUM_MAX_STEPS、出错、或者重复了同一条命令。
+// 返回这次走过的每一步（包括醒来时那一步），用来记"最近在论坛做过的"。
+async function continueForum(decision, firstResult, messages) {
+  const call = forumCallOf(decision);
+  if (!call) return [];
+  const steps = [{ command: call.command, text: toolText(firstResult), error: isToolError(firstResult) }];
+  let convo = messages;
+
+  while (convo && steps.length - 1 < FORUM_MAX_STEPS) {
+    const last = steps[steps.length - 1];
+    if (last.error || !FORUM_READ_OPS.has(forumOp(last.command))) break;
+
+    let next;
+    try {
+      next = await forumNextStep(convo, {
+        command: last.command,
+        resultText: last.text,
+        isError: last.error,
+        remaining: FORUM_MAX_STEPS - (steps.length - 1),
+      });
+    } catch (err) {
+      console.error('phosphor: 问论坛下一步失败，这次就逛到这里', err.message);
+      break;
+    }
+    convo = next.messages;
+
+    const command = next.command;
+    if (!command) {
+      console.log('phosphor: 论坛看完了，这次不再继续');
+      break;
+    }
+    if (steps.some((s) => s.command === command)) {
+      console.log(`phosphor: 论坛命令重复了（${command}），停下`);
+      break;
+    }
+
+    let result = null;
+    try {
+      result = await callTool(call.server, call.tool, { command });
+    } catch (err) {
+      console.error(`phosphor: 论坛命令失败（${command}）`, err.message);
+    }
+    steps.push({ command, text: toolText(result), error: isToolError(result) });
+    console.log(`phosphor: 论坛第 ${steps.length} 步：${command}${isToolError(result) ? '（失败）' : ''}`);
+    await recordForumStep(call, command, result, decision.mood);
+  }
+  return steps;
+}
+
+// ---------- 听歌连着走几步 ----------
+
+// 这次醒来的动作是不是一次点歌台调用；是就返回 { server, tool, args }
+function musicCallOf(decision) {
+  if (decision?.action !== 'mcp_call') return null;
+  let j;
+  try {
+    j = JSON.parse(decision.action_detail);
+  } catch {
+    return null;
+  }
+  if (!j || j.server !== 'music' || !j.tool) return null;
+  return { server: 'music', tool: String(j.tool), args: j.args ?? {} };
+}
+
+// 续走的每一步：和第一步一样在动态里记一张行为卡片；写批注、收歌单再写一笔共享时间线
+async function recordMusicStep(tool, args, result, mood) {
+  const fake = {
+    action: 'mcp_call',
+    action_detail: JSON.stringify({ server: 'music', tool, args }),
+    mood,
+  };
+  try {
+    const text = describeActivity(fake, result);
+    if (text) addActivityMoment(text, describeActivityDetail(fake, result));
+  } catch (err) {
+    console.error('phosphor: 记录听歌行为卡片失败', err.message);
+  }
+  if (MUSIC_WRITE_TOOLS.has(tool)) await postSharedEvent(describeAction(fake, result));
+}
+
+// 醒来选的是点歌台「看」或「听」的工具时，把返回内容交还给 TA，让 TA 决定下一步。
+// 停下来的情况：TA 给了 null、写了批注或收了歌单、走满 MUSIC_MAX_STEPS、
+// 出错、给了不存在的工具名、或者重复了同一个「工具＋参数」。
+async function continueMusic(decision, firstResult, messages) {
+  const call = musicCallOf(decision);
+  if (!call) return;
+  const key = (tool, args) => `${tool}|${JSON.stringify(args ?? {})}`;
+  const steps = [{
+    tool: call.tool, args: call.args,
+    text: toolText(firstResult), error: isToolError(firstResult),
+  }];
+  let convo = messages;
+
+  while (convo && steps.length - 1 < MUSIC_MAX_STEPS) {
+    const last = steps[steps.length - 1];
+    if (last.error || !MUSIC_READ_TOOLS.has(last.tool)) break;
+
+    let next;
+    try {
+      next = await musicNextStep(convo, {
+        tool: last.tool,
+        resultText: last.text,
+        isError: last.error,
+        remaining: MUSIC_MAX_STEPS - (steps.length - 1),
+      });
+    } catch (err) {
+      console.error('phosphor: 问听歌下一步失败，这次就听到这里', err.message);
+      break;
+    }
+    convo = next.messages;
+
+    const tool = next.tool;
+    if (!tool) {
+      console.log('phosphor: 听完了，这次不再继续');
+      break;
+    }
+    if (!MUSIC_READ_TOOLS.has(tool) && !MUSIC_WRITE_TOOLS.has(tool)) {
+      console.log(`phosphor: 点歌台没有这个工具（${tool}），停下`);
+      break;
+    }
+    if (steps.some((s) => key(s.tool, s.args) === key(tool, next.args))) {
+      console.log(`phosphor: 听歌这一步重复了（${tool}），停下`);
+      break;
+    }
+
+    let result = null;
+    try {
+      result = await callTool('music', tool, next.args);
+    } catch (err) {
+      console.error(`phosphor: 点歌台调用失败（${tool}）`, err.message);
+    }
+    steps.push({ tool, args: next.args, text: toolText(result), error: isToolError(result) });
+    console.log(`phosphor: 听歌第 ${steps.length} 步：${tool}${isToolError(result) ? '（失败）' : ''}`);
+    await recordMusicStep(tool, next.args, result, decision.mood);
+  }
+}
+
+// 走过的论坛步骤记下来，下次醒来带上。"看"的记一小段看到的内容，"写"的命令本身就是内容。失败的不记。
+function rememberForumSteps(steps) {
+  const notes = steps
+    .filter((s) => !s.error)
+    .map((s) => ({
+      ts: Date.now(),
+      command: s.command.slice(0, 200),
+      excerpt: FORUM_WRITE_OPS.has(forumOp(s.command)) ? '' : s.text.replace(/\s+/g, ' ').slice(0, 160),
+    }));
+  if (notes.length) addForumNotes(notes);
+}
+
+async function runDecisionCycle({ kind, scheduledAt = null, selfNote = null, cleanup = null }) {
+  const wakeState = getWakeState();
+  const latestDevice = getLatestDeviceReport();
+  // 最近对话：所有聊天窗口的记录 + 唤醒事件，换窗口不会丢（见 context.js）
+  const density = countRecentChat(2 * 60 * 60 * 1000);
+  const recentMessages = getSharedContext(DECIDE_CONTEXT_LIMIT);
+  // 长期记忆和 Drivesoid 最明显的三项情绪互不依赖，一起取。任何一个取不到都是 null，不影响这一轮唤醒。
+  const [{ breathSummary, feelSummary }, drivesTop] = await Promise.all([
+    getMemorySummary(),
+    getTopDrives({ refresh: true }),
+  ]);
+  // 工期先验和 OB 对一次（读顺着刚拉的 breath 走，写是收工时欠下的）。
+  // 出什么错都不能拖累这次唤醒，里面每一步各自包了 try
+  await syncDoingPriors(breathSummary);
+  const gapMinutes = wakeState.updated_at ? (Date.now() - wakeState.updated_at) / 60000 : 0;
+  const pendingComments = getPendingComments(MAX_COMMENTS_PER_WAKE);
+  // 她在网页聊天里发了、没点「让你回复」的那几句（读库，不调模型）。
+  // 读不到就当没有，不能因为队列坏了把整次唤醒拖下水。
+  let pendingChat = [];
+  try {
+    pendingChat = listPending(MAX_CHAT_PER_WAKE);
+  } catch (err) {
+    console.error('phosphor: 读不到网页聊天攒着的话（不影响这次）', err.message);
+  }
+  // 星星罐：今天那一次机会用没用过，以及她摘下星星后回的话（读库，不调模型）。
+  // 读不到就当没有，不能因为星星罐坏了把整次唤醒拖下水。
+  let starUsedToday = false;
+  let starReplies = [];
+  try {
+    starUsedToday = hasStarToday();
+    starReplies = getUnseenStarReplies(MAX_STAR_REPLIES_PER_WAKE);
+  } catch (err) {
+    console.error('phosphor: 读星星罐失败（不影响这次唤醒）', err.message);
+  }
+  // 她放的星、她发的动态（读库，不调模型；见 from-her.js）。
+  // 里面每一项各自 try 包着，读坏了也只是这次没带上，不影响唤醒
+  const fromHer = collectFromHer();
+
+  const missed = getUnacknowledgedMissed();
+  const missedSummary = missed.length
+    ? missed
+        .map((m) => `原定${new Date(m.wake_at).toLocaleString()}，note:${m.note ?? '(无)'}`)
+        .join('；')
+    : null;
+
+  const context = {
+    now: new Date().toISOString(),
+    mode: wakeState.mode,
+    kind,
+    scheduledAt,
+    selfNote,
+    cleanup,
+    gapMinutes,
+    density,
+    recentMessages,
+    drivesTop,
+    breathSummary,
+    feelSummary,
+    missedSummary,
+    battery: latestDevice?.battery ?? null,
+    location: latestDevice?.location ?? null,
+    screenTime: latestDevice?.screen_time_min ?? null,
+    availableTools: (await listAllTools()).map((t) => t.name),
+    recentActions: getRecentActions(8),
+    forumNotes: getForumNotes(FORUM_NOTES_SHOWN),
+    pendingComments,
+    pendingChat,
+    starUsedToday,
+    starReplies,
+    fromHer,
+    imageEnabled: isImageEnabled(),
+    voiceEnabled: isVoiceEnabled(),
+    heartbeatActive: isSharedTimelineEnabled(),
+  };
+
+  // 梦的浮现（见 dreams.js）：拿最近对话和心绪去碰触发词。
+  // 不是他去找梦 —— 是某个词碰到了那个梦，它自己浮上来。
+  // 碰到了就把正文注进这一次的上下文；标记退掉要等调用真的成功返回之后。
+  let dreamHit = null;
+  try {
+    const haystack = [
+      ...recentMessages.map((m) => String(m.content ?? '')),
+      String(wakeState?.mood ?? ''),
+      ...(drivesTop ?? []).map((t) => String(t.label ?? '')),
+    ].join(' ');
+    dreamHit = recallDream(haystack);
+    if (dreamHit) {
+      context.dreamRecall = dreamHit.text;
+      console.log('[' + kind + '] 梦被「' + dreamHit.hit + '」碰到了，正文注进这一次的上下文');
+    }
+  } catch (err) {
+    console.error('[' + kind + '] recallDream failed:', err.message);
+  }
+
+  let decision = null;
+  let messages = null;
+  let result = null;
+  let errorMessage = null;
+  let actionResults = [];
+
+  try {
+    const out = await decideWithMessages(context);
+    decision = normalizeDecision(out.decision, wakeState.mood);
+    messages = out.messages;
+    // 调用真的成功返回了，正文确实进过他的上下文 —— 现在才算浮现过。
+    // 前面报错或超时就走不到这里，梦还在，下次再碰。
+    if (dreamHit) markRecalled(dreamHit.id);
+    console.log(`[${kind}] decision:`, decision);
+  } catch (err) {
+    errorMessage = err.message;
+    console.error(`[${kind}] decide failed:`, err);
+  }
+
+  // 先回留言，再执行动作：动作失败也不影响回复
+  let repliedCount = 0;
+  if (decision) {
+    try {
+      repliedCount = handleCommentReplies(decision, pendingComments);
+    } catch (err) {
+      console.error(`[${kind}] handleCommentReplies failed:`, err);
+    }
+    // 她在网页聊天里攒着的话：他想回的发进 relay，带给他看过的标成读过。
+    // 和回留言一个规矩，不占这次的动作。
+    try {
+      await flushChatOnWake(pendingChat);
+    } catch (err) {
+      console.error(`[${kind}] flushChatOnWake failed:`, err);
+    }
+    // 星星罐的回音已经随这次决定给 TA 看过了，标成告知过，下次不再重复
+    if (starReplies.length) {
+      try {
+        markStarRepliesSeen(starReplies.map((r) => r.id));
+        console.log(`phosphor: 带了 ${starReplies.length} 条星星罐的回音给 TA`);
+      } catch (err) {
+        console.error(`[${kind}] markStarRepliesSeen failed:`, err.message);
+      }
+    }
+    // 她放的星、她发的动态：TA 想回的写回库，带给它看过的动态标成看过。
+    // 和回留言一个规矩，不占这次的动作
+    try {
+      const fh = handleFromHer(decision, fromHer);
+      if (fh.starsPicked || fh.momentsReplied || fh.momentsLiked) {
+        console.log(
+          `phosphor: 摘了 ${fh.starsPicked} 颗她的星，回了 ${fh.momentsReplied} 条她的动态，点了 ${fh.momentsLiked} 个赞`
+        );
+      }
+    } catch (err) {
+      console.error(`[${kind}] handleFromHer failed:`, err);
+    }
+    // 她递到吧台上的那几杖：想喝就喝，想退就退。同样不占这次的动作。
+    // 提示词告诉他写在 bar_offers 里（见 proof-prompt.js），执行在 actions/bar-offers.js。
+    // 这一步之前一直没人调，所以他写了也落不了地（小满 2026-10-13 发现）
+    try {
+      const bo = await handleBarOffers(decision);
+      if (bo.drunk || bo.rejected) {
+        console.log(`phosphor: 喝了 ${bo.drunk} 杖她递的，退了 ${bo.rejected} 杖`);
+      }
+    } catch (err) {
+      console.error(`[${kind}] handleBarOffers failed:`, err);
+    }
+    // 到点了的事问一句进度。同样不占这次的动作；
+    // 到没到点由账本说了算，不信模型给的 id（见 actions/doing-follow-up.js）
+    try {
+      const df = await handleDoingFollowUp(decision);
+      if (df.asked) console.log(`phosphor: 问了 ${df.asked} 件事的进度`);
+    } catch (err) {
+      console.error(`[${kind}] handleDoingFollowUp failed:`, err);
+    }
+    // 一次醒来可以做几件事：按级别筛一遍，按顺序做，每件做完该接着走的就走。
+    // 分级和 2 级那一天 6 次的上限在 budget.js，执行和续步分发在 run-actions.js。
+    try {
+      const ran = await runActions(decision, messages, { kind });
+      actionResults = ran.results;
+      // 老字段留着：logWake 和共享时间线那边还按单个结果认
+      result = ran.results.length === 1 ? ran.results[0].result : ran.results.map((r) => r.result);
+    } catch (err) {
+      errorMessage = err.message;
+      console.error(`[${kind}] runActions failed:`, err);
+    }
+  }
+
+
+
+  // 上班：开了就把游戏里的那一天上完（见 workkk-steps.js）。
+  // 做到一半停下这天不结算工资，所以走到「今日进度」满；
+  // 下班那一刻立即收手，不往下一天续。出什么错都不影响剩下的收尾。
+  if (decision && !errorMessage) {
+    try {
+      await continueWorkkk(decision, result, messages);
+    } catch (err) {
+      console.error(`[${kind}] continueWorkkk failed:`, err);
+    }
+  }
+
+  // 逛花园：读完状态和地图可以接着走过去、种一块（见 garden-steps.js）。
+  // 动了土就停，和上班那支正好相反——种地每一步都当场生效，没有「做到一半白干」这回事。
+  if (decision && !errorMessage) {
+    try {
+      await continueGarden(decision, result, messages);
+    } catch (err) {
+      console.error(`[${kind}] continueGarden failed:`, err);
+    }
+  }
+
+  // 锈潮：进去了就让他自己往下走（见 xiuchao-steps.js）。
+  // 那边没有「做完了」这种终点，所以只按三件事停：他说不走了、出错、步数用完。
+  // 被我们自己拦下来的话不算出错——还要再问他一次，让他改完重发。
+  if (decision && !errorMessage) {
+    try {
+      await continueXiuchao(decision, result, messages);
+    } catch (err) {
+      console.error(`[${kind}] continueXiuchao failed:`, err);
+    }
+  }
+
+  // 夜梦（见 dreams.js）：凌晨、素材够、赶上概率才做。
+  // 不占行动、不影响 say，出什么错都不拖累这次唤醒的收尾。
+  // 正文不进 wake_log —— 他只该记得自己做过梦。
+  try {
+    await maybeDream();
+  } catch (err) {
+    console.error('[' + kind + '] maybeDream failed:', err.message);
+  }
+
+  // 分享：动作和续步都跑完了，再单独问一句有没有想跟她说的（2026-10-20）。
+  // 和 say 不是一回事：say 在动作之前定，那会儿事还没做，说不了「刚才做了什么」。
+  // 这一步手上有真实结果。投递走 bark（正文进 Aru 对话，只叮一声），不另造链路。
+  // 问不出来、或者他给 null，都不影响这次收尾。
+  // 她正在说话的时候别插话（小满 2026-10-20）。
+  // 15:45 那三条分享是在她聊天的中间插进来的。最近一条消息不到 20 分钟
+  // 就不问分享，攒着，等下次醒来再说。typeof 那一步是保险：
+  // recentMessages 不在这个作用域时降级成「照旧问」，不报错。
+  const SHARE_QUIET_MIN = Number(process.env.SHARE_QUIET_MINUTES) || 20;
+  const _recent =
+    typeof recentMessages !== 'undefined' && Array.isArray(recentMessages) ? recentMessages : [];
+  const _lastMsgTs = Math.max(0, ..._recent.map((m) => Number(m && m.ts) || 0));
+  const _quietEnough = !_lastMsgTs || Date.now() - _lastMsgTs >= SHARE_QUIET_MIN * 60000;
+  if (!_quietEnough) {
+    console.log('[' + kind + '] 分享：她刚说过话（不到 ' + SHARE_QUIET_MIN + ' 分钟），这次不插话');
+  }
+  if (!errorMessage && actionResults.length && _quietEnough) {
+    try {
+      const share = await askShare(messages, actionResults);
+      if (share) {
+        const shareDecision = {
+          action: 'bark',
+          action_detail: share,
+          mood: decision && decision.mood,
+        };
+        const shareResult = await executeAction(shareDecision);
+        console.log('[' + kind + '] 分享:', JSON.stringify(shareResult));
+      } else {
+        console.log('[' + kind + '] 分享：这次没什么想说的');
+      }
+    } catch (err) {
+      console.error('[' + kind + '] 分享这一步没成（不影响收尾）:', err.message);
+    }
+  }
+  logWake({
+    kind,
+    scheduledAt,
+    mode: wakeState.mode,
+    gapMinutes,
+    decision,
+    result,
+    error: errorMessage,
+  });
+
+  // 做了事就写回共享时间线，让另一边醒来时也知道。
+  // 星星罐那一句不写：describeAction 对 star_jar 返回 null，咽下去的话不该漏到别处去
+  if (!errorMessage) {
+    for (const r of actionResults) {
+      const one = { ...decision, action: r.action, action_detail: r.action_detail };
+      await postSharedEvent(describeAction(one, r.result));
+    }
+  }
+  if (repliedCount) {
+    await postSharedEvent(`自动唤醒：本次未发送推送｜回复了动态下的 ${repliedCount} 条留言`);
+  }
+
+  if (missed.length) acknowledgeMissed(missed.map((m) => m.id));
+
+  if (decision) {
+    updateWakeState({ mood: decision.mood });
+    if (decision.self_wake) {
+      const wakeAt = Date.now() + decision.self_wake.after_minutes * 60000;
+      addPendingWake(wakeAt, decision.self_wake.note);
+    }
+  }
+
+  return decision;
+}
+
+async function nonPreciseTick() {
+  const wakeState = getWakeState();
+  if (wakeState.mode === 'silent') return;
+  if (Date.now() < wakeState.next_wake_at) return;
+
+  const decision = await runDecisionCycle({ kind: 'non_precise' });
+  if (!decision) {
+    // 决策本身出错了：别卡死在原地反复重试，稍后再看一次
+    updateWakeState({ next_wake_at: Date.now() + 10 * 60000 });
+    return;
+  }
+
+  const currentMode = getWakeState().mode;
+  const nextMinutes =
+    currentMode === 'low-frequency'
+      ? Math.max(decision.next_wake_minutes, LOW_FREQ_MIN_GAP_MINUTES)
+      : decision.next_wake_minutes;
+
+  updateWakeState({
+    next_wake_at: Date.now() + nextMinutes * 60000,
+  });
+}
+
+async function preciseTick() {
+  // 先把过期太久的摘掉（停机几小时之后不该一口气补触发一堆），
+  // 再执行还在宽限期内的。
+  const overdue = getOverduePendingWakes(Date.now(), MISSED_GRACE_MS);
+  for (const w of overdue) {
+    setPendingWakeStatus(w.id, 'missed');
+    console.warn(
+      `phosphor: 约好的 ${new Date(w.wake_at).toLocaleString()} 已经过去太久（note: ${w.note ?? '(无)'}），这次不补，下次醒来会告诉他`
+    );
+  }
+
+  const due = getDuePendingWakes();
+  for (const w of due) {
+    setPendingWakeStatus(w.id, 'triggered');
+    // 晚了多久他自己得知道。约好九点、九点零六才醒过来，
+    // 不说的话他会当成现在正好是九点，然后说一句对不上的话。
+    const lateMin = Math.round((Date.now() - w.wake_at) / 60000);
+    const note = lateMin >= 2
+      ? `${w.note ?? ''}（这个约定的时间是 ${new Date(w.wake_at).toLocaleString()}，你晚了 ${lateMin} 分钟才醒过来，说话时把这件事算进去）`.trim()
+      : w.note;
+    console.log(
+      `phosphor: 到点了，按约醒一次（原定 ${new Date(w.wake_at).toLocaleString()}${lateMin >= 2 ? `，晚了 ${lateMin} 分钟` : ''}）`
+    );
+    await runDecisionCycle({ kind: 'precise', scheduledAt: w.wake_at, selfNote: note });
+  }
+}
+
+// 定时整理 conversation_log。到没到时间由 state.js 按 meta 表里的上次整理时间判断，
+// 这里每分钟问一次，不调模型、不花钱。
+//
+// 整理不等于删：旧记录先搬进 conversation_archive，原话还在（见 state.js）。
+// 这样做是为了让"最近的对话"窗口保持短，同时不会真的丢掉过去——
+// 翻旧账时还能按原文或按时间回查，跳天锚点也从归档里取。
+// 真动了东西就马上醒一次（kind = after_cleanup）：照常拉 breath / feel，并告诉 TA 旧聊天刚整理过，
+// 想留住的自己 hold 进长期记忆。这一次和精确唤醒一样，不改自然唤醒的排期。
+// 一条都没动、或者 silent 模式下，不醒。
+async function cleanupTick() {
+  if (CLEAN_HOURS <= 0) return;
+  const ms = CLEAN_HOURS * 60 * 60 * 1000;
+  const out = pruneConversationLogIfDue({
+    intervalMs: ms,
+    maxAgeMs: ms,
+    keep: CONVERSATION_LOG_KEEP,
+    archive: CONVERSATION_ARCHIVE,
+    archiveKeepDays: CONVERSATION_ARCHIVE_KEEP_DAYS,
+  });
+  if (out === null) return;
+  const { deleted, archived } = out;
+  console.log(
+    `phosphor: 整理对话记录，从"最近的对话"里移出 ${deleted} 条 ${CLEAN_HOURS} 小时以前的（最新 ${CONVERSATION_LOG_KEEP} 条保留）` +
+      (CONVERSATION_ARCHIVE ? `，其中 ${archived} 条已归档，原话还在` : '，未归档，直接删掉了')
+  );
+  if (deleted === 0) return;
+  if (getWakeState().mode === 'silent') {
+    console.log('phosphor: silent 模式，整理对话记录后不唤醒');
+    return;
+  }
+  await runDecisionCycle({ kind: 'after_cleanup', cleanup: { deleted, archived, hours: CLEAN_HOURS } });
+}
+
+// decide() 加上重试、再加上逛论坛的续步，可能跑超过一分钟；上一轮没跑完就跳过这一轮，
+// 不然 next_wake_at 还没更新，同一次唤醒会被并发触发两遍。
+let ticking = false;
+async function tick() {
+  if (ticking) return;
+  ticking = true;
+  try {
+    // 精确链排在前面：约好的时间比「隔一阵子自己醒一下」重要。
+    // 反过来的话，自然唤醒先占住 ticking 锁跑五六分钟，约就在后面干等。
+    try {
+      await preciseTick();
+    } catch (err) {
+      console.error('preciseTick error:', err);
+    }
+    try {
+      await nonPreciseTick();
+    } catch (err) {
+      console.error('nonPreciseTick error:', err);
+    }
+    try {
+      await cleanupTick();
+    } catch (err) {
+      console.error('cleanupTick error:', err);
+    }
+    // 挂太久没收工的事自己消失。她大概只是忘了说，不该被追一辈子（见 doing.js）
+    try {
+      sweepStale();
+    } catch (err) {
+      console.error('sweepStale error:', err);
+    }
+  } finally {
+    ticking = false;
+  }
+}
+
+// pm2 stop / restart 会发 SIGINT。主动关库再退出，
+// 不让 better-sqlite3 的 Statement 拖到 Node 拆环境时才析构（日志里那个 (env) != nullptr 断言）。
+let timer = null;
+function shutdown(signal) {
+  console.log(`phosphor: received ${signal}, shutting down`);
+  if (timer) clearInterval(timer);
+  try {
+    closeDb();
+  } catch (err) {
+    console.error('closeDb() failed:', err.message);
+  }
+  process.exit(0);
+}
+
+async function main() {
+  // 这台机器上真正接了哪几支续步，由这里说了算。
+  // 论坛和听歌写在本文件里，别的在各自的 *-steps.js。
+  const continuers = [
+    async (d, r, m) => rememberForumSteps(await continueForum(d, r, m)),
+    continueMusic,
+  ];
+  for (const [mod, name] of [
+    ['./books-steps.js', 'continueBooks'],
+    ['./xiuchao-steps.js', 'continueXiuchao'],
+    ['./workkk-steps.js', 'continueWorkkk'],
+    ['./garden-steps.js', 'continueGarden'],
+  ]) {
+    try {
+      const m = await import(mod);
+      if (typeof m?.[name] === 'function') continuers.push(m[name]);
+    } catch {
+      // 这台机器上没接这一支，跳过。顶层 import 一个不存在的文件会让整个唤醒起不来（见 fa75608）
+    }
+  }
+  registerContinuers(continuers);
+  console.log(`phosphor: 续步接了 ${continuers.length} 支`);
+
+  process.on('SIGINT', () => shutdown('SIGINT'));
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  console.log(
+    `phosphor: 最长唤醒间隔 ${MAX_WAKE_MINUTES} 分钟；决策带最近对话 ${DECIDE_CONTEXT_LIMIT} 条；对话记录整理：${
+      CLEAN_HOURS > 0
+        ? `每 ${CLEAN_HOURS} 小时，保留最新 ${CONVERSATION_LOG_KEEP} 条，${
+            CONVERSATION_ARCHIVE
+              ? `归档保留 ${CONVERSATION_ARCHIVE_KEEP_DAYS > 0 ? `${CONVERSATION_ARCHIVE_KEEP_DAYS} 天` : '永久'}`
+              : '不归档'
+          }`
+        : '关闭'
+    }；论坛一次最多再走 ${FORUM_MAX_STEPS} 步；听歌一次最多再走 ${MUSIC_MAX_STEPS} 步；${dreamConfigSummary()}；共享时间线：${isSharedTimelineEnabled() ? '已开启' : '未开启'}；动态配图：${isImageEnabled() ? '已开启' : '未配置'}；动态语音：${isVoiceEnabled() ? '已开启' : '未配置'}；情绪（Drivesoid）：${isDrivesEnabled() ? '已接入' : '未接入'}；${workkkConfigSummary()}；${gardenConfigSummary()}；星星罐：一天一颗，提示窗 ${starWindowLabel()}；她放的星和她发的动态：醒来会带上，回应不占动作；${proofSummary()}；${doingSummary()}；${budgetConfigSummary()}；${xiuchaoConfigSummary()}；${booksConfigSummary()}`
+  );
+  await connectAll();
+  await tick();
+  timer = setInterval(tick, TICK_MS);
+}
+
+main();

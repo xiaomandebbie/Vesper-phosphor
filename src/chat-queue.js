@@ -152,6 +152,39 @@ export function markPendingRead(ids) {
   return n;
 }
 
+// 唤醒时回一句。这条会出现在网页聊天里，和他当场回的那种一模一样。
+//
+// 小满 10-30：「唤醒是晨暮星吧，应该改法和动态我的留言一样」。
+// 所以不走 /app/send（那是她说话的入口），走 /channel/out——
+// AI 侧就是从这个口回话的，relay 落库之后走 SSE 推给网页。
+//
+// 返回 { ok, status, body }。失败不抛：一句回复发不出去不应该拖垮整次唤醒。
+export async function replyToChat(text) {
+  const t = String(text ?? '').trim();
+  if (!t) return { ok: false, status: 0, body: 'empty' };
+  try {
+    const r = await relayFetch('/channel/out', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ chat_id: 'me', text: t }),
+    });
+    const body = await r.text().catch(() => '');
+    return { ok: r.ok, status: r.status, body: body.slice(0, 300) };
+  } catch (err) {
+    return { ok: false, status: 0, body: err.message };
+  }
+}
+
+// 改攒着还没递出去的那条。已经递出去的改不了（sent = 0 这个条件）——
+// 它已经进了 relay 的库和他的上文，在这边改只是自己看见不同的字。
+export function editPending(id, text) {
+  if (!Number.isInteger(id)) return false;
+  const t = String(text ?? '').trim();
+  if (!t) return false;
+  return stmt('UPDATE chat_pending SET text = ? WHERE id = ? AND sent = 0')
+    .run(t.slice(0, 4000), id).changes > 0;
+}
+
 export function dropPending(id) {
   if (!Number.isInteger(id)) return false;
   return stmt('DELETE FROM chat_pending WHERE id = ? AND sent = 0').run(id).changes > 0;

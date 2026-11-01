@@ -237,10 +237,39 @@ const ROOM_STYLE = `
   .seen { font-size: 10px; color: #b0b0b0; }
   .seen.unread { color: #6a6a6a; }
 
-  /* 攒着还没递出去的：气泡半透，旁边一个小叉可以收回 */
+  /* 攒着还没递出去的：气泡半透。收回走长按菜单，不再常驻一个小叉——
+     那个叉位置还算错了：.grp.me .ln 是 row-reverse，append 会跑到最左。*/
   .grp.wait .bub { opacity: 0.55; }
-  .undo { flex: none; width: 24px; height: 24px; border-radius: 50%; border: 1px solid var(--line);
-    background: var(--card); color: var(--muted); font-size: 13px; line-height: 1; padding: 0; }
+  .bub { -webkit-touch-callout: none; }
+
+  /* 长按菜单（小满 10-30：「消息长按编辑/删除」）*/
+  .lp-mask { position: fixed; inset: 0; z-index: 97; display: none;
+    align-items: center; justify-content: center; padding: 24px;
+    background: rgba(0, 0, 0, 0.28); }
+  .lp-mask.on { display: flex; }
+  .lp-box { width: 100%; max-width: 300px; background: var(--card);
+    border: 1px solid var(--line); border-radius: 16px; overflow: hidden;
+    box-shadow: 0 12px 34px rgba(0, 0, 0, 0.2); }
+  .lp-item { display: block; width: 100%; min-height: 50px; padding: 0 18px;
+    border: none; border-bottom: 1px solid var(--line); background: none;
+    font: inherit; font-size: 16px; color: var(--ink); text-align: left; }
+  .lp-item:last-child { border-bottom: none; }
+  .lp-item:active { background: #f4f4f4; }
+  .lp-item.danger { color: #8a2a2a; }
+  .lp-item.off { color: #b4b4b4; }
+
+  .lp-edit { width: 100%; max-width: 360px; background: var(--card);
+    border: 1px solid var(--line); border-radius: 16px; padding: 14px;
+    box-shadow: 0 12px 34px rgba(0, 0, 0, 0.2); }
+  .lp-edit textarea { width: 100%; min-height: 96px; padding: 10px 12px;
+    border: 1px solid var(--line); border-radius: 12px; background: #fff;
+    font: inherit; font-size: 16px; line-height: 1.6; color: var(--ink);
+    resize: vertical; -webkit-appearance: none; appearance: none; }
+  .lp-row { display: flex; gap: 8px; margin-top: 10px; }
+  .lp-row button { flex: 1; min-height: 42px; border-radius: 12px;
+    border: 1px solid var(--line); background: none; font: inherit;
+    font-size: 14px; color: var(--muted); }
+  .lp-row button.main { border: none; background: #1a1a1a; color: #fdfdfd; }
 
   /* 思考链：默认只一条，点了才展开（和 Aru 那边一样） */
   .think { margin: 0 0 12px 47px; }
@@ -284,7 +313,7 @@ const ROOM_STYLE = `
     background: rgba(255, 255, 255, 0.96); backdrop-filter: blur(10px);
     border: 1px solid var(--line); border-radius: 22px; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08); }
   .composer input { flex: 1; min-width: 0; height: 40px; padding: 0 13px; border-radius: 15px;
-    border: 1px solid var(--line); background: #fff; font-size: 15px; color: var(--ink);
+    border: 1px solid var(--line); background: #fff; font-size: 16px; color: var(--ink);
     -webkit-appearance: none; appearance: none; }
   .go { flex: none; min-width: 44px; height: 40px; padding: 0 14px; border-radius: 15px;
     border: none; background: #1a1a1a; color: #fdfdfd; font-size: 14px; white-space: nowrap;
@@ -347,7 +376,9 @@ const ROOM_SCRIPT = `(function () {
     if (!main || !form) return;
     var top = form.getBoundingClientRect().top;
     var need = Math.max(220, Math.round(window.innerHeight - top + 72));
-    main.style.paddingBottom = need + 'px';
+    // tabs.js 里那条 body.vp-has-tabs main { padding-bottom: … !important }
+    // 会盖过普通内联样式。同样带 important 时内联赢。
+    main.style.setProperty('padding-bottom', need + 'px', 'important');
   }
 
   function attr(k, d) {
@@ -368,15 +399,56 @@ const ROOM_SCRIPT = `(function () {
 
   // relay 那边的 ts 和我们的 Date.now() 不一定同一个单位。
   // 秒和毫秒混着排序，整批消息会被甩到几十年前 —— 表现出来就是「消息不见了」。
+  // 时间戳三种形状都要认：
+  //   毫秒数字（1793363025127）—— 我们自己的 Date.now()
+  //   秒数字（1793363025）   —— Python 的 time.time()
+  //   ISO 字符串（"2026-10-30T19:00:00"）—— FastAPI 序列化 datetime 的样子
+  //
+  // 之前只认前两种，Number("2026-10-30T…") 是 NaN，所以所有 relay 消息
+  // 都被当成「没时间」——排错位置，还显示成了当前时间。
   function normTs(ts) {
-    var n = Number(ts);
-    if (!isFinite(n) || n <= 0) return 0;
-    return n < 1e12 ? n * 1000 : n;
+    if (ts == null) return 0;
+    if (typeof ts === 'number') {
+      if (!isFinite(ts) || ts <= 0) return 0;
+      return ts < 1e12 ? ts * 1000 : ts;
+    }
+    var s = String(ts).trim();
+    if (!s) return 0;
+    // 纯数字的字符串（"1793363025"）
+    if (/^\d+(\.\d+)?$/.test(s)) {
+      var n = Number(s);
+      if (!isFinite(n) || n <= 0) return 0;
+      return n < 1e12 ? n * 1000 : n;
+    }
+    // ISO。不带时区的字串 Safari 按本地时间读，正是我们要的——
+    // 服务器和手机都在 CST。
+    var d = Date.parse(s);
+    if (!isNaN(d)) return d;
+    // "2026-10-30 19:00:00" 这种空格分隔的，换成 T 再试一次
+    d = Date.parse(s.replace(' ', 'T'));
+    return isNaN(d) ? 0 : d;
   }
 
+  // relay 返回的时间字段叫什么不确定——文档写 ts，实现可能是 created_at。
+  // 猜错的后果是所有消息 ts=0 全排最前，卡片带着真实时间排到后面——
+  // 表现出来就是「09:08 的卡片排在 20:10 的消息后面」。所以按顺序试。
+  function msgTs(m) {
+    if (!m) return 0;
+    var keys = ['ts', 'created_at', 'time', 'created', 'timestamp'];
+    for (var i = 0; i < keys.length; i++) {
+      var v = normTs(m[keys[i]]);
+      if (v) return v;
+    }
+    return 0;
+  }
+
+  // 读不到就不打。回退成 new Date() 是比「没有时间」更坏的错：
+  // 后者只是缺一块信息，前者是编了一个假的——
+  // 小满 20:24：「之前消息时间都错了，那几条是下午和 19 点发的」。
   function hhmm(ts) {
     var n = normTs(ts);
-    var d = n ? new Date(n) : new Date();
+    if (!n) return '';
+    var d = new Date(n);
     var h = d.getHours(), m = d.getMinutes();
     return (h < 10 ? '0' : '') + h + ':' + (m < 10 ? '0' : '') + m;
   }
@@ -404,6 +476,16 @@ const ROOM_SCRIPT = `(function () {
       }
     }
     if (buf.trim()) out.push(buf.trim());
+    return out.length ? out : [s];
+  }
+
+  // 我自己打的字：只按换行拆，不按句读点拆。
+  // 她打出来的已经是她分好的，不该替她再切一次（小满 20:35）。
+  // 但攒着的那几条是用换行拼成一条递出去的，回来还要按换行分开。
+  function lines(text) {
+    var s = String(text == null ? '' : text).trim();
+    if (!s) return [];
+    var out = s.split('\\n').map(function (x) { return x.trim(); }).filter(Boolean);
     return out.length ? out : [s];
   }
 
@@ -442,28 +524,29 @@ const ROOM_SCRIPT = `(function () {
     return el;
   }
 
-  function undoBtn(pid) {
-    var x = document.createElement('button');
-    x.type = 'button';
-    x.className = 'undo';
-    x.setAttribute('data-drop', pid);
-    x.setAttribute('aria-label', '收回这条');
-    x.textContent = '×';
-    return x;
+  // 哪条还攒着，记在组上——长按的时候要知道能不能改。
+  // 不再放常驻的小叉：那个在 row-reverse 里会跑到最左，而且平时用不到。
+  function markPid(g, pid) {
+    if (g && pid) g.setAttribute('data-pid', pid);
   }
 
   // 一组话。side 是 human 或 ai。read: 'read' 已读、'unread' 未读、不传不显示。
   // 返回最后一个气泡元素（流式草稿要接着往里写）。
   function group(side, text, ts, opts) {
     opts = opts || {};
-    var lines = opts.draft ? [text] : sentences(text);
-    if (!lines.length) return null;
+    // 他的话按句拆（模型一口气生成的一大段，拆了才像说话），
+    // 我的只按换行拆（已经是我分好的）。小满 20:35：「他的分段我的不分」。
+    var cut = side === 'human' ? lines : sentences;
+    var parts = opts.draft ? [text] : cut(text);
+    if (!parts.length) return null;
     var g = document.createElement('div');
     g.className = 'grp ' + (side === 'human' ? 'me' : 'ta') + (opts.wait ? ' wait' : '');
     // 整段原文存在这儿。认领 SSE 推回来的那条要用它——
     // 用 .bub 的文字只能拿到第一句，对不上，于是同一句话被画两遍，
     // 第二遍带着 relay 那边的发送时间——这就是「时间被改写」的根。
     g.setAttribute('data-full', String(text == null ? '' : text));
+    // 编辑后要重画这一组，时间不能丢
+    if (ts) g.setAttribute('data-ts', String(normTs(ts) || ''));
 
     var nm = document.createElement('div');
     nm.className = 'who';
@@ -471,15 +554,15 @@ const ROOM_SCRIPT = `(function () {
     g.appendChild(nm);
 
     var last = null;
-    for (var i = 0; i < lines.length; i++) {
+    for (var i = 0; i < parts.length; i++) {
       var ln = document.createElement('div');
       ln.className = 'ln';
       ln.appendChild(avatar(side, i > 0));
       var b = document.createElement('div');
       b.className = 'bub' + (opts.draft ? ' draft' : '');
-      b.textContent = lines[i];
+      b.textContent = parts[i];
       ln.appendChild(b);
-      if (i === lines.length - 1) {
+      if (i === parts.length - 1) {
         var meta = document.createElement('div');
         meta.className = 'meta';
         var at = document.createElement('span');
@@ -495,7 +578,8 @@ const ROOM_SCRIPT = `(function () {
           meta.appendChild(sn);
         }
         ln.appendChild(meta);
-        if (opts.wait && opts.pid) ln.appendChild(undoBtn(opts.pid));
+        // 攒着的那条把 id 记在组上，长按菜单用它判能不能改
+        if (opts.wait && opts.pid) markPid(g, opts.pid);
       }
       g.appendChild(ln);
       last = b;
@@ -579,7 +663,7 @@ const ROOM_SCRIPT = `(function () {
     if (kind === 'thinking') { thinking(m.text || ''); return; }
     var human = m.from === 'human';
     // relay 历史里我的消息都已经递过了，所以都算已读
-    group(human ? 'human' : 'ai', m.text || '', m.ts, human ? { read: 'read' } : {});
+    group(human ? 'human' : 'ai', m.text || '', msgTs(m), human ? { read: 'read' } : {});
   }
 
   // SSE 推来的新消息：直接接在最后（它就是最新的）
@@ -664,12 +748,17 @@ const ROOM_SCRIPT = `(function () {
     if (tag) cards = JSON.parse(tag.textContent || '[]');
   } catch (e) { cards = []; }
 
-  fetch('/chat/api/history?limit=60', { credentials: 'same-origin' })
+  fetch('/chat/api/history', { credentials: 'same-origin' })
     .then(function (r) { return r.ok ? r.json() : null; })
     .then(function (d) {
-      var msgs = (d && d.messages) || [];
-      for (var i = 0; i < msgs.length; i++) {
-        if (msgs[i].id != null) seen[msgs[i].id] = 1;
+      var all = (d && d.messages) || [];
+      // relay 给的是从早到晚的全部，这儿只要最后这些。
+      // 别用接口的 limit——那个是从头取，取到的全是旧的。
+      var msgs = all.length > 80 ? all.slice(all.length - 80) : all;
+      // seen 要标全部，不只是画出来的那八十条——
+      // 否则 SSE 把一条旧消息再推一遍时会被当成新的。
+      for (var i = 0; i < all.length; i++) {
+        if (all[i].id != null) seen[all[i].id] = 1;
       }
       return fetch('/chat/api/pending', { credentials: 'same-origin' })
         .then(function (r) { return r.ok ? r.json() : null; })
@@ -684,13 +773,29 @@ const ROOM_SCRIPT = `(function () {
         items.push({ t: 'card', ts: normTs(cards[i].ts), c: cards[i] });
       }
       for (i = 0; i < all.msgs.length; i++) {
-        items.push({ t: 'msg', ts: normTs(all.msgs[i].ts), m: all.msgs[i] });
+        items.push({ t: 'msg', ts: msgTs(all.msgs[i]), m: all.msgs[i] });
       }
       for (i = 0; i < all.pend.length; i++) {
         items.push({
           t: 'pending', ts: normTs(all.pend[i].created_at),
           id: all.pend[i].id, text: all.pend[i].text
         });
+      }
+      // 消息一条时间也没有的话（字段名全没猜对），按 relay 给的原顺序摆在最后——
+      // 它本来就是按时间排的，而卡片都是过去的事。比全排最前强。
+      var maxCard = 0;
+      for (i = 0; i < items.length; i++) {
+        if (items[i].t === 'card' && items[i].ts > maxCard) maxCard = items[i].ts;
+      }
+      var noTs = 0;
+      for (i = 0; i < items.length; i++) {
+        if (items[i].t === 'msg' && !items[i].ts) {
+          items[i].ts = maxCard + 1 + noTs;
+          noTs++;
+        }
+      }
+      if (noTs) {
+        console.warn('chat: ' + noTs + ' 条消息没读到时间，按 relay 原顺序摆在卡片后面');
       }
       items.sort(function (a, b) { return a.ts - b.ts; });
       for (i = 0; i < items.length; i++) paint(items[i]);
@@ -750,6 +855,195 @@ const ROOM_SCRIPT = `(function () {
   });
   document.addEventListener('keydown', function (e) { if (e.key === 'Escape') closeSheet(); });
 
+  // ── 长按菜单：编辑 / 删除 / 复制 ──
+  //
+  // 小满 10-30：「消息长按编辑/删除」。
+  //
+  // 能改能删的只有攒着还没递出去的（组上有 data-pid）。
+  // 已经递出去的只给复制：它进了 relay 的库和他的上文，
+  // 在网页上抹掉只是自己看不见——那是假的删除，比不给更坏。
+  var lpMask = document.createElement('div');
+  lpMask.className = 'lp-mask';
+  document.body.appendChild(lpMask);
+
+  function lpClose() {
+    lpMask.classList.remove('on');
+    lpMask.innerHTML = '';
+  }
+
+  function lpItem(box, label, cls, fn) {
+    var b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'lp-item' + (cls ? ' ' + cls : '');
+    b.textContent = label;
+    if (fn) {
+      b.addEventListener('click', function (ev) {
+        ev.stopPropagation();
+        fn();
+      });
+    }
+    box.appendChild(b);
+  }
+
+  function lpCopy(full) {
+    try {
+      if (navigator.clipboard) navigator.clipboard.writeText(full);
+      else {
+        var ta = document.createElement('textarea');
+        ta.value = full;
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+      }
+      toast('复制好了');
+    } catch (err) {
+      toast('复制没成');
+    }
+    lpClose();
+  }
+
+  function lpDrop(g, pid) {
+    fetch('/chat/api/pending/' + pid + '/drop',
+      { method: 'POST', credentials: 'same-origin' })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (d) {
+        lpClose();
+        if (!d || !d.dropped) return;
+        if (g && g.parentNode) g.parentNode.removeChild(g);
+        pendingN = d.pending;
+        syncBtn();
+      })
+      .catch(function () {
+        lpClose();
+        toast('没删掉');
+      });
+  }
+
+  function lpEdit(g, pid, full) {
+    lpMask.innerHTML = '';
+    var box = document.createElement('div');
+    box.className = 'lp-edit';
+    var ta = document.createElement('textarea');
+    ta.value = full;
+    box.appendChild(ta);
+
+    var row = document.createElement('div');
+    row.className = 'lp-row';
+    var cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.textContent = '不改了';
+    cancel.addEventListener('click', function (ev) {
+      ev.stopPropagation();
+      lpClose();
+    });
+    var save = document.createElement('button');
+    save.type = 'button';
+    save.className = 'main';
+    save.textContent = '存';
+    save.addEventListener('click', function (ev) {
+      ev.stopPropagation();
+      var text = ta.value.trim();
+      if (!text) return;
+      save.disabled = true;
+      var where = g.nextSibling;
+      var parent = g.parentNode;
+      var ts = g.getAttribute('data-ts');
+      fetch('/chat/api/pending/' + pid + '/edit', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ text: text })
+      })
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (d) {
+          lpClose();
+          if (!d || !d.edited) return;
+          // 重画这一组：换行改了的话气泡数量也跟着变
+          if (parent) parent.removeChild(g);
+          var nb = group('human', text, ts ? Number(ts) : Date.now(),
+            { wait: true, pid: pid, read: 'unread' });
+          var moved = nb && nb.closest ? nb.closest('.grp') : null;
+          // group 总把新组接在最后，这儿把它搬回原位
+          if (moved && parent && where && where.parentNode === parent) {
+            parent.insertBefore(moved, where);
+          }
+        })
+        .catch(function () {
+          lpClose();
+          toast('没存上');
+        });
+    });
+    row.appendChild(cancel);
+    row.appendChild(save);
+    box.appendChild(row);
+
+    lpMask.appendChild(box);
+    lpMask.classList.add('on');
+    setTimeout(function () { ta.focus(); }, 60);
+  }
+
+  function lpOpen(g) {
+    var pid = g.getAttribute('data-pid');
+    var full = g.getAttribute('data-full') || '';
+    lpMask.innerHTML = '';
+    var box = document.createElement('div');
+    box.className = 'lp-box';
+    if (pid) {
+      lpItem(box, '编辑', '', function () { lpEdit(g, pid, full); });
+      lpItem(box, '删除', 'danger', function () { lpDrop(g, pid); });
+    } else {
+      lpItem(box, '已经递给他了，改不了', 'off', null);
+    }
+    lpItem(box, '复制', '', function () { lpCopy(full); });
+    lpMask.appendChild(box);
+    lpMask.classList.add('on');
+  }
+
+  lpMask.addEventListener('click', function (e) {
+    if (e.target === lpMask) lpClose();
+  });
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') lpClose();
+  });
+
+  // 长按：按住 460ms、且指头没挪开超过 10px。
+  // 没这两个条件，滚动列表时会误触。
+  var lpTimer = null, lpX = 0, lpY = 0, lpFired = false;
+  stream.addEventListener('pointerdown', function (e) {
+    var g = e.target.closest ? e.target.closest('.grp.me') : null;
+    if (!g) return;
+    lpX = e.clientX;
+    lpY = e.clientY;
+    lpFired = false;
+    clearTimeout(lpTimer);
+    lpTimer = setTimeout(function () {
+      lpFired = true;
+      lpOpen(g);
+    }, 460);
+  });
+  stream.addEventListener('pointermove', function (e) {
+    if (!lpTimer) return;
+    if (Math.abs(e.clientX - lpX) + Math.abs(e.clientY - lpY) > 10) {
+      clearTimeout(lpTimer);
+      lpTimer = null;
+    }
+  });
+  ['pointerup', 'pointercancel', 'pointerleave'].forEach(function (ev) {
+    stream.addEventListener(ev, function () {
+      clearTimeout(lpTimer);
+      lpTimer = null;
+    });
+  });
+  // 长按弹出菜单之后浏览器还会补一次 click，别让它把菜单立刻关掉
+  stream.addEventListener('click', function (e) {
+    if (lpFired) {
+      e.preventDefault();
+      e.stopPropagation();
+      lpFired = false;
+    }
+  }, true);
+
   function doSend() {
     var text = input ? String(input.value || '').trim() : '';
     if (!text) return;
@@ -769,9 +1063,7 @@ const ROOM_SCRIPT = `(function () {
         pendingN = d.pending;
         syncBtn();
         var g = ph && ph.closest ? ph.closest('.grp') : null;
-        if (!g || !d.id) return;
-        var lns = g.querySelectorAll('.ln');
-        if (lns.length) lns[lns.length - 1].appendChild(undoBtn(d.id));
+        if (g && d.id) markPid(g, d.id);
       })
       .catch(function (err) { toast('没存下：' + err.message); });
     syncBtn();
@@ -793,8 +1085,8 @@ const ROOM_SCRIPT = `(function () {
         var joined = [];
         for (var i = 0; i < waiting.length; i++) {
           waiting[i].classList.remove('wait');
-          var x = waiting[i].querySelector('[data-drop]');
-          if (x && x.parentNode) x.parentNode.removeChild(x);
+          // 递出去了就不再是攒着的，长按菜单里的改/删跟着关掉
+          waiting[i].removeAttribute('data-pid');
           var sn = waiting[i].querySelector('.seen');
           if (sn) { sn.textContent = '已读'; sn.classList.remove('unread'); }
           // 认领用整段原文，不是第一句

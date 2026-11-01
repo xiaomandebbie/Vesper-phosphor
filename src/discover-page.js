@@ -45,6 +45,7 @@ function externalUrl(k) {
 
 function spots() {
   const forum = externalUrl('NAV_FORUM_URL');
+  const leto = externalUrl('NAV_LETO_URL');
   const lamp = externalUrl('NAV_LAMP_URL');
   return [
     {
@@ -75,19 +76,20 @@ function spots() {
       href: '/books',
     },
     {
-      name: '\u5c0f\u6e38\u620f',
-      what: '\u4ed6\u81ea\u5df1\u73a9\u7684\u90a3\u51e0\u4e2a\u3002WORKKK \u662f\u8c22\u4e4b\u821f\u5199\u7684\uff0c\u9875\u9762\u8f6c\u53d1\u8fc7\u6765',
-      meta: '\u4e0a\u73ed \u00b7 \u82b1\u56ed',
+      name: '小游戏',
+      what: '他自己玩的那几个。WORKKK 是谢之舟写的，页面转发过来',
+      meta: '上班 · 花园',
       href: workkkEnabled() ? '/games' : '',
-      note: '\u6ca1\u914d WORKKK_PAGE_URL',
+      note: '没配 WORKKK_PAGE_URL',
     },
     {
       name: '\u53f0\u706f',
       what: '\u684c\u4e0a\u90a3\u76cf\u706f\u3002\u4ed6\u80fd\u8c03\u4eae\u5ea6\u548c\u989c\u8272',
       meta: lamp ? '' : '\u5524\u9192\u65f6\u8d70 MCP\uff0c\u9875\u9762\u5165\u53e3\u8981\u586b\u5730\u5740',
-      href: lamp,
-      note: '\u6ca1\u914d NAV_LAMP_URL',
-      external: true,
+      // 台灯服务自带网页，/lamp 已经转发到 127.0.0.1:3003（2026-10-30）
+      href: '/lamp',
+      note: '\u53f0\u706f\u670d\u52a1\u6ca1\u8dd1\u7740',
+      // 台灯是站内页，不走外链（2026-10-30）
     },
     {
       name: '\u5c0f\u9152\u9986',
@@ -120,6 +122,14 @@ function spots() {
       what: '\u4ed6\u81ea\u5df1\u7684\u8d26\uff1a\u4f59\u989d\u3001\u6d41\u6c34\u3001\u8bb0\u7684\u90a3\u51e0\u7b14',
       meta: '',
       href: '/wallet',
+    },
+    {
+      name: 'Leto',
+      what: '\u90a3\u8fb9\u6709\u522b\u4eba\u548c\u522b\u7684 Agent\u3002\u4f60 @ \u4ed6\u3001\u79c1\u804a\u4ed6\uff0c\u4ed6\u4f1a\u88ab\u53eb\u9192',
+      meta: '\u5524\u9192\u6865 \u00b7 \u6700\u591a\u7b49\u4e00\u5206\u949f\u4ed6\u9192',
+      href: leto,
+      note: '\u6ca1\u914d NAV_LETO_URL',
+      external: true,
     },
     {
       name: '\u8bba\u575b',
@@ -160,24 +170,24 @@ function renderList() {
     .join('');
 }
 
-// 和记忆页完全同一套样式（类名也照拄），这样两页看起来是一家的
+// 和记忆页完全同一套样式（类名也照抄），这样两页看起来是一家的
 const STYLE = `
-  :root { --ink: #2b2233; --muted: #665a70; --accent: #7a3e5d; --gold: #b7792f;
-    --card: #fffdfb; --line: #eadfe6; }
+  :root { --ink: #252525; --muted: #5e5e5e; --accent: #4d4d4d; --gold: #818181;
+    --card: #fdfdfd; --line: #e2e2e2; }
   * { box-sizing: border-box; }
   body { margin: 0; min-height: 100vh; color: var(--ink);
     font-family: -apple-system, "PingFang SC", "Helvetica Neue", sans-serif; }
   main { position: relative; z-index: 1; max-width: 600px; margin: 0 auto; padding: 18px 16px 48px; }
   .lib { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; padding: 14px 16px;
     background: var(--card); border: 1px solid var(--line); border-radius: 16px;
-    box-shadow: 0 1px 3px rgba(60, 30, 60, 0.07); color: inherit; text-decoration: none; }
-  .lib:active { background: #faf4f7; }
+    box-shadow: 0 1px 3px rgba(39, 39, 39, 0.07); color: inherit; text-decoration: none; }
+  .lib:active { background: #f5f5f5; }
   .lib.off { opacity: 0.62; }
   .lib-in { flex: 1; min-width: 0; }
   .lib-name { display: block; font-size: 15px; font-weight: 600; color: var(--accent); }
   .lib-what { display: block; margin-top: 4px; font-size: 12px; line-height: 1.6; color: var(--muted); }
   .lib-meta { display: block; margin-top: 5px; font-size: 11px; color: var(--gold); }
-  .lib-note { display: inline-block; margin-top: 6px; font-size: 11px; color: #a597ab;
+  .lib-note { display: inline-block; margin-top: 6px; font-size: 11px; color: #9b9b9b;
     border: 1px solid var(--line); border-radius: 999px; padding: 1px 9px; }
   .lib-go { flex: none; color: var(--gold); font-size: 18px; }
 `;

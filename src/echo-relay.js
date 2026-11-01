@@ -10,44 +10,45 @@
 // Tidal_Echo 原来的壳子把 RELAY_SECRET 存在 localStorage 里，每个请求自己带。
 // 晨暮星是服务端渲染、已经有 Basic Auth，所以这里反过来：
 // 浏览器只打 /chat/api/*（走晨暮星自己的登录），服务端再带着 Bearer 转给 relay。
-// 密钥留在服务器上，一个字也不发给前端。
+// 密钥留在服务器上，一个字也不发给前端。读密钥和打 relay 统一走
+// chat-queue.js，这边不再自己留一份地址和密钥——上一版就是因为两边都有、
+// 改一半漏了一半，vesper 直接起不来。
 //
-// ── 三条 ──
-//   GET  /chat/api/history?limit=  → relay /app/history
-//   GET  /chat/api/stream (SSE)    → relay /app/stream
-//   POST /chat/api/send            → relay /app/send
+// ── 路由 ──
+//   GET  /chat/api/history?limit=   → relay /app/history
+//   GET  /chat/api/stream (SSE)     → relay /app/stream
+//   POST /chat/api/send             → 落本地队列（不立刻惊动他）
+//   POST /chat/api/flush            → 按顺序递给 relay（点「让他读」）
+//   GET  /chat/api/pending          → 还攒着几条（刷页后要重新画出来）
+//   POST /chat/api/pending/:id/drop → 收回还没递出去的那条
 //
 // 读不到 RELAY_SECRET 就整个不挂，/chat 页退回原来的样子（输入框发不出去）。
-import fs from 'fs';
 import { Readable } from 'stream';
-
-const RELAY_URL = String(process.env.ECHO_RELAY_URL || 'http://127.0.0.1:3011').replace(/\/+$/, '');
-const ENV_FILE = process.env.ECHO_RELAY_ENV || '/root/companion-relay/relay.env';
-
-function readSecret() {
-  const direct = String(process.env.ECHO_RELAY_SECRET || '').trim();
-  if (direct) return direct;
-  try {
-    const m = fs.readFileSync(ENV_FILE, 'utf8').match(/^RELAY_SECRET=(.*)$/m);
-    const v = m ? m[1].trim() : '';
-    return v || null;
-  } catch {
-    return null;
-  }
-}
+import {
+  relaySecret,
+  relayBase,
+  relayFetch,
+  addPending,
+  listPending,
+  pendingCount,
+  flushPending,
+  dropPending,
+  editPending,
+} from './chat-queue.js';
 
 export function registerEchoRelay(app, { requireBasicAuth }) {
-  const secret = readSecret();
-  if (!secret) {
-    console.log('echo: 读不到 RELAY_SECRET（' + ENV_FILE + '），聊天没接上');
+  if (!relaySecret()) {
+    console.log('echo: 读不到 RELAY_SECRET，聊天没接上');
     return { enabled: false };
   }
-  const auth = { Authorization: 'Bearer ' + secret };
 
+  // relay 的 /app/history?since=&limit= 是「从 since 往后取 limit 条」——
+  // 从早往晚。传 limit=60 就是取最早的 60 条，消息一超过 60，
+  // 新的全在窗口外——表现出来就是「我的消息被吞掉了」。
+  // 所以这儿不带 limit，让它给全部，前端自己截最后几条。
   app.get('/chat/api/history', requireBasicAuth, async (req, res) => {
-    const limit = Math.min(Number(req.query.limit) || 60, 200);
     try {
-      const r = await fetch(RELAY_URL + '/app/history?limit=' + limit, { headers: auth });
+      const r = await relayFetch('/app/history');
       const text = await r.text();
       res.status(r.status).set('content-type', 'application/json; charset=utf-8').send(text);
     } catch (err) {
@@ -56,28 +57,52 @@ export function registerEchoRelay(app, { requireBasicAuth }) {
     }
   });
 
-  app.post('/chat/api/send', requireBasicAuth, async (req, res) => {
+  // 发出去的话先落本地队列，不立刻惊动他（见 chat-queue.js）。
+  // 小满要的是「可以逐条发，发完再点一次让允朔读；也可以不点，等他下次醒来读」。
+  app.post('/chat/api/send', requireBasicAuth, (req, res) => {
     const text = String(req.body?.text ?? '').trim();
     if (!text) return res.status(400).json({ error: 'text required' });
+    const wid = Number(req.body?.window_id);
     try {
-      const r = await fetch(RELAY_URL + '/app/send', {
-        method: 'POST',
-        headers: { ...auth, 'content-type': 'application/json' },
-        body: JSON.stringify({ text }),
-      });
-      const body = await r.text();
-      res.status(r.status).set('content-type', 'application/json; charset=utf-8').send(body);
+      const id = addPending(text, Number.isInteger(wid) ? wid : null);
+      return res.json({ id, pending: pendingCount() });
     } catch (err) {
-      console.error('echo: 发消息失败', err.message);
-      res.status(502).json({ error: 'relay unreachable' });
+      console.error('echo: 存不下这条话', err.message);
+      return res.status(500).json({ error: 'queue failed' });
     }
+  });
+
+  // 点「让他读」：按顺序递给 relay，他当场回。
+  app.post('/chat/api/flush', requireBasicAuth, async (req, res) => {
+    try {
+      res.json(await flushPending());
+    } catch (err) {
+      console.error('echo: 递攒着的话失败', err.message);
+      res.status(502).json({ error: err.message });
+    }
+  });
+
+  app.get('/chat/api/pending', requireBasicAuth, (req, res) => {
+    res.json({ pending: listPending() });
+  });
+
+  // 攒着的还能改正文。已经递出去的改不了——chat-queue 那边带了 sent = 0。
+  app.post('/chat/api/pending/:id/edit', requireBasicAuth, (req, res) => {
+    const text = String(req.body?.text ?? '').trim();
+    if (!text) return res.status(400).json({ error: 'text required' });
+    const ok = editPending(Number(req.params.id), text);
+    res.json({ edited: ok });
+  });
+
+  app.post('/chat/api/pending/:id/drop', requireBasicAuth, (req, res) => {
+    res.json({ dropped: dropPending(Number(req.params.id)), pending: pendingCount() });
   });
 
   // SSE：原样转发、不缓冲。浏览器那边断了要把上游也断掉，否则连接会一直攒着。
   app.get('/chat/api/stream', requireBasicAuth, async (req, res) => {
     let upstream;
     try {
-      upstream = await fetch(RELAY_URL + '/app/stream', { headers: auth });
+      upstream = await relayFetch('/app/stream');
     } catch (err) {
       console.error('echo: SSE 连不上', err.message);
       return res.status(502).end();
@@ -95,6 +120,6 @@ export function registerEchoRelay(app, { requireBasicAuth }) {
     req.on('close', () => body.destroy());
   });
 
-  console.log('echo: 聊天接上 relay（' + RELAY_URL + '），密钥留在服务端');
+  console.log('echo: 聊天接上 relay（' + relayBase() + '），密钥留在服务端；发出去先攒着');
   return { enabled: true };
 }

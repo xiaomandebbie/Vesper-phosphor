@@ -25,27 +25,43 @@ import { registerBooksMcp } from './books-mcp.js';
 import { registerBarMcp } from './bar-mcp.js';
 import { registerMemoryProxy } from './memory-proxy.js';
 import { registerMusicProxy } from './music-proxy.js';
+import { registerLightProxy } from './light-proxy.js';
 import { registerShellRoutes } from './shell.js';
 import { registerSparkles } from './sparkles.js';
 import { registerAppIconRoutes } from './app-icon.js';
 import { renderLoginPage } from './login-page.js';
+import { registerSessionLogin } from './session-login.js';
 import { registerWalletRoutes } from './wallet.js';
 import { registerWalletMcp } from './wallet-mcp.js';
 import { registerWakeMcp } from './wake-mcp.js';
 import { registerGameRoutes } from './game-page.js';
+import { registerMemoriesRoutes } from './memories-page.js';
+import { registerDiscoverRoutes } from './discover-page.js';
+import { registerMeRoutes } from './me-page.js';
+import { registerEchoRelay } from './echo-relay.js';
+import { registerChatRoutes } from './chat-page.js';
 
 const app = express();
 // 点击星星（见 sparkles.js）：最先挂，转发来的记忆库、音乐页面和我们自己的页面都能加上
 registerSparkles(app);
-// 项目自带的静态文件（public/）：加载页和转场的动效就在 public/motion 下。
-// 挂在最前面、不走 requireBasicAuth —— 登录页自己也要用这些素材，挡住就白屏了。
-// 之前漏了这一行，于是 /motion/load.webm 一直是 Cannot GET，
-// 而外壳那层遮罩等着视频，视频永远不来，整个 /app 就白着。
+// 项目自带的静态文件（public/）：加载页和转场的动效在 public/motion 下。
+// 不走 requireBasicAuth —— 登录页自己也要用这些素材。
 app.use(express.static(path.join(process.cwd(), 'public'), { maxAge: '7d' }));
+// Cookie 会话登录（见 session-login.js）：把浏览器那个密码弹窗换成网页表单。
+// 要挂在记忆库、音乐转发和所有页面路由前面——它认到 cookie 就替请求补上
+// Authorization 头，下游 requireBasicAuth 一行不用改。
+registerSessionLogin(app);
 // 记忆库 /memory/ 是把 Ombre Brain 的管理页转发过来（见 memory-proxy.js），要原样拿到请求体，
 // 所以必须挂在下面的 body 解析之前。音乐 /music/ 同理（见 music-proxy.js）
 const memoryProxy = registerMemoryProxy(app, { requireBasicAuth });
 const musicProxy = registerMusicProxy(app, { requireBasicAuth });
+// 台灯页 /lamp（见 light-proxy.js）：把本机 3003 那个台灯服务的页面转发过来。
+// 和记忆库、音乐同一类，所以挂在同一位置：要拿到原始请求体，
+// 必须在下面的 express.json() 之前。
+//
+// 2026-10-30：这行被 git pull 的合并冲掉过一次，表现是 /lamp 返回 404。
+// 发现页、个人页当时也是同一个原因丢的。
+const lightProxy = registerLightProxy(app, { requireBasicAuth });
 // 书架 API 要收整份正文，比这儿的上限大得多，由 books-page.js 自己挂解析器。
 // 这里先跳过，否则请求体被这个 100kb/1mb 的解析器先吃掉 → 413。
 // 标记：books:skip-global-json
@@ -244,6 +260,21 @@ const wakeMcp = registerWakeMcp(app);
 // 第一个是 WORKKK——不是我们写的（谢之舟 / zhizhou-xiee，AGPL），页面是转发过来的，
 // 署名照它的许可条款留在页面里。没配 WORKKK_PAGE_URL 时列表页会说明怎么装。
 const games = registerGameRoutes(app, { requireBasicAuth });
+// 记忆页 /memories（见 memories-page.js）：他的几个记忆库摆在一起。
+// 小满：「记忆我可能会装很多个库所以先把 ombre brain 作为其中的一条」。
+// 这一页是列表，不是把 Ombre 开在这儿——那个是 /memory/ 转发。
+registerMemoriesRoutes(app, { requireBasicAuth });
+// 发现页 /discover（见 discover-page.js）：动态、音乐、梦境、共读、台灯这些入口。
+// 没配好的不藏起来，置灰并写明要填哪个变量。
+registerDiscoverRoutes(app, { requireBasicAuth });
+// 个人页 /me（见 me-page.js）：后台日志、自定义、收藏、唤醒节律、退出登录。
+// 里面那个 POST /logout 表单由 session-login.js 接（cookie 会话）。
+registerMeRoutes(app, { requireBasicAuth });
+// 聊天接 relay（见 echo-relay.js）：/chat/api/history | stream | send。
+// 要挂在 /chat 页面路由之前：那边有 /chat/:id 和 /chat，得先把 api 那三条接走。
+const echo = registerEchoRelay(app, { requireBasicAuth });
+// 聊天两层 /chat（见 chat-page.js）。以前这行没挂上，所以那一页进不去。
+registerChatRoutes(app, { requireBasicAuth });
 
 // 共读书架 /books（见 books-page.js）：托的是 NEST 书架 UI，接我们自己的后端。
 // 它要发前端目录里的静态文件，但那个模块不直接 import express，所以把 static 从这儿交过去。

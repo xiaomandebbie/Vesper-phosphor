@@ -159,30 +159,30 @@ const VOICE_SCRIPT = `(function () {
 })();`;
 
 const STYLE = `
-  :root { --ink: #2b2233; --muted: #665a70; --accent: #7a3e5d; --gold: #b7792f; --card: #fffdfb; --line: #eadfe6;
-    --bg1: #efe7f4; --bg2: #f9f0ee; --bg3: #fdf8f2;
-    --t1: #463a7c; --t2: #9b4a7a; --t3: #c4832f;
-    --voice: #f8d7e3; --voice-press: #f1c1d3; --card-soft: #f3eef2; }
+  :root { --ink: #252525; --muted: #5e5e5e; --accent: #4d4d4d; --gold: #818181; --card: #fdfdfd; --line: #e2e2e2;
+    --bg1: #eaeaea; --bg2: #f2f2f2; --bg3: #f9f9f9;
+    --t1: #414141; --t2: #5f5f5f; --t3: #8b8b8b;
+    --voice: #dfdfdf; --voice-press: #cdcdcd; --card-soft: #efefef; }
   * { box-sizing: border-box; }
   body { margin: 0; min-height: 100vh; color: var(--ink);
     font-family: -apple-system, "PingFang SC", "Helvetica Neue", sans-serif;
     background: linear-gradient(180deg, var(--bg1) 0%, var(--bg2) 55%, var(--bg3) 100%); }
   main { max-width: 600px; margin: 0 auto; padding: 28px 16px 48px; }
   .hero { text-align: center; margin: 10px 0 20px; }
-  .title { margin: 0; font-size: 28px; font-weight: 700; letter-spacing: 0.2em; padding-left: 0.2em; color: #5b2e52; }
+  .title { margin: 0; font-size: 28px; font-weight: 700; letter-spacing: 0.2em; padding-left: 0.2em; color: #3a3a3a; }
   .subtitle { margin: 6px 0 0; font-size: 13px; letter-spacing: 0.16em; color: var(--muted); }
   .back-link { display: inline-flex; align-items: center; gap: 4px; min-height: 44px;
     color: var(--accent); text-decoration: none; font-size: 14px; }
   .moment { background: var(--card); border-radius: 12px; padding: 14px 16px; margin-bottom: 12px;
-    box-shadow: 0 1px 3px rgba(60, 30, 60, 0.08);
+    box-shadow: 0 1px 3px rgba(39, 39, 39, 0.08);
     display: grid; grid-template-columns: 44px minmax(0, 1fr); column-gap: 12px; align-items: start; }
   .avatar { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; overflow: hidden;
     width: 44px; height: 44px; font-size: 18px; object-fit: cover; border-radius: 10px;
-    color: #fff; font-weight: 600; line-height: 1; }
+    color: #ffffff; font-weight: 600; line-height: 1; }
   /* TA 粉色，你黄色 —— 和动态页一致 */
-  .avatar-ta { background: linear-gradient(135deg, #d77aa2, #b35a83); }
-  .avatar-user { background: linear-gradient(135deg, #e0a646, #c0801f); }
-  img.avatar { background: #f3e9ef; }
+  .avatar-ta { background: linear-gradient(135deg, #919191, #707070); }
+  .avatar-user { background: linear-gradient(135deg, #ababab, #878787); }
+  img.avatar { background: #ececec; }
   .moment-main { min-width: 0; }
   .moment-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 2px 8px; margin-bottom: 4px; }
   .moment-name { font-size: 15px; font-weight: 600; color: var(--accent); }
@@ -238,7 +238,7 @@ const STYLE = `
   .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 
   /* 深底时语音条的文字要跟着浅下来，不然淡粉气泡上的深玕红图标认不出来 */
-  html[data-dark] .voice-bar { color: #7a3e5d; }
+  html[data-dark] .voice-bar { color: #4d4d4d; }
   html[data-dark] .unfav { color: var(--fav, var(--gold)); }
   html[data-dark] .comments { background: var(--card-soft); }
 `;

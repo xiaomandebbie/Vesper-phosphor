@@ -39,7 +39,7 @@ export const PAGE_TITLE_CSS = `
   .sparkles { margin: 0 0 4px; height: 18px; color: var(--gold); font-size: 14px;
     letter-spacing: 0.6em; padding-left: 0.6em; }
   .sparkles span { display: inline-block; animation: twinkle 3.2s ease-in-out infinite; }
-  .sparkles span:nth-child(2) { animation-delay: 1s; color: #d7799f; }
+  .sparkles span:nth-child(2) { animation-delay: 1s; color: #909090; }
   .sparkles span:nth-child(3) { animation-delay: 2s; }
   @keyframes twinkle {
     0%, 100% { opacity: 0.35; transform: scale(0.85); }

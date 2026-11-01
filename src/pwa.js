@@ -150,34 +150,34 @@ function loginPage({ error = '', next = START_URL } = {}) {
 <link rel="manifest" href="/app/manifest.webmanifest" />
 <link rel="apple-touch-icon" href="/app/icon.png" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
-<meta name="apple-mobile-web-app-status-bar-style" content="default" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
 <meta name="apple-mobile-web-app-title" content="${escapeHtml(APP_SHORT)}" />
-<meta name="theme-color" content="#f9f0ee" />
+<meta name="theme-color" content="#f2f2f2" />
 <style>
   * { box-sizing: border-box; }
   body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
-    padding: 24px 16px; color: #2b2233;
+    padding: 24px 16px; color: #252525;
     font-family: -apple-system, "PingFang SC", "Helvetica Neue", sans-serif;
-    background: linear-gradient(180deg, #efe7f4 0%, #f9f0ee 55%, #fdf8f2 100%); }
+    background: linear-gradient(180deg, #eaeaea 0%, #f2f2f2 55%, #f9f9f9 100%); }
   /* 边框图做背景，它自带透明通道，所以清底会透出渐变 */
   .frame { position: relative; width: 100%; max-width: 460px; aspect-ratio: 1619 / 971;
     background: url('/app/frame.png') center/contain no-repeat; }
   .inner { position: absolute; inset: 17% 13% 15%; display: flex; flex-direction: column;
     align-items: center; justify-content: center; gap: 12px; text-align: center; }
   h1 { margin: 0; font-size: 21px; font-weight: 200; letter-spacing: 0.3em; padding-left: 0.3em;
-    color: #5b2e52; }
+    color: #3a3a3a; }
   .sub { margin: 0; font-family: "Cormorant Garamond", Georgia, serif; font-style: italic;
-    font-size: 12px; letter-spacing: 0.16em; color: #7a6a80; }
+    font-size: 12px; letter-spacing: 0.16em; color: #6f6f6f; }
   .hint, .err { margin: 0; font-size: 12px; line-height: 1.5; }
-  .hint { color: #8a7d90; }
-  .err { color: #a8415f; }
+  .hint { color: #818181; }
+  .err { color: #595959; }
   form { display: flex; flex-direction: column; gap: 8px; width: 100%; max-width: 230px; }
   input { width: 100%; height: 40px; padding: 0 12px; border-radius: 11px;
-    border: 1px solid #e3d2de; background: rgba(255, 253, 251, 0.9); font-size: 16px; color: #2b2233; }
-  input:focus { outline: 2px solid #c58da8; outline-offset: 1px; }
-  button { height: 40px; border: none; border-radius: 11px; background: #7a3e5d; color: #fffdfb;
+    border: 1px solid #d6d6d6; background: rgba(253, 253, 253, 0.9); font-size: 16px; color: #252525; }
+  input:focus { outline: 2px solid #9b9b9b; outline-offset: 1px; }
+  button { height: 40px; border: none; border-radius: 11px; background: #4d4d4d; color: #fdfdfd;
     font-size: 15px; font-weight: 600; letter-spacing: 0.08em; }
-  button:active { background: #693350; }
+  button:active { background: #414141; }
   @media (max-width: 380px) {
     .inner { inset: 15% 11% 13%; gap: 8px; }
     h1 { font-size: 18px; }
@@ -230,8 +230,8 @@ function manifest() {
     scope: '/',
     display: 'standalone',
     orientation: 'portrait',
-    background_color: '#f9f0ee',
-    theme_color: '#f9f0ee',
+    background_color: '#f2f2f2',
+    theme_color: '#f2f2f2',
     lang: 'zh-Hans',
     icons: [icon('192x192'), icon('512x512'), icon('941x941')],
   };
@@ -275,9 +275,9 @@ export const PWA_SCRIPT = `if ('serviceWorker' in navigator && location.protocol
 export const PWA_HEAD = `<link rel="manifest" href="/app/manifest.webmanifest" />
 <link rel="apple-touch-icon" href="/app/icon.png" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
-<meta name="apple-mobile-web-app-status-bar-style" content="default" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
 <meta name="apple-mobile-web-app-title" content="${APP_SHORT}" />
-<meta name="theme-color" content="#f9f0ee" />`;
+<meta name="theme-color" content="#f2f2f2" />`;
 
 // ── 挂载 ──
 // 要在 requireBasicAuth 之前挂：登录页和那两张图必须没登录也能看。

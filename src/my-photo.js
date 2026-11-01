@@ -89,7 +89,7 @@ export const PHOTO_SCRIPT = `(function () {
     c.width = cw;
     c.height = ch;
     var ctx = c.getContext('2d');
-    ctx.fillStyle = '#fff';
+    ctx.fillStyle = '#ffffff';
     ctx.fillRect(0, 0, cw, ch);
     ctx.drawImage(src, 0, 0, cw, ch);
     return c.toDataURL('image/jpeg', quality);
@@ -172,7 +172,7 @@ export const PHOTO_CSS = `
   .mine-photo { margin-top: 8px; }
   html:not(.js) .js-only { display: none; }
   .mine-photo-btn { display: inline-flex; align-items: center; gap: 5px; min-height: 36px; padding: 0 12px;
-    background: var(--card-soft, #f3eef2); border: 1px solid var(--line); border-radius: 10px;
+    background: var(--card-soft, #efefef); border: 1px solid var(--line); border-radius: 10px;
     color: var(--accent); font-size: 13px; cursor: pointer; }
   .mine-photo-btn:active { transform: scale(.98); }
   .mine-photo-preview { position: relative; display: inline-block; margin-top: 8px; }
@@ -182,7 +182,7 @@ export const PHOTO_CSS = `
     display: flex; align-items: center; justify-content: center;
     background: var(--card); color: var(--muted); border: 1px solid var(--line);
     border-radius: 50%; font-size: 15px; line-height: 1; cursor: pointer;
-    box-shadow: 0 1px 4px rgba(60, 30, 60, .18); }
+    box-shadow: 0 1px 4px rgba(39, 39, 39, .18); }
   .mine-photo-note { margin: 6px 0 0; font-size: 12px; color: var(--muted); }
   .mine-photo-note.bad { color: var(--accent); }
 `;

@@ -439,40 +439,40 @@ function escapeHtml(value) {
 // 浅底配浅字就糊成一片。跟着 sun-time.js 那套 html[data-dark] 走（动态页的白卡片、
 // 浅黄批注底都是这么处理的），别在这儿自己又写死一套深色。
 const STYLE = `
-  :root { --ink: #2b2233; --muted: #665a70; --accent: #7a3e5d; --gold: #b7792f; --card: #fffdfb; --line: #eadfe6;
-    --in: #2f7d5a; --out: #a8445c; }
+  :root { --ink: #252525; --muted: #5e5e5e; --accent: #4d4d4d; --gold: #818181; --card: #fdfdfd; --line: #e2e2e2;
+    --in: #6a6a6a; --out: #5b5b5b; }
   * { box-sizing: border-box; }
   body { margin: 0; min-height: 100vh; color: var(--ink); font-family: -apple-system, "PingFang SC", "Helvetica Neue", sans-serif;
-    background: linear-gradient(180deg, #efe7f4 0%, #f9f0ee 55%, #fdf8f2 100%); }
+    background: linear-gradient(180deg, #eaeaea 0%, #f2f2f2 55%, #f9f9f9 100%); }
   /* 背景里零星的小星星，粉的黄的 */
   body::before { content: ''; position: fixed; inset: 0; pointer-events: none; z-index: 0;
     background-image:
-      radial-gradient(1.5px 1.5px at 12% 18%, rgba(230, 182, 82, 0.9) 50%, transparent 51%),
-      radial-gradient(1px 1px at 78% 9%, rgba(215, 121, 159, 0.8) 50%, transparent 51%),
-      radial-gradient(2px 2px at 88% 36%, rgba(230, 182, 82, 0.7) 50%, transparent 51%),
-      radial-gradient(1px 1px at 30% 62%, rgba(215, 121, 159, 0.7) 50%, transparent 51%),
-      radial-gradient(1.5px 1.5px at 64% 78%, rgba(230, 182, 82, 0.8) 50%, transparent 51%),
-      radial-gradient(1px 1px at 8% 88%, rgba(155, 74, 122, 0.6) 50%, transparent 51%),
-      radial-gradient(1.5px 1.5px at 50% 30%, rgba(215, 121, 159, 0.6) 50%, transparent 51%),
-      radial-gradient(1px 1px at 94% 70%, rgba(230, 182, 82, 0.8) 50%, transparent 51%); }
+      radial-gradient(1.5px 1.5px at 12% 18%, rgba(185, 185, 185, 0.9) 50%, transparent 51%),
+      radial-gradient(1px 1px at 78% 9%, rgba(144, 144, 144, 0.8) 50%, transparent 51%),
+      radial-gradient(2px 2px at 88% 36%, rgba(185, 185, 185, 0.7) 50%, transparent 51%),
+      radial-gradient(1px 1px at 30% 62%, rgba(144, 144, 144, 0.7) 50%, transparent 51%),
+      radial-gradient(1.5px 1.5px at 64% 78%, rgba(185, 185, 185, 0.8) 50%, transparent 51%),
+      radial-gradient(1px 1px at 8% 88%, rgba(95, 95, 95, 0.6) 50%, transparent 51%),
+      radial-gradient(1.5px 1.5px at 50% 30%, rgba(144, 144, 144, 0.6) 50%, transparent 51%),
+      radial-gradient(1px 1px at 94% 70%, rgba(185, 185, 185, 0.8) 50%, transparent 51%); }
   main { position: relative; z-index: 1; max-width: 600px; margin: 0 auto; padding: 22px 16px 48px; }
   .hero { text-align: center; margin: 6px 0 20px; }
   .sparkles { margin: 0 0 4px; height: 18px; color: var(--gold); font-size: 14px; letter-spacing: 0.6em; padding-left: 0.6em; }
   .sparkles span { display: inline-block; animation: twinkle 3.2s ease-in-out infinite; }
-  .sparkles span:nth-child(2) { animation-delay: 1s; color: #d7799f; }
+  .sparkles span:nth-child(2) { animation-delay: 1s; color: #909090; }
   .sparkles span:nth-child(3) { animation-delay: 2s; }
   @keyframes twinkle { 0%, 100% { opacity: 0.35; transform: scale(0.85); } 50% { opacity: 1; transform: scale(1.1); } }
   @media (prefers-reduced-motion: reduce) { .sparkles span { animation: none; opacity: 0.8; } }
   .title { margin: 0; font-family: "Songti SC", "STSong", "Noto Serif SC", serif; font-size: 42px; font-weight: 700;
-    letter-spacing: 0.35em; padding-left: 0.35em; color: #5b2e52; }
+    letter-spacing: 0.35em; padding-left: 0.35em; color: #3a3a3a; }
   @supports ((-webkit-background-clip: text) or (background-clip: text)) {
-    .title { background: linear-gradient(100deg, #463a7c 0%, #9b4a7a 52%, #c4832f 100%);
+    .title { background: linear-gradient(100deg, #414141 0%, #5f5f5f 52%, #8b8b8b 100%);
       -webkit-background-clip: text; background-clip: text; color: transparent; }
   }
   .subtitle { margin: 6px 0 0; font-family: "Cormorant Garamond", "Didot", Georgia, serif; font-style: italic;
     font-size: 14px; letter-spacing: 0.2em; color: var(--muted); }
   .card { background: var(--card); border-radius: 16px; padding: 16px; margin-bottom: 14px;
-    box-shadow: 0 1px 3px rgba(60, 30, 60, 0.08); }
+    box-shadow: 0 1px 3px rgba(39, 39, 39, 0.08); }
   .section-title { font-size: 15px; margin: 0 0 10px; color: var(--accent); letter-spacing: 0.1em; }
   /* 余额卡：一大行数，左边一道暖黄，右下角一颗星 */
   .bal-card { position: relative; text-align: center; padding: 24px 16px 20px; border-left: 4px solid var(--gold); }
@@ -483,11 +483,11 @@ const STYLE = `
   .bal.neg { color: var(--out); }
   .bal-note { margin: 8px 0 0; font-size: 12px; color: var(--muted); }
   /* 银行报的可用余额：对得上时淡淡一行，对不上时换暖黄底提醒 */
-  .bank { margin: 12px -4px 0; padding: 9px 12px; border-radius: 10px; background: #f6eef3; font-size: 12px; line-height: 1.6;
+  .bank { margin: 12px -4px 0; padding: 9px 12px; border-radius: 10px; background: #f0f0f0; font-size: 12px; line-height: 1.6;
     color: var(--muted); }
   .bank b { font-weight: 600; color: var(--ink); font-variant-numeric: tabular-nums; }
   .bank code { font-size: 11px; background: rgba(0, 0, 0, 0.05); padding: 1px 4px; border-radius: 4px; }
-  .bank.off { background: #fff6e3; color: #6b4513; border: 1px solid #f0d9a6; }
+  .bank.off { background: #f7f7f7; color: #494949; border: 1px solid #dadada; }
   /* 按日历分组：每天一个小标题，右边是当天合计 */
   .day { margin: 18px 0 8px; display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
   .day:first-of-type { margin-top: 4px; }
@@ -500,9 +500,9 @@ const STYLE = `
     padding: 11px 0; border-bottom: 1px solid var(--line); }
   .row:last-child { border-bottom: none; }
   .row-t { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
-  .row-k { font-size: 11px; padding: 2px 8px; border-radius: 999px; background: #f6eef3; color: var(--accent); }
-  .row-k.k-earn, .row-k.k-topup { background: #e8f3ec; color: var(--in); }
-  .row-k.k-adjust { background: #fff6e3; color: #6b4513; }
+  .row-k { font-size: 11px; padding: 2px 8px; border-radius: 999px; background: #f0f0f0; color: var(--accent); }
+  .row-k.k-earn, .row-k.k-topup { background: #f0f0f0; color: var(--in); }
+  .row-k.k-adjust { background: #f7f7f7; color: #494949; }
   .row-s { font-size: 14px; }
   .row-a { font-family: Georgia, "Times New Roman", serif; font-size: 17px; font-weight: 700;
     font-variant-numeric: tabular-nums; text-align: right; }
@@ -532,29 +532,29 @@ const STYLE = `
   .add summary:hover { text-decoration: underline; }
   .add form { display: flex; gap: 8px; align-items: flex-end; margin-top: 6px; }
   .add textarea { flex: 1; min-height: 52px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px;
-    font: inherit; font-size: 14px; background: #fff; color: var(--ink); resize: vertical; }
-  .add button { padding: 9px 14px; border: none; border-radius: 10px; background: var(--accent); color: #fff;
+    font: inherit; font-size: 14px; background: #ffffff; color: var(--ink); resize: vertical; }
+  .add button { padding: 9px 14px; border: none; border-radius: 10px; background: var(--accent); color: #ffffff;
     font: inherit; font-size: 14px; cursor: pointer; }
-  .add button:hover { background: #8d4a6b; }
+  .add button:hover { background: #5b5b5b; }
   .empty { font-size: 14px; line-height: 1.6; color: var(--muted); }
-  .empty code { font-size: 12px; background: #f6eef3; padding: 1px 5px; border-radius: 4px; }
+  .empty code { font-size: 12px; background: #f0f0f0; padding: 1px 5px; border-radius: 4px; }
 
   /* ── 底色暗下来的时候 ──────────────────────────────────────────
-     上面那些写死的浅底（#f6eef3 浅紫、#fff6e3 浅黄、输入框的白）在夜里会变成
+     上面那些写死的浅底（#f0f0f0 浅紫、#f7f7f7 浅黄、输入框的白）在夜里会变成
      浅底浅字，糊得看不清。这整段排得比它们晚、而且多一层 html[data-dark]，盖得住。
      颜色全走 sun-time.js 那套变量，不自己再编一组。 */
-  html[data-dark] .bank { background: var(--card-soft, #44355c); color: var(--muted); }
+  html[data-dark] .bank { background: var(--card-soft, #3b3b3b); color: var(--muted); }
   html[data-dark] .bank b { color: var(--ink); }
   html[data-dark] .bank code { background: rgba(255, 255, 255, 0.12); }
-  html[data-dark] .bank.off { background: var(--detail-bg, #483860); color: var(--gold); border-color: var(--line); }
-  html[data-dark] .row-k { background: var(--card-soft, #44355c); color: var(--accent); }
+  html[data-dark] .bank.off { background: var(--detail-bg, #3e3e3e); color: var(--gold); border-color: var(--line); }
+  html[data-dark] .row-k { background: var(--card-soft, #3b3b3b); color: var(--accent); }
   html[data-dark] .row-k.k-earn, html[data-dark] .row-k.k-topup {
-    background: var(--card-soft, #44355c); color: var(--in); }
-  html[data-dark] .row-k.k-adjust { background: var(--detail-bg, #483860); color: var(--gold); }
-  html[data-dark] .add textarea { background: var(--card-soft, #44355c); color: var(--ink); border-color: var(--line); }
-  html[data-dark] .empty code { background: var(--card-soft, #44355c); }
+    background: var(--card-soft, #3b3b3b); color: var(--in); }
+  html[data-dark] .row-k.k-adjust { background: var(--detail-bg, #3e3e3e); color: var(--gold); }
+  html[data-dark] .add textarea { background: var(--card-soft, #3b3b3b); color: var(--ink); border-color: var(--line); }
+  html[data-dark] .empty code { background: var(--card-soft, #3b3b3b); }
   /* 深紫底上那两个深绿深红太暗（对比度只有 2 点几），各提亮一档 */
-  html[data-dark] { --in: #7fd4a8; --out: #f2a0b6; }
+  html[data-dark] { --in: #bfbfbf; --out: #b3b3b3; }
 
   @media (max-width: 380px) {
     .bal { font-size: 38px; }

@@ -115,6 +115,106 @@ write_code、debug、slack_off、buy_coffee、attend_meeting、check_messages、
   };
 }
 
+// 下班之后那一趟便利店（2026-10-24）。
+//
+// 为什么得单开一段：结算之后再走 work_action 就是游戏里的第二天（见下面那条边界），
+// 而 shop_buy 是另一个工具，不推进度、不开新的一天，只扣 salary_balance。
+// 所以这一段只放 shop_buy，work_action 一概不接。
+//
+// 不查余额：get_status 是 work_action，下班后调它就越线了。结算那段文本自带工资和余额，
+// 直接给他看；钱不够就让商店报错，那也是他该知道的事。
+const SHOP_ITEMS = new Set([
+  'coffee', 'cheat', 'liver_pill', 'headphone', 'leave', 'ring', 'rose', 'lottery',
+  'nuwa_clay', 'oden', 'chips', 'milk_tea', 'love_book', 'fish_jerky', 'postcard',
+]);
+
+// 这两样要选送她还是自留；不填 choice 商店只回选项提示、不扣钱
+const SHOP_NEEDS_CHOICE = new Set(['milk_tea', 'rose']);
+
+// 下班后最多逛几样。.env 的 WORKKK_SHOP_MAX 可改，不填是 2，上限 5。
+const WORKKK_SHOP_MAX = (() => {
+  const raw = String(process.env.WORKKK_SHOP_MAX ?? '').trim();
+  const n = Number(raw);
+  return raw && Number.isInteger(n) && n >= 0 ? Math.min(n, 5) : 2;
+})();
+
+// 货架那段话写死，不随次数变，省得每次重新拼
+const SHOP_SHELF = [
+  '货架上有：coffee（咖啡）、chips（薯片）、oden（关东煮）、fish_jerky（鱼干）、',
+  'milk_tea（奶茶）、rose（玫瑰）、ring（戒指）、postcard（明信片）、love_book（恋爱书）、',
+  'headphone（耳机）、liver_pill（护肝片）、leave（假条）、lottery（彩票）、cheat（外挂）、nuwa_clay（女娲土）。',
+  '',
+  '奶茶和玫瑰要多给一个 choice："gift" 送给她（她那边会弹一张卡片），或者 "self" 自留。',
+  '买 postcard 的话，message 里自己写一句想对她说的话（50 字以内，要你自己写的）。',
+  '',
+  '钱不够就买不成，没关系。也不必为了买而买——今天没想要的就给 null。',
+  '只返回一个 JSON 对象，不要任何其他文字：',
+  '{"item_id": "商品id" 或 null, "choice": "gift或self（只有奶茶和玫瑰要）", "message": "买明信片时写的那句话"}',
+].join('\n');
+
+async function shoppingPhase(convo, settleText) {
+  if (!WORKKK_SHOP_MAX || !convo) return;
+  let messages = convo;
+  let last = settleText;
+
+  for (let i = 0; i < WORKKK_SHOP_MAX; i++) {
+    const head = `下班了，工资结算完了：\n${clip(last, RESULT_MAX_CHARS)}`;
+    const tail = `回家路上过便利店。今天还能逛 ${WORKKK_SHOP_MAX - i} 样，不想买就给 null。`;
+    const prompt = `${head}\n\n${tail}\n\n${SHOP_SHELF}`;
+
+    let parsed;
+    try {
+      const asked = await askJson([...messages, { role: 'user', content: prompt }]);
+      parsed = asked.parsed;
+      messages = [
+        ...messages,
+        { role: 'user', content: prompt },
+        { role: 'assistant', content: asked.content },
+      ];
+    } catch (err) {
+      console.error('workkk: 问要不要买东西失败，这趟店不进了', err.message);
+      return;
+    }
+
+    const item = typeof parsed?.item_id === 'string' ? parsed.item_id.trim() : '';
+    if (!item) {
+      console.log('workkk: 他说不买，直接回家');
+      return;
+    }
+    if (!SHOP_ITEMS.has(item)) {
+      console.log(`workkk: 货架上没这个（${item}），不买了`);
+      return;
+    }
+
+    const args = { item_id: item };
+    const choice = typeof parsed?.choice === 'string' ? parsed.choice.trim() : '';
+    // 奶茶和玫瑰不填 choice 的话商店只回选项提示、不扣钱，等于白跑一趟；
+    // 他没说的时候默认送她——这两样本来就是为送人准备的
+    if (SHOP_NEEDS_CHOICE.has(item)) args.choice = choice === 'self' ? 'self' : 'gift';
+    else if (choice === 'gift' || choice === 'self') args.choice = choice;
+    if (item === 'postcard') {
+      const msg = typeof parsed?.message === 'string' ? parsed.message.trim() : '';
+      if (msg) args.message = msg.slice(0, 50);
+    }
+
+    let result = null;
+    try {
+      result = await callTool('workkk', 'shop_buy', args);
+    } catch (err) {
+      console.error(`workkk: 买 ${item} 失败`, err.message);
+      return;
+    }
+
+    card('shop_buy', args, result);
+    last = toolText(result);
+    console.log(`workkk: 买了 ${item}${args.choice ? `（${args.choice}）` : ''}`);
+    if (isErr(result)) {
+      console.log('workkk: 这样没买成（估计是钱不够），不再逛了');
+      return;
+    }
+  }
+  console.log('workkk: 便利店逛完了，回家');
+}
 // 醒来选的是上班时，把工牌交还给他，一直走到下班。
 // 开头就不是 work_action（比如直接 shop_buy 去买东西）就不续：
 // 那不是上班，没有「走到下班」这回事。
@@ -132,6 +232,7 @@ export async function continueWorkkk(decision, firstResult, messages) {
 
   if (offWork(firstText)) {
     console.log('workkk: 第一步就到点了，下班');
+    await shoppingPhase(messages, firstText);
     return;
   }
 
@@ -186,6 +287,7 @@ export async function continueWorkkk(decision, firstResult, messages) {
     // 下班结算了就立即收手。再走一步就是游戏里的第二天了
     if (offWork(lastText)) {
       console.log(`workkk: 下班了，这一天一共走了 ${count} 步`);
+      await shoppingPhase(convo, lastText);
       return;
     }
   }

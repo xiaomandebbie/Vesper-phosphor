@@ -19,9 +19,9 @@ const SPARKLE_SCRIPT = `(function () {
   var reduce = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
   var layer = null, alive = 0, MAX = 48;
   var PALETTE = {
-    burst: [['#ffd45c', 'rgba(255,212,92,.75)'], ['#f6c46a', 'rgba(246,196,106,.65)'], ['#fff1b8', 'rgba(255,230,150,.75)']],
-    twinkle: [['#ffd45c', 'rgba(255,212,92,.8)']],
-    drift: [['#f2a7c3', 'rgba(242,167,195,.65)'], ['#e88db0', 'rgba(232,141,176,.55)'], ['#ffd45c', 'rgba(255,212,92,.65)']]
+    burst: [['#d4d4d4', 'rgba(212, 212, 212, .75)'], ['#c8c8c8', 'rgba(200, 200, 200, .65)'], ['#f0f0f0', 'rgba(230, 230, 230, .75)']],
+    twinkle: [['#d4d4d4', 'rgba(212, 212, 212, .8)']],
+    drift: [['#b9b9b9', 'rgba(185, 185, 185, .65)'], ['#a3a3a3', 'rgba(163, 163, 163, .55)'], ['#d4d4d4', 'rgba(212, 212, 212, .65)']]
   };
   function current() {
     var v = '';
@@ -110,10 +110,10 @@ const CARD = `<section class="card" id="sparkle">
   <div role="radiogroup" aria-label="点击星星的样子" data-no-sparkle style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
     ${OPTIONS.map(
       ([v, label]) =>
-        `<label style="display:flex;align-items:center;gap:8px;min-height:44px;padding:0 12px;border:1px solid #eadfe6;border-radius:12px;background:#fff;font-size:14px;cursor:pointer;"><input type="radio" name="vp-sparkle" value="${v}" style="width:20px;height:20px;margin:0;padding:0;accent-color:#7a3e5d;" />${label}</label>`
+        `<label style="display:flex;align-items:center;gap:8px;min-height:44px;padding:0 12px;border:1px solid #e2e2e2;border-radius:12px;background:#ffffff;font-size:14px;cursor:pointer;"><input type="radio" name="vp-sparkle" value="${v}" style="width:20px;height:20px;margin:0;padding:0;accent-color:#4d4d4d;" />${label}</label>`
     ).join('')}
   </div>
-  <p style="margin:10px 0 0;font-size:12px;line-height:1.6;color:#665a70;">在哪一页点一下都会冒星星。只记在这台设备上；系统开了「减弱动态效果」时不显示。</p>
+  <p style="margin:10px 0 0;font-size:12px;line-height:1.6;color:#5e5e5e;">在哪一页点一下都会冒星星。只记在这台设备上；系统开了「减弱动态效果」时不显示。</p>
 </section>
 <script>(function () {
   var KEY = '${KEY}', v = 'burst';

@@ -215,7 +215,7 @@ const SPARK_SVG =
   '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false"><path d="M12 1.6l2.2 7.4 7.4 2.2-7.4 2.2L12 22.4l-2.2-9 -7.4-2.2 7.4-2.2z"/></svg>';
 
 // 五彩。按放进来的顺序转着给，同一颗星星的颜色不会变
-const STAR_COLORS = ['#f7a8c4', '#f8d27a', '#9fd8f2', '#bba7f2', '#9fe7c0', '#f6b593', '#f291b2'];
+const STAR_COLORS = ['#bbbbbb', '#d4d4d4', '#cecece', '#b1b1b1', '#d5d5d5', '#c0c0c0', '#a8a8a8'];
 
 // 罐子里的位置：按序号算，刷新页面不会乱跳。一行 6 颗，往上堆。
 // 堆到第 8 行（48 颗）以后就不再往上长了，挤在一起看起来就是"满了"。
@@ -326,9 +326,9 @@ function renderStar(s, names) {
 }
 
 const STYLE = `
-  :root { --ink: #2b2233; --muted: #665a70; --accent: #7a3e5d; --gold: #b7792f; --card: #fffdfb; --line: #eadfe6;
-    --bg1: #efe7f4; --bg2: #f9f0ee; --bg3: #fdf8f2;
-    --t1: #463a7c; --t2: #9b4a7a; --t3: #c4832f;
+  :root { --ink: #252525; --muted: #5e5e5e; --accent: #4d4d4d; --gold: #818181; --card: #fdfdfd; --line: #e2e2e2;
+    --bg1: #eaeaea; --bg2: #f2f2f2; --bg3: #f9f9f9;
+    --t1: #414141; --t2: #5f5f5f; --t3: #8b8b8b;
     --glass: rgba(255, 255, 255, 0.72); }
   * { box-sizing: border-box; }
   body { margin: 0; min-height: 100vh; color: var(--ink);
@@ -336,7 +336,7 @@ const STYLE = `
     background: linear-gradient(180deg, var(--bg1) 0%, var(--bg2) 55%, var(--bg3) 100%); }
   main { max-width: 600px; margin: 0 auto; padding: 28px 16px 48px; }
   .hero { text-align: center; margin: 10px 0 16px; }
-  .title { margin: 0; font-size: 28px; font-weight: 700; letter-spacing: 0.2em; padding-left: 0.2em; color: #5b2e52; }
+  .title { margin: 0; font-size: 28px; font-weight: 700; letter-spacing: 0.2em; padding-left: 0.2em; color: #3a3a3a; }
   .subtitle { margin: 6px 0 0; font-size: 13px; letter-spacing: 0.16em; color: var(--muted); }
   .back-link { display: inline-flex; align-items: center; gap: 4px; min-height: 44px;
     color: var(--accent); text-decoration: none; font-size: 14px; }
@@ -348,8 +348,8 @@ const STYLE = `
   .jar { position: relative; width: 212px; height: 272px; margin: 0 auto; }
   .jar-cork { position: absolute; left: 50%; top: 0; transform: translateX(-50%);
     width: 74px; height: 27px; border-radius: 9px 9px 5px 5px;
-    background: linear-gradient(180deg, #cb9c6c 0%, #b07c50 55%, #9a6940 100%);
-    box-shadow: inset 0 -3px 7px rgba(60, 30, 10, 0.26); }
+    background: linear-gradient(180deg, #a3a3a3 0%, #848484 55%, #707070 100%);
+    box-shadow: inset 0 -3px 7px rgba(35, 35, 35, 0.26); }
   .jar-neck { position: absolute; left: 50%; top: 25px; transform: translateX(-50%);
     width: 62px; height: 20px;
     background: linear-gradient(90deg, var(--glass), rgba(255, 255, 255, 0.24) 45%, var(--glass));
@@ -357,10 +357,10 @@ const STYLE = `
   .jar-body { position: absolute; left: 0; right: 0; top: 43px; bottom: 0; overflow: hidden;
     border: 1px solid var(--glass);
     border-radius: 42% 42% 26% 26% / 20% 20% 11% 11%;
-    background: linear-gradient(170deg, rgba(255, 255, 255, 0.46) 0%, rgba(226, 214, 240, 0.2) 55%, rgba(255, 255, 255, 0.34) 100%);
-    box-shadow: inset 0 0 28px rgba(255, 255, 255, 0.55), 0 10px 24px rgba(60, 30, 60, 0.12); }
+    background: linear-gradient(170deg, rgba(255, 255, 255, 0.46) 0%, rgba(218, 218, 218, 0.2) 55%, rgba(255, 255, 255, 0.34) 100%);
+    box-shadow: inset 0 0 28px rgba(255, 255, 255, 0.55), 0 10px 24px rgba(39, 39, 39, 0.12); }
   .jar-floor { position: absolute; left: 6%; right: 6%; bottom: -14%; height: 46%;
-    border-radius: 50%; background: radial-gradient(60% 60% at 50% 60%, rgba(255, 228, 180, 0.6), transparent 72%); }
+    border-radius: 50%; background: radial-gradient(60% 60% at 50% 60%, rgba(230, 230, 230, 0.6), transparent 72%); }
   .jar-shine { position: absolute; left: 13%; top: 8%; width: 12px; height: 62%;
     border-radius: 999px; background: linear-gradient(180deg, rgba(255, 255, 255, 0.82), rgba(255, 255, 255, 0.08));
     filter: blur(1px); }
@@ -383,8 +383,8 @@ const STYLE = `
 
   /* ── 今天你那颗 ── */
   .mine-box { background: var(--card); border: 1px solid var(--line); border-radius: 14px;
-    padding: 14px 16px 16px; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(60, 30, 60, 0.08); }
-  .mine-box.done { border-left: 3px solid #d9a3c4; }
+    padding: 14px 16px 16px; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(39, 39, 39, 0.08); }
+  .mine-box.done { border-left: 3px solid #b1b1b1; }
   .mine-label { margin: 0 0 8px; font-size: 13px; color: var(--accent); }
   .mine-said { margin: 0; font-size: 16px; line-height: 1.75; white-space: pre-wrap; word-break: break-word; }
   .mine-note { margin: 8px 0 0; font-size: 11.5px; line-height: 1.6; color: var(--muted); }
@@ -401,8 +401,8 @@ const STYLE = `
   /* ── 一颗一条 ── */
   .list { margin-top: 18px; }
   .star { background: var(--card); border: 1px solid var(--line); border-radius: 14px;
-    margin-bottom: 10px; box-shadow: 0 1px 3px rgba(60, 30, 60, 0.08); overflow: hidden; }
-  .star.is-mine { border-left: 3px solid #d9a3c4; }
+    margin-bottom: 10px; box-shadow: 0 1px 3px rgba(39, 39, 39, 0.08); overflow: hidden; }
+  .star.is-mine { border-left: 3px solid #b1b1b1; }
   .star summary { display: flex; align-items: center; gap: 10px; min-height: 48px; padding: 0 14px;
     cursor: pointer; list-style: none; font-size: 14px; }
   .star summary::-webkit-details-marker { display: none; }
@@ -416,16 +416,16 @@ const STYLE = `
   .star-said { margin: 0; font-size: 16px; line-height: 1.75; white-space: pre-wrap; word-break: break-word; }
   .star-waiting { margin: 12px 0 0; font-size: 12.5px; line-height: 1.7; color: var(--muted); }
   .star-form { margin-top: 12px; display: grid; gap: 8px; }
-  .star-form textarea { width: 100%; padding: 10px 12px; font: inherit; font-size: 15px; color: var(--ink);
+  .star-form textarea { width: 100%; padding: 10px 12px; font: inherit; font-size: 16px; color: var(--ink);
     background: var(--card); border: 1px solid var(--line); border-radius: 10px; resize: vertical; }
   .star-form button { justify-self: start; min-height: 44px; padding: 0 18px; font-size: 14px;
-    color: #fff; background: linear-gradient(135deg, #d77aa2, #b35a83); border: 0; border-radius: 10px; cursor: pointer; }
-  .star-reply { margin-top: 12px; padding: 10px 12px; border-radius: 10px; background: rgba(255, 228, 180, 0.22);
-    border: 1px solid rgba(231, 197, 142, 0.5); }
+    color: #ffffff; background: linear-gradient(135deg, #919191, #707070); border: 0; border-radius: 10px; cursor: pointer; }
+  .star-reply { margin-top: 12px; padding: 10px 12px; border-radius: 10px; background: rgba(230, 230, 230, 0.22);
+    border: 1px solid rgba(200, 200, 200, 0.5); }
   .star-reply-who { font-size: 12px; color: var(--gold); }
   .star-reply-text { margin: 4px 0 0; font-size: 14.5px; line-height: 1.7; white-space: pre-wrap; word-break: break-word; }
   .star-reply-when { display: block; margin-top: 6px; font-size: 11px; color: var(--muted); }
-  .star.flash { box-shadow: 0 0 0 2px rgba(247, 168, 196, 0.75); }
+  .star.flash { box-shadow: 0 0 0 2px rgba(187, 187, 187, 0.75); }
   .empty { color: var(--muted); font-size: 14px; margin: 24px 4px; line-height: 1.8; text-align: center; }
   .empty b { color: var(--gold); font-weight: 400; }
   a:focus-visible, button:focus-visible, summary:focus-visible, textarea:focus-visible {
@@ -434,13 +434,13 @@ const STYLE = `
 
   /* 入夜：玻璃压暗一点，不然深底上一只白瓶子很跳 */
   html[data-dark] { --glass: rgba(255, 255, 255, 0.3); }
-  html[data-dark] .jar-body { background: linear-gradient(170deg, rgba(255, 255, 255, 0.14) 0%, rgba(120, 104, 158, 0.18) 55%, rgba(255, 255, 255, 0.1) 100%);
-    box-shadow: inset 0 0 26px rgba(255, 255, 255, 0.16), 0 10px 24px rgba(10, 6, 20, 0.3); }
+  html[data-dark] .jar-body { background: linear-gradient(170deg, rgba(255, 255, 255, 0.14) 0%, rgba(111, 111, 111, 0.18) 55%, rgba(255, 255, 255, 0.1) 100%);
+    box-shadow: inset 0 0 26px rgba(255, 255, 255, 0.16), 0 10px 24px rgba(8, 8, 8, 0.3); }
   html[data-dark] .jar-shine { background: linear-gradient(180deg, rgba(255, 255, 255, 0.42), rgba(255, 255, 255, 0.04)); }
   html[data-dark] .star-form textarea { background: var(--card); color: var(--ink); }
-  html[data-dark] .star-form button { color: #fff; }
+  html[data-dark] .star-form button { color: #ffffff; }
   html[data-dark] .mine-del { color: var(--gold); }
-  html[data-dark] .star-reply { background: rgba(183, 121, 47, 0.16); border-color: rgba(183, 121, 47, 0.4); }
+  html[data-dark] .star-reply { background: rgba(129, 129, 129, 0.16); border-color: rgba(129, 129, 129, 0.4); }
 
   @media (prefers-reduced-motion: reduce) {
     .jar-star.unpicked { animation: none; opacity: 1; }

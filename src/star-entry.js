@@ -6,21 +6,21 @@
 // 样式借了收藏入口那套（.fav-entry，在 flourish.js 里），只把星星的颜色和"未摘"时那圈光换掉。
 
 export const STAR_ENTRY_CSS = `
-  .star-entry .fav-stars { color: #d2719b; }
+  .star-entry .fav-stars { color: #898989; }
   .star-entry .fav-count.lit { color: var(--gold); }
   /* 有没摘的星星、而且现在是该提醒的时间：入口边上一圈淡粉的光 */
-  .star-entry.lit { border-color: #f0cfe0;
-    box-shadow: 0 1px 3px rgba(60, 30, 60, 0.08), 0 0 0 2px rgba(240, 207, 224, 0.5); }
-  html[data-dark] .star-entry .fav-stars { color: #f6c3d8; }
-  html[data-dark] .star-entry.lit { border-color: rgba(246, 195, 216, 0.5);
-    box-shadow: 0 1px 3px rgba(10, 6, 20, 0.3), 0 0 0 2px rgba(246, 195, 216, 0.3); }
+  .star-entry.lit { border-color: #d7d7d7;
+    box-shadow: 0 1px 3px rgba(39, 39, 39, 0.08), 0 0 0 2px rgba(215, 215, 215, 0.5); }
+  html[data-dark] .star-entry .fav-stars { color: #cfcfcf; }
+  html[data-dark] .star-entry.lit { border-color: rgba(207, 207, 207, 0.5);
+    box-shadow: 0 1px 3px rgba(8, 8, 8, 0.3), 0 0 0 2px rgba(207, 207, 207, 0.3); }
 
   /* 行为卡片里的「星星罐」：和卡片里的 Lutopia 论坛、OB 记忆库一个待遇（.act-place），
      只是颜色更暖一点——罐子里装的是星星，不是地方 */
-  .act-jar { color: #b8860b; font-weight: 800; padding: 0 1px; border-radius: 2px;
-    background: linear-gradient(transparent 60%, rgba(247, 168, 196, 0.42) 60%); }
-  html[data-dark] .act-jar { color: #f8d27a;
-    background: linear-gradient(transparent 60%, rgba(247, 168, 196, 0.3) 60%); }
+  .act-jar { color: #888888; font-weight: 800; padding: 0 1px; border-radius: 2px;
+    background: linear-gradient(transparent 60%, rgba(187, 187, 187, 0.42) 60%); }
+  html[data-dark] .act-jar { color: #d4d4d4;
+    background: linear-gradient(transparent 60%, rgba(187, 187, 187, 0.3) 60%); }
 `;
 
 // 排在收藏那段后面跑。拉不到就不插，页面和原来一样——星星罐是附加的，

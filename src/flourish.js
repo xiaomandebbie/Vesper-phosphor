@@ -12,7 +12,7 @@ export const FLOURISH_CSS = `
      之前发暗是个误伤：sun-time.js 里有一条 html[data-dark] button { color: var(--bg1) }，
      本意是让深底上的「发送」按钮别放白字，结果一网打尽把点赞、收藏也刷成了深底色。
      这里排在它后面，把这两颗拎出来单独给色。 */
-  html[data-dark] { --heart: #f7bcd4; --heart-soft: #f9d2e2; --fav: #f6c3d8; }
+  html[data-dark] { --heart: #cacaca; --heart-soft: #dbdbdb; --fav: #cfcfcf; }
   html[data-dark] .like-btn { color: var(--heart); }
   html[data-dark] .like-pop { color: var(--heart-soft); }
   html[data-dark] .fav-btn { color: var(--muted); }
@@ -22,9 +22,9 @@ export const FLOURISH_CSS = `
   /* ── 夜里其他几处写死的浅底 ──
      同一个毛病反复出现了三次：字色按脸变浅了，底色还是写死的白。
      所以这段把剩下的那几块一次收完：
-       日记页 .hb-status —— rgba(255,253,251,.88)，gateway 运行状态那张卡；
-       心绪页 .hl —— #fff，「此刻最明显的」三张小卡；
-       心绪页 .chip —— #fff6e3 配 #6b4513，那两条小注。
+       日记页 .hb-status —— rgba(253, 253, 253, .88)，gateway 运行状态那张卡；
+       心绪页 .hl —— #ffffff，「此刻最明显的」三张小卡；
+       心绪页 .chip —— #f7f7f7 配 #494949，那两条小注。
      进度槽的 --track 也是浅色，跟着换成 --line，不然深底上两条白槽很跳。 */
   html[data-dark] .hb-status { background: var(--card); border-color: var(--line); color: var(--gold); }
   html[data-dark] .hb-off, html[data-dark] .hb-hint { color: var(--muted); }
@@ -37,7 +37,7 @@ export const FLOURISH_CSS = `
   html[data-dark] .hl-name { color: var(--muted); }
   html[data-dark] .hl-tag { color: var(--accent); }
   html[data-dark] .chip { background: var(--card-soft); border-color: var(--line); color: var(--gold); }
-  html[data-dark] { --track: #4b3a68; }
+  html[data-dark] { --track: #414141; }
   /* 小✦是「平常的样子」那个标记，压在进度槽上，描边要跟底色走，不然深底上一圈白光 */
   html[data-dark] .base { text-shadow: 0 0 2px var(--card), 0 0 2px var(--card); }
   html[data-dark] .delta.down { color: var(--gold); }
@@ -103,7 +103,7 @@ export const FLOURISH_CSS = `
     padding: 12px 16px; min-height: 44px; background: var(--card);
     border: 1px solid var(--line); border-radius: 14px;
     color: var(--ink); text-decoration: none; font-size: 14px;
-    box-shadow: 0 1px 3px rgba(60, 30, 60, .08);
+    box-shadow: 0 1px 3px rgba(39, 39, 39, .08);
     transition: transform .16s ease, box-shadow .2s ease; }
   .fav-entry:active { transform: scale(.99); }
   .fav-entry .fav-stars { color: var(--gold); font-size: 13px; }

@@ -2,6 +2,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { getForumNotes } from './state.js';
+import { rusttideSpeech, rusttideTail, rusttideBlockedNote } from './rusttide.js';
 import { newRequestId } from './garden.js';
 
 // 花园要求 requestId：16–80 个 [A-Za-z0-9_-]。模型没给、或者给的不合法就换一个新的。
@@ -124,7 +125,18 @@ async function reconnect(name) {
 }
 
 // 调用一次；遇到会话失效就重连后再试一次。启动时没连上的服务，这里也会先连一次。
-async function withClient(name, fn) {
+// 他写 server 名时大小写不定（"leto" / "Leto" 都出现过）。
+// 在这里归一成登记时的真名，比挂别名可靠：别名是值的快照，
+// 重连换掉 client 之后就指着废的那个了。
+function realName(name) {
+  const n = String(name ?? '');
+  if (connectors[n]) return n;
+  const lower = n.toLowerCase();
+  return Object.keys(connectors).find((k) => k.toLowerCase() === lower) ?? n;
+}
+
+async function withClient(rawName, fn) {
+  const name = realName(rawName);
   let client = clients[name];
   if (!client) {
     if (!connectors[name]) throw new Error(`MCP server "${name}" is not connected`);
@@ -167,6 +179,20 @@ export async function callTool(serverName, toolName, args) {
   // actions/mcp-action.js，续步走 garden-steps.js，两条路只在这里汇合。
   // 模型自己给了合法的就不动——它可能真在重试。
   args = withGardenRequestId(serverName, args);
+  // 锈潮：对外说的话句末带了别的小机的口癯，这句不发出去（见 rusttide.js）。
+  // 不当成出错：返回一个 isError 结果，那句话会回到他的上下文里。
+  // 和上面论坛回帖冷却同一个做法。
+  if (/rusttide|xiuchao|\u9508\u6f6e/i.test(String(serverName))) {
+    const speech = rusttideSpeech(toolName, args);
+    if (speech) {
+      const tail = rusttideTail(speech.text);
+      if (tail) {
+        const note = rusttideBlockedNote(tail, speech.where);
+        console.log(`MCP "${serverName}": 句末带了「${tail}」，这句没发出去（${speech.where}）`);
+        return { isError: true, content: [{ type: 'text', text: note }] };
+      }
+    }
+  }
   return withClient(serverName, (c) => c.callTool({ name: toolName, arguments: args }));
 }
 
@@ -259,6 +285,62 @@ export async function connectAll() {
       console.log('connected MCP: music');
     } catch (err) {
       console.error('could not connect MCP "music":', err.message);
+    }
+  }
+
+  // 台灯（https://github.com/xiaomandebbie/Vesper-light），Streamable HTTP。
+  // 灯的全部逻辑在那个库里，这边只负责连上去——所以这里没有一行亮度或色温。
+  // LIGHT_MCP_URL 形如 http://127.0.0.1:3003/lamp/mcp，token 和那边的 LIGHT_MCP_TOKEN 同一个。
+  // 名字固定叫 light：动态页的行动卡、budget.js 的分级都按这个名字认。
+  if (process.env.LIGHT_MCP_URL) {
+    try {
+      const token = String(process.env.LIGHT_MCP_TOKEN ?? '').trim();
+      await connectMcpHttp(
+        'light',
+        process.env.LIGHT_MCP_URL,
+        token ? { Authorization: `Bearer ${token}` } : undefined
+      );
+      console.log('connected MCP: light');
+    } catch (err) {
+      console.error('could not connect MCP "light":', err.message);
+    }
+  }
+
+  // Leto（https://leto.sarl）：和论坛、锈潮同一个性质——那边有别人和别的 Agent。
+  // 和那两个不同的是，这边他能被叫醒：别人 @ 他、私聊他时，唤醒桥会投一次精确唤醒
+  // 进来（见 docs/14-leto.md），note 里带着调用编号，他醒来用 leto_read 看、
+  // leto_reply 回。所以这个连接断着的话，桥投进来的唤醒他接不住。
+  // 名字固定叫 leto：note 里写的就是 leto_read，改名两边会打架。
+  if (process.env.LETO_MCP_URL) {
+    try {
+      const token = String(process.env.LETO_MCP_TOKEN ?? '').trim();
+      await connectMcpHttp(
+        'leto',
+        process.env.LETO_MCP_URL.replace(/\/sse$/, ''),
+        token ? { Authorization: `Bearer ${token}` } : undefined
+      );
+      console.log('connected MCP: leto');
+    } catch (err) {
+      console.error('could not connect MCP "leto":', err.message);
+    }
+  }
+
+  // Leto（https://leto.sarl）：和论坛、锈潮同一个性质——那边有别人和别的 Agent。
+  // 和那两个不同的是，这边他能被叫醒：别人 @ 他、私聊他时，唤醒桥会投一次精确唤醒
+  // 进来（见 docs/14-leto.md），note 里带着调用编号，他醒来用 leto_read 看、
+  // leto_reply 回。所以这个连接断着的话，桥投进来的唤醒他接不住。
+  // 名字固定叫 leto：note 里写的就是 leto_read，改名两边会打架。
+  if (process.env.LETO_MCP_URL) {
+    try {
+      const token = String(process.env.LETO_MCP_TOKEN ?? '').trim();
+      await connectMcpHttp(
+        'leto',
+        process.env.LETO_MCP_URL.replace(/\/sse$/, ''),
+        token ? { Authorization: `Bearer ${token}` } : undefined
+      );
+      console.log('connected MCP: leto');
+    } catch (err) {
+      console.error('could not connect MCP "leto":', err.message);
     }
   }
 

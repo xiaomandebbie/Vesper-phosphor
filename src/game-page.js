@@ -147,7 +147,7 @@ const GAMES = [
 ];
 
 const STYLE = `
-  :root { --ink: #2b2233; --muted: #665a70; --accent: #7a3e5d; --gold: #b7792f; --card: #fffdfb; --line: #eadfe6; }
+  :root { --ink: #252525; --muted: #5e5e5e; --accent: #4d4d4d; --gold: #818181; --card: #fdfdfd; --line: #e2e2e2; }
   * { box-sizing: border-box; }
   body { margin: 0; min-height: 100vh; color: var(--ink);
     font-family: -apple-system, "PingFang SC", "Helvetica Neue", sans-serif; }
@@ -157,12 +157,12 @@ const STYLE = `
   .haze {
     background:
       radial-gradient(42% 32% at 22% 28%, rgba(255, 255, 255, 0.5), transparent 70%),
-      radial-gradient(38% 30% at 74% 62%, rgba(226, 190, 220, 0.4), transparent 72%);
+      radial-gradient(38% 30% at 74% 62%, rgba(200, 200, 200, 0.4), transparent 72%);
     animation: haze-a 38s ease-in-out infinite; }
   .haze2 {
     background:
-      radial-gradient(36% 26% at 62% 18%, rgba(214, 198, 248, 0.38), transparent 70%),
-      radial-gradient(44% 34% at 18% 76%, rgba(255, 232, 240, 0.42), transparent 72%);
+      radial-gradient(36% 26% at 62% 18%, rgba(205, 205, 205, 0.38), transparent 70%),
+      radial-gradient(44% 34% at 18% 76%, rgba(237, 237, 237, 0.42), transparent 72%);
     animation: haze-b 53s ease-in-out -14s infinite; }
   .clouds {
     filter: blur(22px);
@@ -193,9 +193,9 @@ const STYLE = `
     backdrop-filter: blur(14px) saturate(1.1);
     -webkit-backdrop-filter: blur(14px) saturate(1.1);
     border: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
-    box-shadow: 0 2px 20px rgba(80, 50, 90, 0.08);
+    box-shadow: 0 2px 20px rgba(59, 59, 59, 0.08);
     transition: transform 0.18s ease, box-shadow 0.18s ease; }
-  .game:hover, .game:focus-visible { transform: translateY(-2px); box-shadow: 0 6px 26px rgba(80, 50, 90, 0.14); }
+  .game:hover, .game:focus-visible { transform: translateY(-2px); box-shadow: 0 6px 26px rgba(59, 59, 59, 0.14); }
   @supports not (backdrop-filter: blur(1px)) { .game { background: var(--card); } }
 
   .game-top { display: flex; align-items: center; gap: 12px; }

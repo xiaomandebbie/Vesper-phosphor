@@ -102,50 +102,30 @@ export function faceAt(ms = Date.now(), { lat = LAT, lon = LON, tz = process.env
 // 动作卡的白底、深棕色的「在哪做的」、批注展开后的浅黄底、评论区的浅粉底。
 // 它们之前没跟着换，所以夜里深字落在白底上、或者浅字落在白底上，都糊。
 
-const PALETTE = {
-  night: {
-    dark: true,
-    bg1: [34, 27, 60], bg2: [48, 33, 72], bg3: [58, 38, 74],
-    ink: [243, 238, 250], muted: [196, 184, 212], accent: [236, 176, 206],
-    gold: [240, 200, 128], card: [60, 47, 82], line: [96, 78, 118],
-    t1: [198, 180, 248], t2: [240, 174, 212], t3: [246, 206, 140],
-    activity: [226, 183, 106], 'activity-ink': [246, 214, 152], place: [250, 224, 158],
-    'card-soft': [68, 53, 92], 'detail-bg': [72, 56, 96], hl: [226, 183, 106, 0.26],
-    star: 1,
-  },
-  dawn: {
-    dark: false,
-    bg1: [252, 228, 226], bg2: [253, 238, 226], bg3: [255, 249, 240],
-    ink: [62, 44, 56], muted: [128, 102, 116], accent: [178, 86, 110],
-    gold: [198, 134, 52], card: [255, 253, 250], line: [240, 222, 226],
-    t1: [128, 96, 168], t2: [196, 94, 128], t3: [224, 150, 60],
-    activity: [233, 190, 110], 'activity-ink': [148, 96, 28], place: [158, 104, 24],
-    'card-soft': [250, 240, 240], 'detail-bg': [255, 248, 233], hl: [233, 190, 110, 0.36],
-    star: 0,
-  },
-  day: {
-    dark: false,
-    bg1: [239, 231, 244], bg2: [249, 240, 238], bg3: [253, 248, 242],
-    ink: [43, 34, 51], muted: [102, 90, 112], accent: [122, 62, 93],
-    gold: [183, 121, 47], card: [255, 253, 251], line: [234, 223, 230],
-    t1: [70, 58, 124], t2: [155, 74, 122], t3: [196, 131, 47],
-    activity: [230, 182, 82], 'activity-ink': [138, 90, 20], place: [154, 100, 18],
-    'card-soft': [243, 238, 242], 'detail-bg': [253, 246, 230], hl: [230, 182, 82, 0.38],
-    star: 0,
-  },
-  dusk: {
-    dark: true,
-    bg1: [86, 54, 100], bg2: [150, 76, 102], bg3: [214, 134, 94],
-    ink: [252, 244, 242], muted: [224, 204, 206], accent: [250, 192, 168],
-    gold: [250, 206, 134], card: [92, 60, 98], line: [132, 94, 122],
-    t1: [230, 204, 252], t2: [252, 186, 180], t3: [252, 216, 148],
-    activity: [246, 198, 124], 'activity-ink': [252, 226, 168], place: [252, 228, 164],
-    'card-soft': [102, 68, 106], 'detail-bg': [106, 70, 110], hl: [246, 198, 124, 0.28],
-    star: 0.55,
-  },
+const NEUTRAL = {
+  dark: false,
+  // 底色：几乎纯白，留一点极浅的层次，完全平的白在手机上反而刺眼
+  bg1: [252, 252, 252], bg2: [250, 250, 250], bg3: [247, 247, 247],
+  ink: [26, 26, 26], muted: [122, 122, 122], accent: [26, 26, 26],
+  gold: [122, 122, 122], card: [255, 255, 255], line: [228, 228, 228],
+  // 标题原来是紫→瑰→金的文字渐变，三个停点设成同一个黑，渐变就平了
+  t1: [26, 26, 26], t2: [26, 26, 26], t3: [26, 26, 26],
+  activity: [184, 184, 184], 'activity-ink': [92, 92, 92], place: [122, 122, 122],
+  'card-soft': [244, 244, 244], 'detail-bg': [248, 248, 248], hl: [0, 0, 0, 0.06],
+  // 0 = 夜空那层星点永远透明
+  star: 0,
 };
 
-// 底色和星点透明度连续插值；其余（文字、卡片、边框）在中点整组翻面
+// 四张脸现在是同一套。天文计算和过渡逻辑全留着，只是算出来的颜色不再分早晚。
+// 小满 10-30：「底色对话也要改掉，不用早晨那套了」。
+// 想调回来就把 src/.face-backup/sun-time.js 换回去，代码一行没删。
+const PALETTE = {
+  night: NEUTRAL,
+  dawn: NEUTRAL,
+  day: NEUTRAL,
+  dusk: NEUTRAL,
+};
+
 const FADE_KEYS = ['bg1', 'bg2', 'bg3'];
 
 const lerp = (a, b, k) => a + (b - a) * k;
@@ -209,40 +189,40 @@ export const FACE_CSS = `
     transition: background 1.2s linear, color 1.2s linear; }
   .sky { position: fixed; inset: 0; z-index: 9; pointer-events: none; opacity: var(--star, 0);
     transition: opacity 1.6s linear;
-    filter: drop-shadow(0 0 5px rgba(255, 238, 190, 0.75));
+    filter: drop-shadow(0 0 5px rgba(238, 238, 238, 0.75));
     background-repeat: no-repeat;
     background-image:
-      radial-gradient(2.4px 2.4px at 12% 14%, #fff 48%, transparent 52%),
-      radial-gradient(2.2px 2.2px at 43% 19%, #fff 48%, transparent 52%),
-      radial-gradient(2.6px 2.6px at 71% 11%, #fff3d0 48%, transparent 52%),
-      radial-gradient(2.3px 2.3px at 88% 24%, #ffe9b8 48%, transparent 52%),
-      radial-gradient(2.5px 2.5px at 24% 37%, #fff 48%, transparent 52%),
-      radial-gradient(2.2px 2.2px at 62% 44%, #fff6dc 48%, transparent 52%),
-      radial-gradient(2.4px 2.4px at 92% 52%, #fff 48%, transparent 52%);
+      radial-gradient(2.4px 2.4px at 12% 14%, #ffffff 48%, transparent 52%),
+      radial-gradient(2.2px 2.2px at 43% 19%, #ffffff 48%, transparent 52%),
+      radial-gradient(2.6px 2.6px at 71% 11%, #f3f3f3 48%, transparent 52%),
+      radial-gradient(2.3px 2.3px at 88% 24%, #eaeaea 48%, transparent 52%),
+      radial-gradient(2.5px 2.5px at 24% 37%, #ffffff 48%, transparent 52%),
+      radial-gradient(2.2px 2.2px at 62% 44%, #f6f6f6 48%, transparent 52%),
+      radial-gradient(2.4px 2.4px at 92% 52%, #ffffff 48%, transparent 52%);
     animation: sky-a 4.2s ease-in-out infinite; }
   .sky::before, .sky::after { content: ''; position: absolute; inset: 0; background-repeat: no-repeat; }
   .sky::before {
     background-image:
-      radial-gradient(1.8px 1.8px at 28% 7%, #ffe9b8 48%, transparent 52%),
-      radial-gradient(1.6px 1.6px at 54% 26%, #fff 48%, transparent 52%),
-      radial-gradient(1.9px 1.9px at 7% 29%, #fff 48%, transparent 52%),
-      radial-gradient(1.7px 1.7px at 37% 48%, #ffeec4 48%, transparent 52%),
-      radial-gradient(1.6px 1.6px at 79% 35%, #fff 48%, transparent 52%),
-      radial-gradient(1.8px 1.8px at 66% 61%, #fff 48%, transparent 52%),
-      radial-gradient(1.7px 1.7px at 16% 58%, #fff6dc 48%, transparent 52%),
-      radial-gradient(1.6px 1.6px at 48% 69%, #fff 48%, transparent 52%);
+      radial-gradient(1.8px 1.8px at 28% 7%, #eaeaea 48%, transparent 52%),
+      radial-gradient(1.6px 1.6px at 54% 26%, #ffffff 48%, transparent 52%),
+      radial-gradient(1.9px 1.9px at 7% 29%, #ffffff 48%, transparent 52%),
+      radial-gradient(1.7px 1.7px at 37% 48%, #efefef 48%, transparent 52%),
+      radial-gradient(1.6px 1.6px at 79% 35%, #ffffff 48%, transparent 52%),
+      radial-gradient(1.8px 1.8px at 66% 61%, #ffffff 48%, transparent 52%),
+      radial-gradient(1.7px 1.7px at 16% 58%, #f6f6f6 48%, transparent 52%),
+      radial-gradient(1.6px 1.6px at 48% 69%, #ffffff 48%, transparent 52%);
     animation: sky-b 5.6s ease-in-out -1.9s infinite; }
   .sky::after {
-    filter: drop-shadow(0 0 8px rgba(255, 230, 170, 0.9));
+    filter: drop-shadow(0 0 8px rgba(231, 231, 231, 0.9));
     background-image:
-      radial-gradient(3.4px 3.4px at 19% 9%, #fff 46%, transparent 52%),
-      radial-gradient(3.1px 3.1px at 58% 16%, #fff6dc 46%, transparent 52%),
-      radial-gradient(3.3px 3.3px at 84% 40%, #fff 46%, transparent 52%),
-      radial-gradient(3px 3px at 33% 57%, #ffe9b8 46%, transparent 52%),
-      radial-gradient(3.2px 3.2px at 73% 73%, #fff 46%, transparent 52%);
+      radial-gradient(3.4px 3.4px at 19% 9%, #ffffff 46%, transparent 52%),
+      radial-gradient(3.1px 3.1px at 58% 16%, #f6f6f6 46%, transparent 52%),
+      radial-gradient(3.3px 3.3px at 84% 40%, #ffffff 46%, transparent 52%),
+      radial-gradient(3px 3px at 33% 57%, #eaeaea 46%, transparent 52%),
+      radial-gradient(3.2px 3.2px at 73% 73%, #ffffff 46%, transparent 52%);
     animation: sky-c 7.4s ease-in-out -3.6s infinite; }
-  @keyframes sky-a { 0%, 100% { filter: drop-shadow(0 0 4px rgba(255, 238, 190, 0.6)) brightness(0.8); }
-    50% { filter: drop-shadow(0 0 7px rgba(255, 238, 190, 0.95)) brightness(1.45); } }
+  @keyframes sky-a { 0%, 100% { filter: drop-shadow(0 0 4px rgba(238, 238, 238, 0.6)) brightness(0.8); }
+    50% { filter: drop-shadow(0 0 7px rgba(238, 238, 238, 0.95)) brightness(1.45); } }
   @keyframes sky-b { 0%, 100% { opacity: 0.32; } 45% { opacity: 1; } }
   @keyframes sky-c { 0%, 100% { opacity: 0.55; } 60% { opacity: 1; } }
 

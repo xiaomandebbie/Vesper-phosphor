@@ -38,16 +38,6 @@
 // 所以主路是：早晚四张脸（sun-time.js 按长沙真实的日出日落算）映到这两套——
 // dawn/day 走 light，dusk/night 走 dark。这条是它自己支持的，一定生效。
 // 再叠一层 SKIN_CSS 做贴色：只追加覆盖，不改它的布局和交互。
-//
-// ── 这页不放底栅（2026-10-31）──
-//
-// 试过把底栅导览注进来，被打回来了：NEST 书架自己底部就有一条栅，
-// 我那条盖在它上面，把它的按钮挡住了点不到。tabs.js 开头就写过这事：
-// 那些不是我们自己排版的页面，强塞东西进去反而挡他们自己的按钮。
-//
-// 现在只给两样东西：左上角返回键，和右上角那个可拖的三条杠。
-// 两个都在角上、都不压它的内容，要去别的页从三杠菜单进。
-// TABS_CSS 还是要引：.vp-back 的样式在里头。
 
 import express from 'express';
 import fs from 'fs';
@@ -150,34 +140,43 @@ export function booksUiDir() {
 // 那些是原作调好的，按它 README 的说法该原样用。
 const SKIN_CSS = `
   html:root {
-    --text: #2b2233; --text2: #665a70; --text3: #9b8fa6;
-    --accent: #7a3e5d; --on-accent: #fffdfb;
-    --bg: #f9f0ee; --bg2: #f1e7ee; --card: #fffdfb;
-    --line: #eadfe6; --line-strong: #d9c9d4; --card-line: #eadfe6;
+    --text: #252525; --text2: #5e5e5e; --text3: #939393;
+    --accent: #4d4d4d; --on-accent: #fdfdfd;
+    --bg: #f2f2f2; --bg2: #eaeaea; --card: #fdfdfd;
+    --line: #e2e2e2; --line-strong: #cdcdcd; --card-line: #e2e2e2;
   }
   html[data-theme="dark"]:root {
-    --text: #f3eefa; --text2: #c4b8d4; --text3: #9a8ead;
-    --accent: #ecb0ce; --on-accent: #231c3c;
-    --bg: #231c3c; --bg2: #2e2548; --card: #3c2f52;
-    --line: #4b3d63; --line-strong: #604e76; --card-line: #4b3d63;
+    --text: #f0f0f0; --text2: #bdbdbd; --text3: #939393;
+    --accent: #bfbfbf; --on-accent: #202020;
+    --bg: #202020; --bg2: #292929; --card: #343434;
+    --line: #434343; --line-strong: #555555; --card-line: #434343;
   }
+  /* 这一页在 /app 外壳的 iframe 里跑，而 iframe 里 env(safe-area-inset-*) 全是 0。
+     NEST 整套布局按安全区排（它 head 里写了 viewport-fit=cover），
+     所以顶栅上面空一条、底栅贴到屏幕最下沿被切掉。这里把两头补回来。
+     34px 是 home indicator 的高度，iframe 里取不到只能写死。
+     类名从 bookshelf.jsx 查来的：.shelf-topbar 是 sticky top:0，
+     .shelf-bottom-bar 行内 absolute bottom:0，所以要 !important 才盖得住。 */
+  html .shelf-topbar { padding-top: 10px !important; }
+  html .shelf-bottom-bar { padding-bottom: 34px !important; }
+  /* FACE_CSS 里那条 body 渐变盖掉了 NEST 自己的 var(--bg)，
+     顶上那道浅色带就是它。这一页用它自己的底色。 */
+  html body { background: var(--bg) !important; }
 `;
-
-// 左上角返回键。TABS_SCRIPT 不在这一页跑（它跟着各页自己的 layout 走，
-// 这边是注进别人的 index.html），所以这个键是写死的 HTML，不是脚本插的。
-// 带 data-back：万一哪天这页也跑上了 TABS_SCRIPT，它看到就不会再插一个。
-// 有来处就退回去，直接打开这一页的（比如从主屏幕）就回发现页。
-const BACK_LINK =
-  `<a class="vp-back" data-back data-no-stars href="/discover" aria-label="返回"` +
-  ` onclick="if(window.history.length&gt;1){event.preventDefault();window.history.back();}">` +
-  `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.6 5.4l-6.6 6.6 6.6 6.6 1.5-1.5-5.1-5.1 5.1-5.1z"/></svg>` +
-  `<span>返回</span></a>`;
 
 // ── 转接层 ──
 //
 // 为什么挂 localStorage 而不是改 bookshelf.jsx：改源码要重新 npm run build，
 // 而且原作每次更新都要再改一遍。挂住让它的代码一行不动，能跟着原作升级。
 // 代价就是必须跟它的键名约定——也正是上面那个坑。
+// 左上角返回键。TABS_SCRIPT 不在这一页跑（它跟着各页自己的 layout 走，
+// 这边是注进别人的 index.html），所以这个键是写死的 HTML。
+const BACK_LINK =
+  `<a class="vp-back" data-back data-no-stars href="/discover" aria-label="返回"` +
+  ` onclick="if(window.history.length&gt;1){event.preventDefault();window.history.back();}">` +
+  `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.6 5.4l-6.6 6.6 6.6 6.6 1.5-1.5-5.1-5.1 5.1-5.1z"/></svg>` +
+  `<span>返回</span></a>`;
+
 const BRIDGE_SCRIPT = `(function () {
   var API = '${PREFIX}/api';
   var TOKEN = '${booksApiToken()}';
@@ -203,8 +202,8 @@ const BRIDGE_SCRIPT = `(function () {
       bar.textContent = '共读同步没成：' + msg;
       bar.style.cssText =
         'position:fixed;left:0;right:0;top:0;z-index:99999;padding:10px 14px;' +
-        'background:#f6e6bf;color:#5a4320;font:13px/1.5 -apple-system,sans-serif;' +
-        'box-shadow:0 2px 8px rgba(0,0,0,.18)';
+        'background:#e7e7e7;color:#454545;font:13px/1.5 -apple-system,sans-serif;' +
+        'box-shadow:0 2px 8px rgba(0, 0, 0, .18)';
       bar.onclick = function () { bar.remove(); };
       (document.body || document.documentElement).appendChild(bar);
     } catch (e) {}
@@ -342,30 +341,28 @@ const BRIDGE_SCRIPT = `(function () {
 // 把晨暮星的外框、配色和转接层注进它的 index.html。它的代码一行不改。
 function renderShell(html) {
   const f = faceAt();
-  const dark = f.face === 'night' || f.face === 'dusk';
+  const dark = f.face === 'night';
   // 主路：用它自己文档化的 theme 参数。早晚四张脸 → 浅色/深色两套。
   // 它读的是 document.documentElement.dataset.theme，所以直接设 data-theme，
   // 不改地址栏、也不触发跳转（原来用 location.replace 会把 #hash 路由搞乱）
   const themeInit =
     `<script>try{var p=new URLSearchParams(location.search).get('theme');` +
-    `document.documentElement.dataset.theme=p==='light'||p==='dark'?p:'${dark ? 'dark' : 'light'}';}catch(e){}<\/script>`;
+    `document.documentElement.dataset.theme=p==='light'||p==='dark'?p:'${dark ? 'dark' : 'light'}';}catch(e){}</script>`;
 
   let out = html;
-  // TABS_CSS 要跟着：.vp-back 的样式在里头
-const style = `<style id="vesper-skin">${CHROME_CSS}${TABS_CSS}${SKIN_CSS}</style>`;
+  const style = `<style id="vesper-skin">${CHROME_CSS}${TABS_CSS}${SKIN_CSS}</style>`;
   const headEnd = out.search(/<\/head>/i);
   out = headEnd >= 0 ? out.slice(0, headEnd) + themeInit + style + out.slice(headEnd) : themeInit + style + out;
 
   // 转接层要在它自己的脚本跑之前装好（loadDemoBooks() 是初始化时同步读的），
   // 所以挤在 body 开头，不是 </body> 前
   const menu = renderMenu(`${PREFIX}`, { fixed: true });
-  const bridge = `<script id="vesper-books-bridge">${BRIDGE_SCRIPT}<\/script>`;
+  const bridge = `<script id="vesper-books-bridge">${BRIDGE_SCRIPT}</script>`;
   const bodyOpen = /<body(\s[^>]*)?>/i;
   out = bodyOpen.test(out) ? out.replace(bodyOpen, (m) => m + bridge + menu) : bridge + menu + out;
 
-  // 只放返回键，不放底栅：NEST 自己底部就有一条栅，盖上去会把它挡住
   const bodyEnd = out.toLowerCase().lastIndexOf('</body>');
-  const tail = `${BACK_LINK}<script>${CHROME_SCRIPT}<\/script>`;
+  const tail = `${BACK_LINK}<script>${CHROME_SCRIPT}</script>`;
   return bodyEnd >= 0 ? out.slice(0, bodyEnd) + tail + out.slice(bodyEnd) : out + tail;
 }
 

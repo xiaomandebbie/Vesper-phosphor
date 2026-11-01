@@ -94,17 +94,17 @@ function renderWakeLine() {
 }
 
 const STYLE = `
-  :root { --ink: #2b2233; --muted: #665a70; --accent: #7a3e5d; --gold: #b7792f; --card: #fffdfb; --line: #eadfe6;
-    --activity: #E6B652; --place: #9a6412; }
+  :root { --ink: #252525; --muted: #5e5e5e; --accent: #4d4d4d; --gold: #818181; --card: #fdfdfd; --line: #e2e2e2;
+    --activity: #b9b9b9; --place: #6a6a6a; }
   * { box-sizing: border-box; }
   body { margin: 0; min-height: 100vh; color: var(--ink);
     font-family: -apple-system, "PingFang SC", "Helvetica Neue", sans-serif; }
   main { position: relative; z-index: 1; max-width: 600px; margin: 0 auto; padding: 28px 16px 48px; }
   .hero { text-align: center; margin: 14px 0 24px; }
   .title { margin: 0; font-family: "Songti SC", "STSong", "Noto Serif SC", "Source Han Serif SC", serif;
-    font-size: 42px; font-weight: 700; letter-spacing: 0.35em; padding-left: 0.35em; color: #5b2e52; }
+    font-size: 42px; font-weight: 700; letter-spacing: 0.35em; padding-left: 0.35em; color: #3a3a3a; }
   @supports ((-webkit-background-clip: text) or (background-clip: text)) {
-    .title { background: linear-gradient(100deg, #463a7c 0%, #9b4a7a 52%, #c4832f 100%);
+    .title { background: linear-gradient(100deg, #414141 0%, #5f5f5f 52%, #8b8b8b 100%);
       -webkit-background-clip: text; background-clip: text; color: transparent; }
   }
   .subtitle { margin: 6px 0 0; font-family: "Cormorant Garamond", "Didot", "Bodoni 72", Georgia, serif;
@@ -114,13 +114,13 @@ const STYLE = `
   .mood-line .mood-label { color: var(--accent); margin-right: 4px; }
   .mood-link { display: inline-block; min-height: 44px; padding: 12px 10px; margin: -12px 0; color: inherit;
     text-decoration: none; border-radius: 12px; }
-  .mood-link:active { background: rgba(122, 62, 93, 0.06); }
+  .mood-link:active { background: rgba(77, 77, 77, 0.06); }
   .mood-num { font-family: Georgia, "Times New Roman", serif; font-size: 15px; color: var(--accent); }
   .mood-sep { color: var(--gold); }
   .mood-more { margin-left: 6px; color: var(--gold); font-size: 12px; white-space: nowrap; }
   .wake-line { display: flex; flex-wrap: wrap; justify-content: center; gap: 2px 6px; width: fit-content;
     max-width: 92%; margin: 12px auto 0; padding: 3px 12px; font-size: 12px; line-height: 1.6; font-style: italic;
-    color: var(--place); background: #fff; border: 1px solid var(--activity); border-radius: 999px; }
+    color: var(--place); background: #ffffff; border: 1px solid var(--activity); border-radius: 999px; }
   .wake-k { font-weight: 600; }
   .wake-sep { color: var(--activity); }
   a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

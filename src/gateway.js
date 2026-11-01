@@ -8,6 +8,9 @@ import { isDrivesEnabled, reportUserMessage, reportAssistantMessage } from './dr
 import { applyProof } from './proof-gateway.js';
 import { observeUserMessage, doingBlock } from './doing.js';
 import { repairMessages } from './message-repair.js';
+import { listPending, markPendingRead } from './chat-queue.js';
+// 攒着的话前面要标一个「MM-DD HH:mm」（见 injectPendingChat）
+import { formatDateTime } from './wall-time.js';
 
 const app = express();
 app.use(express.json({ limit: '10mb' }));
@@ -194,6 +197,54 @@ function injectDoing(messages) {
       out[i] = { ...m, content: [...m.content, { type: 'text', text: block }] };
       return out;
     }
+  }
+  return messages;
+}
+
+// 她在网页上攒着、没点「让你读」的话。
+//
+// 小满 10-30：「他醒来要看到我预存的消息」。那「醒来」就是这条
+// heartbeat-wake 线路。和 injectDoing 一样跟在末尾：后面没有需要复用的前缀，
+// 所以哪怕这段每轮都变，也不影响前面所有东西的缓存命中。
+//
+// 读到就算读过（和动态里 markUserMomentsSeen 一个道理）：没回也不重复递。
+// 这意味着这一轮若上游报错，那几句话不会再出现在下一轮——
+// 但数据还在 chat_pending 表里，查得到。
+function injectPendingChat(messages) {
+  let rows;
+  try {
+    rows = listPending(20);
+  } catch (err) {
+    console.error('gateway: 读不到攒着的话，这轮不注入:', err.message);
+    return messages;
+  }
+  if (!rows.length) return messages;
+
+  const lines = rows
+    .map((r) => `【${formatDateTime(r.created_at).slice(5, 16)}】${r.text}`)
+    .join('\n');
+  const block = '<pending_chat>\n' +
+    '她在网页的聊天里留了这几句，你还没读过（她没点「让你读」，所以留到你醒来）：\n' +
+    lines + '\n</pending_chat>';
+
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (m?.role !== 'user') continue;
+    const out = [...messages];
+    if (typeof m.content === 'string') {
+      out[i] = { ...m, content: `${m.content}\n\n${block}` };
+    } else if (Array.isArray(m.content)) {
+      out[i] = { ...m, content: [...m.content, { type: 'text', text: block }] };
+    } else {
+      return messages;
+    }
+    try {
+      markPendingRead(rows.map((r) => r.id));
+      console.log(`gateway: 递了 ${rows.length} 条攒着的话给唤醒这轮`);
+    } catch (err) {
+      console.error('gateway: 攒着的话标记已读失败:', err.message);
+    }
+    return out;
   }
   return messages;
 }

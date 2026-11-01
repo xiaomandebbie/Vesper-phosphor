@@ -272,6 +272,14 @@ export function activeDoings() {
   return stmt("SELECT * FROM doing WHERE status = 'active' ORDER BY started_at DESC").all();
 }
 
+// 两个名字是不是同一件事。句末的语气词和标点不算差异：
+// 「复习啦」「复习咯」「复习了」「复习」全是同一件。
+function normalizeWhat(s) {
+  return String(s ?? '')
+    .replace(/[\s。，、！？~～…·.,!?]+/g, '')
+    .replace(/[啦咯了呢吧啊哦呀嘛哈嘿呗噢喔]+$/, '');
+}
+
 // 到点唤醒的 note。**开工和收工要用同一个函数生成**，
 // 不然收工时按不同的字串去撒，撒不到，那个约就漏下来了。
 const checkNote = (what) => `看看她「${what}」怎么样了`;
@@ -304,7 +312,11 @@ export function startDoing({ what, raw = null, at = Date.now() }) {
 
   // 同一件事重复说不再登一条，只把开工时间往后挑——你可能是刚才被打断又重新开始。
   // 旧的约要先撒，不然按老时间点触发一次白跑的唤醒。
-  const same = stmt("SELECT * FROM doing WHERE status = 'active' AND what = ?").get(name);
+  // 比对时去掉句末语气词（2026-10-24）。原来按 what = ? 精确比，
+  // 「复习啦」和「复习咯」差一个字就当成两件事，前一件永远挂在 active 里。
+  const same = activeDoings().find(
+    (r) => normalizeWhat(r.what) === normalizeWhat(name)
+  );
   if (same) {
     cancelCheck(name);
     const nextCheck = same.estimate_ms ? afterQuiet(at + same.estimate_ms) : null;

@@ -112,26 +112,26 @@ export function renderPostTools(m, back) {
 
 export const MY_MOMENTS_CSS = `
   /* 「写点什么」：平时一行，点开是输入框 */
-  .compose { background: var(--card, #fffdfb); border: 1px solid var(--line, #eadfe6); border-radius: 14px;
-    margin: -4px 0 14px; box-shadow: 0 1px 3px rgba(60, 30, 60, 0.08); overflow: hidden; }
+  .compose { background: var(--card, #fdfdfd); border: 1px solid var(--line, #e2e2e2); border-radius: 14px;
+    margin: -4px 0 14px; box-shadow: 0 1px 3px rgba(39, 39, 39, 0.08); overflow: hidden; }
   .compose-open { list-style: none; display: flex; align-items: center; gap: 8px; min-height: 48px;
-    padding: 0 16px; cursor: pointer; font-size: 14px; color: var(--ink, #2b2233); }
+    padding: 0 16px; cursor: pointer; font-size: 14px; color: var(--ink, #252525); }
   .compose-open::-webkit-details-marker { display: none; }
   .compose-open::marker { content: ''; }
-  .compose-icon { color: var(--gold, #b7792f); }
-  .compose-caret { margin-left: auto; color: var(--gold, #b7792f); font-size: 12px; transition: transform 0.2s ease; }
+  .compose-icon { color: var(--gold, #818181); }
+  .compose-caret { margin-left: auto; color: var(--gold, #818181); font-size: 12px; transition: transform 0.2s ease; }
   .compose[open] .compose-caret { transform: rotate(180deg); }
   .compose-form { display: grid; gap: 10px; padding: 2px 16px 16px; }
-  .compose-form textarea { width: 100%; padding: 10px 12px; font: inherit; font-size: 15px; line-height: 1.6;
-    color: var(--ink, #2b2233); background: var(--card, #fffdfb);
-    border: 1px solid var(--line, #eadfe6); border-radius: 10px; resize: vertical; }
+  .compose-form textarea { width: 100%; padding: 10px 12px; font: inherit; font-size: 16px; line-height: 1.6;
+    color: var(--ink, #252525); background: var(--card, #fdfdfd);
+    border: 1px solid var(--line, #e2e2e2); border-radius: 10px; resize: vertical; }
   .compose-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
-  .compose-note { font-size: 11.5px; line-height: 1.5; color: var(--muted, #665a70); }
+  .compose-note { font-size: 11.5px; line-height: 1.5; color: var(--muted, #5e5e5e); }
 
   /* 你发的那几条：左边一道暗金，和 TA 发的分得清。
      position: relative 是给右上角那个按钮做定位参系用的 */
-  .moment.post.mine { position: relative; border-left: 3px solid #dba94e; }
-  .moment.post.mine .moment-name { color: var(--gold, #b7792f); }
+  .moment.post.mine { position: relative; border-left: 3px solid #adadad; }
+  .moment.post.mine .moment-name { color: var(--gold, #818181); }
   /* 名字那一行右边给按钮留出位置，不然长名字或「还没看到」会踭到它底下 */
   .moment.post.mine .moment-head { padding-right: 74px; }
 
@@ -139,29 +139,29 @@ export const MY_MOMENTS_CSS = `
   .mine-tools { position: absolute; top: 10px; right: 12px; z-index: 3; }
   .mine-tools > summary { list-style: none; display: inline-flex; align-items: center; gap: 3px;
     min-height: 30px; padding: 0 9px; border-radius: 9px;
-    font-size: 12px; color: var(--muted, #665a70); cursor: pointer;
-    background: var(--card-soft, #f3eef2); border: 1px solid var(--line, #eadfe6);
+    font-size: 12px; color: var(--muted, #5e5e5e); cursor: pointer;
+    background: var(--card-soft, #efefef); border: 1px solid var(--line, #e2e2e2);
     white-space: nowrap; }
   .mine-tools > summary::-webkit-details-marker { display: none; }
   .mine-tools > summary::marker { content: ''; }
   .mine-tools > summary:active { transform: scale(0.97); }
-  .mine-tools[open] > summary { color: var(--accent, #7a3e5d); }
+  .mine-tools[open] > summary { color: var(--accent, #4d4d4d); }
 
   /* 展开的那一层：从右上挂下来的卡片，不挤正文。
      宽度跟着屏幕走，窄屏上也不会被切掉 */
   .mine-tools-panel { position: absolute; top: 36px; right: 0;
     width: min(300px, calc(100vw - 80px));
-    background: var(--card, #fffdfb); border: 1px solid var(--line, #eadfe6);
-    border-radius: 12px; box-shadow: 0 8px 24px rgba(60, 30, 60, 0.18);
+    background: var(--card, #fdfdfd); border: 1px solid var(--line, #e2e2e2);
+    border-radius: 12px; box-shadow: 0 8px 24px rgba(39, 39, 39, 0.18);
     padding: 12px 14px 10px; animation: mine-tools-in 0.18s ease-out; }
   @keyframes mine-tools-in { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
   .mine-tools-panel .compose-form { padding: 0 0 8px; }
-  .mine-del { min-height: 40px; padding: 0 14px; font-size: 13px; color: var(--accent, #7a3e5d);
-    background: none; border: 1px solid var(--line, #eadfe6); border-radius: 10px; cursor: pointer; }
+  .mine-del { min-height: 40px; padding: 0 14px; font-size: 13px; color: var(--accent, #4d4d4d);
+    background: none; border: 1px solid var(--line, #e2e2e2); border-radius: 10px; cursor: pointer; }
 
   html[data-dark] .compose-form textarea { background: var(--card); color: var(--ink); }
   html[data-dark] .mine-del { color: var(--gold); }
-  html[data-dark] .moment.post.mine { border-left-color: #c79a4a; }
+  html[data-dark] .moment.post.mine { border-left-color: #9e9e9e; }
   html[data-dark] .mine-tools > summary { background: var(--card-soft); border-color: var(--line); }
   html[data-dark] .mine-tools-panel { background: var(--card); border-color: var(--line);
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.42); }
