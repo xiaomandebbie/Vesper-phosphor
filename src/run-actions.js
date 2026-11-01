@@ -66,10 +66,14 @@ function isNoopCall(action, detail) {
 // 返回 { results, dropped }。results 每项带 action / action_detail / result，
 // logWake 和共享时间线那边要用 action_detail 重建一个 decision 形状。
 // 被 Leto 叫醒的那一轮，只放行和 Leto 有关的事 + 存记忆。
-// 判断口径只看 note 开头，不看 kind：他自己约的续场也是 precise，
-// note 同样以 [Leto 开头，也该受限。
+//
+// 2026-11-01 修：原来只看 note 是不是以「[Leto」开头，而唤醒桥投进来的 note
+// 不一定是那个格式。13:15 那轮日志里 server 写的是 'Leto'、动作也选对了，却被
+// 当成普通唤醒放行——Leto 叫醒的那一轮于是什么都能干，跟「被叫醒就先把那边
+// 的事结掉」这条正好相反。现在只要求 note 里出现 leto 这个词：大小写不限、
+// 有没有方括号都认。
 function isLetoWake(selfNote) {
-  return /^\s*\[Leto/.test(String(selfNote ?? ''));
+  return /leto/i.test(String(selfNote ?? ''));
 }
 
 // 这一件事算不算「Leto 的事」。mcp_call 要看 action_detail 里的 server，
@@ -126,7 +130,8 @@ export async function runActions(decision, messages, { kind = 'non_precise', sel
   for (const item of allowed) {
     // 每件事自己一个 decision 形状：executeAction 和所有 continueXxx 都按
     // { action, action_detail, mood } 这三个字段认事，给全了就不用改它们
-    const one = { ...decision, action: item.action, action_detail: item.action_detail };
+    // selfNote 一起传下去：leto-steps 靠它分辨「被叫醒」和「自己醒来选的」，两轮步数上限不同。
+    const one = { ...decision, action: item.action, action_detail: item.action_detail, selfNote };
 
     if (item.action === 'noop') {
       results.push({ action: item.action, action_detail: item.action_detail, result: null });
