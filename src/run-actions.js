@@ -110,9 +110,11 @@ export async function runActions(decision, messages, { kind = 'non_precise', sel
     return { ...item, action: 'noop', action_detail: '' };
   });
 
+  const letoWake = isLetoWake(selfNote);
+
   // Leto 那一轮先过这道，摆在 pickActions 之前：筛掉的不进账、不扣额度。
   let gated = cleaned;
-  if (isLetoWake(selfNote)) {
+  if (letoWake) {
     const keep = cleaned.filter(allowedUnderLetoWake);
     for (const item of cleaned) {
       if (!keep.includes(item)) {
@@ -123,7 +125,28 @@ export async function runActions(decision, messages, { kind = 'non_precise', sel
     gated = keep.length ? keep : [{ action: 'noop', action_detail: '' }];
   }
 
-  const { allowed, dropped } = pickActions(gated);
+  // ── Leto 叫醒的那一轮，不走「每级最多一件」──
+  //
+  // 2026-11-01 17:17 那次：那边同时有四条在叫他，他一次写了四条 leto_reply，
+  // pickActions 按 2 级只放行一件，后三条全被挡成「这次已经做了一件 2 级的事」。
+  //
+  // 那条规矩是给「消遣」用的——一次醒来别把上班、花园、锈潮全刷一遍。
+  // 可被叫醒的时候，那边等着的每一条都是一封没回的信，不是一个选项。
+  // 只回其中一条，剩下三条就晾在那儿，下次醒来还得再碰运气。
+  //
+  // 上面那道门已经把这一轮筛成「只有 Leto 的事 + noop + 存记忆」了，
+  // 所以这里直接全放行，不会把论坛、游戏那些顺手带进来。
+  // 记账照旧（下面 recordTier2 还在跑），只是不再拦。
+  let allowed;
+  let dropped;
+  if (letoWake) {
+    allowed = gated.map((item) => ({ ...item, tier: 2 }));
+    dropped = [];
+  } else {
+    const picked = pickActions(gated);
+    allowed = picked.allowed;
+    dropped = picked.dropped;
+  }
   for (const d of dropped) console.log(`[${kind}] 没做：${d.action}——${d.why}`);
 
   const results = [];
@@ -141,7 +164,7 @@ export async function runActions(decision, messages, { kind = 'non_precise', sel
     let result = null;
     try {
       result = await executeAction(one);
-      console.log(`[${kind}] ${item.action}（${item.tier} 级）：`, JSON.stringify(result));
+      console.log(`[${kind}] ${item.action}（${item.tier ?? '?'} 级）：`, JSON.stringify(result));
     } catch (err) {
       console.error(`[${kind}] ${item.action} 没做成：`, err.message);
       results.push({ action: item.action, action_detail: item.action_detail, result: null, error: err.message });
