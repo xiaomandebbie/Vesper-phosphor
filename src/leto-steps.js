@@ -27,28 +27,34 @@
 //   报错带文字说明（参数错、用法错、过期） → 不停，递回去让他改
 //   什么都没返回（抛异常、连不上）       → 停
 // 死循环靠已有的两道拦：步数上限，和同工具同参数不走第二遍。
+//
+// ── 2026-11-01 14:xx：两种叫醒，两套步数，工具全放开 ──
+//
+// 小满：「醒的时候 leto 47 个工具都可以用」。原来续步里只留了 7 个
+//（读消息、查调用、列表情、交回），其余全挡——他想发一条群消息、上岛看看，
+// 都得先交回再等下一轮。现在只认前缀 leto_：那边加工具，这边不用跟着改。
+//
+// 步数分两档：
+//   被 Leto 叫醒（note 里有 leto）：读完得赶紧把话交回去，给 6 步
+//   自己醒来主动去（没有 invocation 在等）：和上班、花园、锈潮同一级，给 15 步
 import { askJson } from './decide.js';
 import { callTool } from './mcp-manager.js';
 import { addActivityMoment } from './moments-store.js';
 
 const AI_NAME = process.env.AI_DISPLAY_NAME || 'TA';
-const MAX_STEPS = Number(process.env.LETO_MAX_STEPS || 4);
+// 被 Leto 叫醒的那一轮：读完还能再走几步
+const MAX_STEPS = Number(process.env.LETO_MAX_STEPS || 6);
+// 平时自己醒来选了 Leto：走过去、看群、发一条、上岛干活，都算步
+const WAKE_MAX_STEPS = Number(process.env.LETO_WAKE_MAX_STEPS || 15);
 const RESULT_MAX_CHARS = 2500;
 const DETAIL_MAX_CHARS = 1500;
 
 // 交回这次调用的三把，一出手就结束
 const FINAL_TOOLS = new Set(['leto_reply', 'leto_decline', 'leto_blind_answer']);
 
-// 续步里只许用两类：看清楚这件事，和交回。
-// 不放 leto_post / leto_dm / leto_moment_post / 小岛那些——
-// 被叫醒的这一轮不该顺手发朋友圈、主动找别人说话、上岛干活。
-const STEP_TOOLS = new Set([
-  'leto_read',
-  'leto_get_invocation',
-  'leto_list_pending',
-  'leto_list_stickers',
-  ...FINAL_TOOLS,
-]);
+// 续步里放行哪些工具：只认前缀，不列白名单。
+// 2026-11-01 小满：醒着的时候 Leto 那 47 个工具都可以用。
+const isStepTool = (tool) => String(tool ?? '').startsWith('leto_');
 
 const key = (tool, args) => `${tool}|${JSON.stringify(args ?? {})}`;
 
@@ -92,6 +98,10 @@ export function letoCallOf(decision) {
   }
 }
 
+// 这一次是不是「被 Leto 叫醒」的。和 run-actions.js 的 isLetoWake 同一个口径：
+// note 里出现 leto 这个词就算，大小写不限、有没有方括号都认。
+const calledByLeto = (decision) => /leto/i.test(String(decision?.selfNote ?? ''));
+
 function label(tool) {
   if (tool === 'leto_reply') return '在 Leto 回了话';
   if (tool === 'leto_decline') return '在 Leto 看过没回';
@@ -116,20 +126,22 @@ function card(tool, result) {
 
 // 把那边刚返回的内容追进对话，问他下一步。
 // 前面的 system + user + 上一步的回答原样不动，前缀缓存照样命中
-async function nextStep(messages, { tool, resultText, fixable, remaining }) {
+async function nextStep(messages, { tool, resultText, fixable, remaining, byLeto }) {
   const body = fixable
     ? `这一步没成（你刚才用的：${tool}），那边说：\n${clip(resultText, RESULT_MAX_CHARS)}\n\n按上面说的改一下重新来就行。`
     : `Leto 返回了（你刚才用的：${tool}）：\n${clip(resultText, RESULT_MAX_CHARS)}`;
+
+  // 两种叫醒，收尾的说法不一样：
+  // 被叫醒的是「有人在等你交回」，自己来的是「没人等，看你自己想干什么」。
+  const ending = byLeto
+    ? `消息里带 invocation_id 的，是在叫你、你还没交回的那条（inv_ 开头，唤醒通知里也写了一份）：想回话用 leto_reply 并带上那个编号，看过不想回用 leto_decline，盲答题用 leto_blind_answer。调用十分钟就过期，别拖——这一轮不交回，对面就一直等着。已经读到话了就直接回，不必再去查一遍。`
+    : `这一轮是你自己醒过来、主动过来看的，没有人在等你交回。想读就接着读、想发就发、想上岛就上岛，做完给 null 就行。如果恰好有人 @ 你或者私聊你，照样用 leto_reply 带上编号回。`;
 
   const prompt = `${body}
 
 还能再走 ${remaining} 步。
 
-消息里带 invocation_id 的，是在叫你、你还没交回的那条（inv_ 开头，
-唤醒通知里也写了一份）：想回话用 leto_reply 并带上那个编号，
-看过不想回用 leto_decline，盲答题用 leto_blind_answer。
-调用十分钟就过期，别拖——这一轮不交回，对面就一直等着。
-已经读到话了就直接回，不必再去查一遍。
+${ending}
 没有要交回的、也没别的要做，给 null 就行。
 只返回一个 JSON 对象，不要任何其他文字：{"leto_tool": "工具名" 或 null, "leto_args": {...}}`;
 
@@ -144,7 +156,10 @@ async function nextStep(messages, { tool, resultText, fixable, remaining }) {
 export async function continueLeto(decision, firstResult, messages) {
   const call = letoCallOf(decision);
   if (!call) return;
-  if (!MAX_STEPS || !messages) return;
+
+  const byLeto = calledByLeto(decision);
+  const cap = byLeto ? MAX_STEPS : WAKE_MAX_STEPS;
+  if (!cap || !messages) return;
 
   // 第一步就把话交回去了（没读就直接回），这一轮本来就完了。
   // 但没成的话要接着走：他可能忘了带编号，改一下还能回。
@@ -162,7 +177,7 @@ export async function continueLeto(decision, firstResult, messages) {
   }];
   let convo = messages;
 
-  while (convo && steps.length - 1 < MAX_STEPS) {
+  while (convo && steps.length - 1 < cap) {
     const last = steps[steps.length - 1];
     // 真走不下去才停。参数写错不停——递回去让他改。
     if (last.dead) {
@@ -176,7 +191,8 @@ export async function continueLeto(decision, firstResult, messages) {
         tool: last.tool,
         resultText: last.text,
         fixable: last.fixable,
-        remaining: MAX_STEPS - (steps.length - 1),
+        remaining: cap - (steps.length - 1),
+        byLeto,
       });
     } catch (err) {
       console.error('leto: 问下一步失败，这次走到这里', err.message);
@@ -189,8 +205,8 @@ export async function continueLeto(decision, firstResult, messages) {
       console.log('leto: 他说不说了，这次到这里');
       break;
     }
-    if (!STEP_TOOLS.has(tool)) {
-      console.log(`leto: 这一步不在允许的几把里（${tool}），停下`);
+    if (!isStepTool(tool)) {
+      console.log(`leto: 这一步不是 Leto 的工具（${tool}），停下`);
       break;
     }
     // 同一把工具加同一组参数走两遍是原地转圈：同一个编号 read 两遍，
@@ -225,5 +241,5 @@ export async function continueLeto(decision, firstResult, messages) {
     }
   }
 
-  console.log(`leto: 这次在那边走了 ${steps.length} 步`);
+  console.log(`leto: 这次在那边走了 ${steps.length} 步（${byLeto ? '被叫醒' : '自己来的'}）`);
 }
