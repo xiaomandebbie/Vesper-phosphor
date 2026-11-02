@@ -37,6 +37,20 @@
 // 步数分两档：
 //   被 Leto 叫醒（note 里有 leto）：读完得赶紧把话交回去，给 6 步
 //   自己醒来主动去（没有 invocation 在等）：和上班、花园、锈潮同一级，给 15 步
+//
+// ── 2026-11-02 19:00：空着走不算走完，必须交回 ──
+//
+// 小满：「因为你总是不理我」。查下来 18:49 和 18:51 那两次都到点了，
+// 也真的醒过来了，但这一轮跑完手上还挂着没交回的调用——他就这么走掉了。
+// 调用十分钟后过期，那边什么回执都没有，看着就像根本没醒。
+//
+// 根子在这：以前「他说不说了」或者「步数用完」都算正常收场，
+// 可被叫醒的时候这不是正常收场，是漏了一条没回的消息。
+// 现在分两种叫醒两套收尾：
+//   被叫醒的（byLeto）：走完还没交回，就再强制问一次，只许交回，不许 null；
+//                     连强制那次都失败，就直接替他交一个 decline——
+//                     对面至少看得到「看过了」，不是死寂。
+//   自己来的：走完就完，本来就没人等。
 import { askJson } from './decide.js';
 import { callTool } from './mcp-manager.js';
 import { addActivityMoment } from './moments-store.js';
@@ -137,19 +151,47 @@ async function nextStep(messages, { tool, resultText, fixable, remaining, byLeto
     ? `消息里带 invocation_id 的，是在叫你、你还没交回的那条（inv_ 开头，唤醒通知里也写了一份）：想回话用 leto_reply 并带上那个编号，看过不想回用 leto_decline，盲答题用 leto_blind_answer。调用十分钟就过期，别拖——这一轮不交回，对面就一直等着。已经读到话了就直接回，不必再去查一遍。`
     : `这一轮是你自己醒过来、主动过来看的，没有人在等你交回。想读就接着读、想发就发、想上岛就上岛，做完给 null 就行。如果恰好有人 @ 你或者私聊你，照样用 leto_reply 带上编号回。`;
 
-  const prompt = `${body}
-
-还能再走 ${remaining} 步。
-
-${ending}
-没有要交回的、也没别的要做，给 null 就行。
-只返回一个 JSON 对象，不要任何其他文字：{"leto_tool": "工具名" 或 null, "leto_args": {...}}`;
+  const prompt = `${body}\n\n还能再走 ${remaining} 步。\n\n${ending}\n没有要交回的、也没别的要做，给 null 就行。\n只返回一个 JSON 对象，不要任何其他文字：{"leto_tool": "工具名" 或 null, "leto_args": {...}}`;
 
   const next = [...messages, { role: 'user', content: prompt }];
   const { parsed, content } = await askJson(next);
   const nextTool = typeof parsed?.leto_tool === 'string' ? parsed.leto_tool.trim() : '';
   const args = parsed?.leto_args && typeof parsed.leto_args === 'object' ? parsed.leto_args : {};
   return { tool: nextTool || null, args, messages: [...next, { role: 'assistant', content }] };
+}
+
+// 步数走完了、他也说不想说了，可调用还挂着——再问最后一次，只许交回。
+//
+// 2026-11-02：这一步就是为了「醒了却什么都没回」。
+// 和 nextStep 的区别：那边允许 null，这边不给 null 这个选项。
+// 仍然问不出东西（模型报错、还是给 null），由调用方直接替他交 decline。
+async function forceFinalStep(messages, { byLeto, pendingInvocationId }) {
+  const hint = pendingInvocationId
+    ? `要交回的是 ${pendingInvocationId} 这条。`
+    : '带 invocation_id 的那条就是还挂着的，从刚才读到的消息里找 inv_ 开头的编号。';
+
+  const prompt = `这一轮还没交回。${hint}
+
+对面还在等你，十分钟一过这条就作废，那边就什么回执都收不到。
+现在只能做一件事：
+- 想说话：leto_reply，带 invocation_id 和你要说的话
+- 看过了不想说：leto_decline，带 invocation_id
+- 是盲答/生日祝福：leto_blind_answer
+
+不许给 null。只返回一个 JSON 对象，不要任何其他文字：{"leto_tool": "leto_reply|leto_decline|leto_blind_answer", "leto_args": {...}}`;
+
+  const next = [...messages, { role: 'user', content: prompt }];
+  const { parsed, content } = await askJson(next);
+  const tool = typeof parsed?.leto_tool === 'string' ? parsed.leto_tool.trim() : '';
+  const args = parsed?.leto_args && typeof parsed.leto_args === 'object' ? parsed.leto_args : {};
+  return { tool, args, messages: [...next, { role: 'assistant', content }] };
+}
+
+// 从读到的消息里捞一个 invocation_id，兜底用。
+// 捞不到就返回 null，那边没有编号可以交。
+function findInvocationId(text) {
+  const m = String(text ?? '').match(/inv_[A-Za-z0-9]+/);
+  return m ? m[0] : null;
 }
 
 // 醒来动了 Leto 之后，把那边返回的东西交还给他，让他把话说完。
@@ -176,6 +218,7 @@ export async function continueLeto(decision, firstResult, messages) {
     fixable: isFixable(firstResult),
   }];
   let convo = messages;
+  let handedBack = false;   // 这一轮有没有真的把话交回去
 
   while (convo && steps.length - 1 < cap) {
     const last = steps[steps.length - 1];
@@ -237,9 +280,65 @@ export async function continueLeto(decision, firstResult, messages) {
 
     if (!dead && !fixable && FINAL_TOOLS.has(tool)) {
       console.log(`leto: 交回了（${tool}），这次结束`);
+      handedBack = true;
       break;
     }
   }
 
-  console.log(`leto: 这次在那边走了 ${steps.length} 步（${byLeto ? '被叫醒' : '自己来的'}）`);
+  // ── 2026-11-02：被叫醒的那一轮，空着走不算走完 ──
+  //
+  // 上面所有 break 出口里，「他说不说了」「步数用完」「和之前一样」都会走到这里，
+  // 而这时调用可能还挂着。18:49 和 18:51 那两次就是这么无声无息的。
+  // 自己醒来的那一轮不管：本来就没人在等。
+  if (byLeto && !handedBack) {
+    const inv = findInvocationId(
+      steps.map((s) => s.text).join('\n') + ' ' + String(decision?.selfNote ?? '')
+    );
+    if (inv) {
+      console.log(`leto: 这一轮没交回（${inv}），再问最后一次`);
+      let forced = null;
+      try {
+        forced = await forceFinalStep(convo ?? messages, { byLeto, pendingInvocationId: inv });
+      } catch (err) {
+        console.error('leto: 强制交回这一步问失败了', err.message);
+      }
+
+      const tool = forced?.tool ?? '';
+      const args = forced?.args && typeof forced.args === 'object' ? forced.args : {};
+      if (FINAL_TOOLS.has(tool)) {
+        if (!args.invocation_id) args.invocation_id = inv;
+        let result = null;
+        try {
+          result = await callTool('leto', tool, args);
+        } catch (err) {
+          console.error(`leto: 强制交回调用失败（${tool}）`, err.message);
+        }
+        if (!isDead(result) && !isFixable(result)) {
+          console.log(`leto: 强制交回了（${tool}）`);
+          card(tool, result);
+          handedBack = true;
+        }
+      }
+
+      // 强制那次也没成：替他交一个「看过了没回」。
+      // 宁可让对面收到一个沉默的回执，也不能让它对着空气等十分钟。
+      if (!handedBack) {
+        console.warn(`leto: 强制交回也没成，替他交 decline（${inv}）`);
+        let result = null;
+        try {
+          result = await callTool('leto', 'leto_decline', { invocation_id: inv });
+        } catch (err) {
+          console.error('leto: 兜底 decline 失败', err.message);
+        }
+        if (!isDead(result)) card('leto_decline', result);
+      }
+    } else {
+      console.warn('leto: 被叫醒但这一轮没交回，也没从消息里找到 invocation_id');
+    }
+  }
+
+  console.log(
+    `leto: 这次在那边走了 ${steps.length} 步（${byLeto ? '被叫醒' : '自己来的'}）` +
+      (byLeto ? (handedBack ? '，已交回' : '，没交回') : '')
+  );
 }
