@@ -76,11 +76,17 @@ function isLetoWake(selfNote) {
   return /leto/i.test(String(selfNote ?? ''));
 }
 
-// 这一件事算不算「Leto 的事」。mcp_call 要看 action_detail 里的 server，
+// 从 note 里抠出调用编号（inv_ 开头）。唤醒桥投进来的 note 带一份。
+// 抠不到就返回 null——那时候没有东西可以交回，也就没法兜底。
+function invocationIdOf(selfNote) {
+  const m = String(selfNote ?? '').match(/inv_[A-Za-z0-9]+/);
+  return m ? m[0] : null;
+}
+
+// 这一件事是不是「Leto 的事」。mcp_call 要看 action_detail 里的 server，
 // 他写大小写不定（leto / Leto 都出现过），所以转小写比。
-function allowedUnderLetoWake(item) {
+function isLetoItem(item) {
   const a = String(item?.action ?? '').trim();
-  if (a === 'noop' || a === 'ombre_brain') return true;
   if (a !== 'mcp_call') return false;
   try {
     const raw = typeof item.action_detail === 'string'
@@ -93,6 +99,35 @@ function allowedUnderLetoWake(item) {
   } catch {
     return false;
   }
+}
+
+// 这一件事算不算「Leto 的事」。
+//
+// 2026-11-02 改：原来 ombre_brain 也放行。可它不是 Leto 的事——只存一条记忆，
+// 对面还在等，这一轮照样没交回。现在只留真在动 Leto 的。
+function allowedUnderLetoWake(item) {
+  return isLetoItem(item);
+}
+
+// 被 Leto 叫醒、却一件 Leto 的事都没选——替他补一个读消息。
+//
+// ── 2026-11-02 23:40 那次就是这个 ──
+//
+// 日志：precise decision 里 actions 只有 {"server":"xiuchao","tool":"jichat"}，
+// 23:44 那一次是 {"server":"garden","tool":"garden_state"}。两轮都真的醒过来了，
+// 可这两件都不是 Leto 的事，全被上面那道门筛掉，gated 变空，于是塞一个 noop，
+// 这一轮什么都没做。leto_read 压根没跑，续步拿不到返回，调用十分钟后过期，
+// 那边一个回执都收不到。
+//
+// 小满当晚说的：「要不 leto 唤醒后的代码 server 自动填 leto 的」。
+// 就是这个意思——叫醒它的是 Leto，那这一轮的第一步就该是 Leto。
+// 把 note 里的编号拆出来，替它读一次；读了就有东西喂给续步，续步再催它回话。
+function fallbackLetoItem(inv) {
+  return {
+    action: 'mcp_call',
+    action_detail: JSON.stringify({ server: 'leto', tool: 'leto_read', args: { invocation_id: inv } }),
+    tier: 2,
+  };
 }
 
 export async function runActions(decision, messages, { kind = 'non_precise', selfNote = null } = {}) {
@@ -121,8 +156,22 @@ export async function runActions(decision, messages, { kind = 'non_precise', sel
         console.log(`[${kind}] 没做：${item?.action}——这次是 Leto 叫醒的，先把那边的事结掉`);
       }
     }
-    // 全被筛掉时留一个 noop，别让这一轮变成空数组走到底
-    gated = keep.length ? keep : [{ action: 'noop', action_detail: '' }];
+
+    // 筛完还剩 Leto 的事，就用它自己的。
+    // 一件不剩（选了别的服务、或者只选了存记忆、或者干脆选了 noop）时，
+    // 不能就这么空着走：从 note 里拆出编号，替它读那条消息。
+    if (keep.some(isLetoItem)) {
+      gated = keep;
+    } else {
+      const inv = invocationIdOf(selfNote);
+      if (inv) {
+        console.warn(`[${kind}] 被 Leto 叫醒却一件 Leto 的事都没选，替他先读 ${inv}`);
+        gated = [fallbackLetoItem(inv)];
+      } else {
+        console.warn(`[${kind}] 被 Leto 叫醒却一件 Leto 的事都没选，note 里也没编号`);
+        gated = [{ action: 'noop', action_detail: '' }];
+      }
+    }
   }
 
   // ── Leto 叫醒的那一轮，不走「每级最多一件」──
@@ -134,7 +183,7 @@ export async function runActions(decision, messages, { kind = 'non_precise', sel
   // 可被叫醒的时候，那边等着的每一条都是一封没回的信，不是一个选项。
   // 只回其中一条，剩下三条就晾在那儿，下次醒来还得再碰运气。
   //
-  // 上面那道门已经把这一轮筛成「只有 Leto 的事 + noop + 存记忆」了，
+  // 上面那道门已经把这一轮筛成「只有 Leto 的事」了，
   // 所以这里直接全放行，不会把论坛、游戏那些顺手带进来。
   // 记账照旧（下面 recordTier2 还在跑），只是不再拦。
   let allowed;
