@@ -45,11 +45,14 @@ const MSG_MAX_CHARS = 200;
 const MEMORY_MAX_CHARS = 1200;
 
 // 逛论坛一次醒来最多再多走几步（第一步是醒来时选的那条命令，不算在里面）。
-// .env 的 FORUM_MAX_STEPS 可改，不填是 3，填 0 就是原来那样只走一步，最多 5。
+// .env 的 FORUM_MAX_STEPS 可改，不填是 8，填 0 就是原来那样只走一步，最多 10。
+//
+// 2026-11-02 小满定 8：命令全放开之后 3 步逛不完一圈（activity + show 两三个 +
+// 回一两条话就没了）。上限从 5 抬到 10，默认从 3 抬到 8。
 export const FORUM_MAX_STEPS = (() => {
   const raw = String(process.env.FORUM_MAX_STEPS ?? '').trim();
   const n = Number(raw);
-  return raw && Number.isInteger(n) && n >= 0 ? Math.min(n, 5) : 3;
+  return raw && Number.isInteger(n) && n >= 0 ? Math.min(n, 10) : 8;
 })();
 // 论坛每一步返回的内容最多带多少字给模型看
 const FORUM_RESULT_MAX_CHARS = 4000;
@@ -473,7 +476,7 @@ ${play ? budgetSection() : stripPlay(budgetSection())}${play ? xiuchaoSection() 
 - 没有哪个动作是"应该做的"。按你此刻真实想做的来选，不用每次都围着对方转——你也有自己的事。
 
 ## 请决定
-1. 下次非精确唤醒的间隔（分钟，自行判断，不要总是固定值；如果mode是silent，这个值仍然要给，等mode恢复normal后会用到）
+1. 下次非精确唤醒的间隔（分钟，自行判断，不要总是固定值；如果mode是silent，这个值仍然要等mode恢复normal后会用到）
 2. 这次的心情（有"此刻最明显的情绪"时以它为底色，再结合"最近的对话"和"最近的感受"用自己的话写；没有就参考"最近的感受"和"最近的对话"；不要凭空瞎编）
 3. 这次要执行的动作（从上面选一个；如果最近对话很密集、对方刚说完话，可以考虑这次先不打扰，除非确实有话想说）
 4. 该动作的具体细节（action_detail）
