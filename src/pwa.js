@@ -29,6 +29,12 @@
 // /media 整个挂在 requireBasicAuth 后面，而登录页是没登录时看的，
 // 引用 /media/app/... 会被挡。所以这里单开两条免认证的路，
 // 只放这两张图，其他照旧。
+//
+// ── 推送（2026-11-05）──
+//
+// service worker 里那两个监听（push / notificationclick）是推送的最后一站。
+// 密钥、订阅表、发送在 push.js；开关和前端订阅在 push-ui.js。
+// 没有这两个监听，推送到了手机也不会弹。
 
 import fs from 'fs';
 import path from 'path';
@@ -238,10 +244,14 @@ function manifest() {
 }
 
 // ── service worker ──
-// 故意写得极简：这几个页面全是实时的，缓存正文只会让你看到旧的。
-// 它存在的唯一理由是：iOS 要求有 service worker 才算数的 PWA，
-// 而以后接 ios-web-push 那套推送也得靠它。所以只缓存图标和边框。
-const SW = `const CACHE = 'vp-shell-v1';
+// 缓存部分故意写得极简：这几个页面全是实时的，缓存正文只会让你看到旧的。
+// 只缓存图标和边框。
+//
+// push 和 notificationclick 是推送的最后一站（见 push.js）。
+//
+// CACHE 名从 v1 换成 v2：旧 sw 已经装在她手机上了，不换名的话浏览器
+// 可能沿用旧的、不重新注册，push 那两个监听就永远上不去。
+const SW = `const CACHE = 'vp-shell-v2';
 const ASSETS = ['/app/icon.png', '/app/frame.png'];
 
 self.addEventListener('install', (e) => {
@@ -261,6 +271,44 @@ self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url);
   if (e.request.method !== 'GET' || !ASSETS.includes(url.pathname)) return;
   e.respondWith(caches.match(e.request).then((hit) => hit || fetch(e.request)));
+});
+
+// 收到推送。payload 是 push.js 那边发的 { title, body, url, tag }。
+// 解不出来也要弹一条：userVisibleOnly 说好了每条推送都要有可见通知，
+// 不弹的话浏览器会记一笔，次数多了就把订阅废掉。
+self.addEventListener('push', (e) => {
+  let d = {};
+  try { d = e.data ? e.data.json() : {}; } catch (err) { d = {}; }
+  const title = d.title || '晨暮星';
+  e.waitUntil(
+    self.registration.showNotification(title, {
+      body: d.body || '',
+      icon: '/app/icon.png',
+      badge: '/app/icon.png',
+      // 同类的后一条盖前一条，不堆成一屏。没给 tag 就条条都留着
+      tag: d.tag || undefined,
+      renotify: Boolean(d.tag),
+      data: { url: d.url || '/home' },
+    })
+  );
+});
+
+// 点通知：先找已经开着的窗口，没有才新开。
+// 不这样的话每条通知点一下就多一个 PWA 窗口。
+self.addEventListener('notificationclick', (e) => {
+  e.notification.close();
+  const target = (e.notification.data && e.notification.data.url) || '/home';
+  e.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((list) => {
+      for (const c of list) {
+        if ('focus' in c) {
+          if ('navigate' in c) c.navigate(target).catch(() => {});
+          return c.focus();
+        }
+      }
+      return self.clients.openWindow(target);
+    })
+  );
 });
 `;
 
