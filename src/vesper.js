@@ -83,7 +83,8 @@ const API_KEY = process.env.REPORT_STATUS_API_KEY;
 const BASIC_USER = process.env.VESPER_BASIC_USER;
 const BASIC_PASS = process.env.VESPER_BASIC_PASS;
 const MEDIA_DIR = process.env.MEDIA_DIR || '/opt/vesper/media';
-const MEDIA_MAX_AGE_DAYS = Number(process.env.MEDIA_MAX_AGE_DAYS || 30);
+// 0（或负数）= 永久保留。默认 30 天
+const MEDIA_MAX_AGE_DAYS = Number(process.env.MEDIA_MAX_AGE_DAYS ?? 30);
 
 fs.mkdirSync(path.join(MEDIA_DIR, 'images'), { recursive: true });
 fs.mkdirSync(path.join(MEDIA_DIR, 'audio'), { recursive: true });
@@ -101,6 +102,15 @@ function safeParse(s) {
 
 // 只清动态的图片和语音。头像（avatars）和主屏幕图标（app-icon）不在这里，不会过期被删
 function pruneOldMedia() {
+  // MEDIA_MAX_AGE_DAYS=0 是「永久保留」，一个都不删。
+  //
+  // 这道闸必须有：不加的话填 0 等于 cutoff 就是此刻，于是所有图和语音
+  // 立刻被删光——正好跟「不要过期」相反，而且删完才发现。
+  //
+  // 注意语音条显示「已过期」并不是显示 bug：audioSeconds()
+  // （moments-page.js / favorites.js）按文件大小估时长，文件被这里删了
+  // 就返回 null，那时才渲染成那句话。动态正文和留言一直都在。
+  if (!(MEDIA_MAX_AGE_DAYS > 0)) return;
   const cutoff = Date.now() - MEDIA_MAX_AGE_DAYS * 24 * 60 * 60 * 1000;
   for (const sub of ['images', 'audio']) {
     const dir = path.join(MEDIA_DIR, sub);
@@ -225,7 +235,8 @@ app.get('/wake/conversation', requireApiKey, (req, res) => {
   res.json(getRecentConversation(limit));
 });
 
-// 主页 /home（见 home-page.js）：导览里「回到主页」就是这里，内容先空着
+// 主页 /home（见 home-page.js）：导览里「回到主页」就是这里。
+// 现在摆纪念日卡、他此刻的心绪、唤醒时间，以及做过的事
 registerHomeRoutes(app, { requireBasicAuth });
 // 日记页 /diary（heartbeat 写的日记），见 diary-page.js。
 // 要挂在动态页之前：动态页里留着一个 /diary → /moments 的旧跳转，日记页没配时才轮到它
@@ -241,10 +252,11 @@ const barMcp = registerBarMcp(app);
 const barPage = registerBarRoutes(app, { requireBasicAuth });
 // 收藏（见 favorites.js）和星星罐（见 star-jar.js）：要挂在动态页之前。
 // /moments/favorites、/moments/star-jar 得比 /moments/:id 先匹配到，不然会被当成一个 id。
-// 这两页还在，只是不在菜单里了，从动态页进去
+// 这两页还在，只是不在菜单里了，从发现页进去
 registerFavoriteRoutes(app, { requireBasicAuth });
 registerStarJarRoutes(app, { requireBasicAuth });
-// 动态页 /moments（标题、日历、按天看动态、留言、自定义）以及对应接口，见 moments-page.js
+// 动态页 /moments（两个人各自发的动态、留言、点赞、自定义）以及对应接口，见 moments-page.js。
+// 行动卡不在这一页，在聊天页和主页
 registerMomentRoutes(app, { requireBasicAuth, requireApiKey });
 // 心绪页 /drives（Drivesoid 的情绪状态），见 drives-page.js
 registerDrivesRoutes(app, { requireBasicAuth });
@@ -265,7 +277,8 @@ const games = registerGameRoutes(app, { requireBasicAuth });
 // 这一页是列表，不是把 Ombre 开在这儿——那个是 /memory/ 转发。
 registerMemoriesRoutes(app, { requireBasicAuth });
 // 发现页 /discover（见 discover-page.js）：动态、音乐、梦境、共读、台灯这些入口。
-// 没配好的不藏起来，置灰并写明要填哪个变量。
+// 一行四个圆角方块，图标下面只写名字；长按进设置页改名字和图标（见 discover-apps.js）。
+// 没配好的不藏起来，只是淡下去、点不进。
 registerDiscoverRoutes(app, { requireBasicAuth });
 // 个人页 /me（见 me-page.js）：后台日志、自定义、收藏、唤醒节律、退出登录。
 // 里面那个 POST /logout 表单由 session-login.js 接（cookie 会话）。
@@ -294,6 +307,6 @@ app.get('/', (req, res) => res.redirect(302, musicProxy ? '/app' : '/home'));
 
 app.listen(PORT, () =>
   console.log(
-    `vesper listening on ${PORT}；主页：/home；日记页：${diaryPage ? '已开启' : '未配置'}；梦境页：/dreams；小酒馆：${barPage ? '/bar' : '未配置'}；小酒馆 MCP：${barMcp.enabled ? '/bar/mcp' : '未开（没配 BAR_MCP_TOKEN 或 Proof token）'}；记忆库：${memoryProxy ? `转发 ${memoryProxy}` : '未配置'}；音乐：${musicProxy ? `转发 ${musicProxy}，外壳 /app` : '未配置'}；星星罐：/moments/star-jar；钱包：/wallet${wallet.spendEnabled ? '' : '（没配 WALLET_SPEND_SECRET，扣款通知接口没开）'}；钱包 MCP：/wallet/mcp${wakeMcp.enabled ? `；约时间 MCP：/wake/mcp（最多挂 ${wakeMcp.maxPending} 个）` : '；约时间 MCP：未配 WAKE_MCP_TOKEN'}；共读书架：${books.enabled ? '/books' : '未配置（缺 BOOKS_UI_DIR）'}；共读 MCP：${booksMcp.enabled ? '/books/mcp' : '未开（没配 BOOKS_MCP_TOKEN）'}`
+    `vesper listening on ${PORT}；主页：/home；日记页：${diaryPage ? '已开启' : '未配置'}；梦境页：/dreams；小酒馆：${barPage ? '/bar' : '未配置'}；小酒馆 MCP：${barMcp.enabled ? '/bar/mcp' : '未开（没配 BAR_MCP_TOKEN 或 Proof token）'}；记忆库：${memoryProxy ? `转发 ${memoryProxy}` : '未配置'}；音乐：${musicProxy ? `转发 ${musicProxy}，外壳 /app` : '未配置'}；星星罐：/moments/star-jar；钱包：/wallet${wallet.spendEnabled ? '' : '（没配 WALLET_SPEND_SECRET，扣款通知接口没开）'}；钱包 MCP：/wallet/mcp${wakeMcp.enabled ? `；约时间 MCP：/wake/mcp（最多挂 ${wakeMcp.maxPending} 个）` : '；约时间 MCP：未配 WAKE_MCP_TOKEN'}；共读书架：${books.enabled ? '/books' : '未配置（缺 BOOKS_UI_DIR）'}；共读 MCP：${booksMcp.enabled ? '/books/mcp' : '未开（没配 BOOKS_MCP_TOKEN）'}；图和语音：${MEDIA_MAX_AGE_DAYS > 0 ? `保留 ${MEDIA_MAX_AGE_DAYS} 天` : '永久保留'}`
   )
 );
