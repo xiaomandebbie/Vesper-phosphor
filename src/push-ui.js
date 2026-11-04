@@ -15,6 +15,18 @@
 //
 // 免认证：里面没有任何秘密，而且浏览器注册 service worker 时未必带得上 cookie。
 //
+// ── 卡在「正在开…」的那次（2026-11-05）──
+//
+// 上一版点「打开」之后屏幕上就停在「正在开…」，不报错也不往下走。
+// 两个原因，都改了：
+//
+//   1. iOS 上 Notification.requestPermission() 的 Promise 形式有时不 resolve
+//      （WebKit 早期只有 callback 版，这两年才补的 Promise）。现在两种都接，
+//      谁先回算谁，再加一道超时读 Notification.permission 兜底。
+//
+//   2. 每一步没有进度。卡住时一点信息都没有，只能猜——这是真正的问题。
+//      现在问权限、装 sw、要订阅、存服务器四步各自报一句，各自带超时。
+//
 // ── 外观：一行，点进去改 ──
 //
 // 她说「要和其他外观一致，点进去更改」。所以个人页上只是一行带 › 的条目，
@@ -22,9 +34,8 @@
 //
 // ── 权限只弹一次 ──
 //
-// iOS 上 Notification.requestPermission() 只有一次机会：拒了就得进系统设置
-// 里手动开，网页再调也不会再弹。所以只在她真的点那个开关时弹，
-// 而且弹之前先把「这次没戏」的情况（不是 PWA、不是 HTTPS）说清楚。
+// iOS 上拒了就得进系统设置里手动开，网页再调也不会再弹。所以只在她真的
+// 点那个开关时弹，而且弹之前先把「这次没戏」的情况（不是 PWA、不是 HTTPS）说清楚。
 //
 // iOS 的 Web Push 只在 standalone 模式下有效，Safari 标签页里永远收不到。
 
@@ -159,6 +170,37 @@ const PAGE_SCRIPT = `(function () {
     }).then(function (r) { return r.json().catch(function () { return {}; }); });
   }
 
+  // 哪一步挂住都要能看见。上一版卡在「正在开…」一点信息没有，只能猜。
+  function withTimeout(p, ms, what) {
+    return Promise.race([
+      p,
+      new Promise(function (_, reject) {
+        setTimeout(function () { reject(new Error(what + '超过 ' + Math.round(ms / 1000) + ' 秒没回应')); }, ms);
+      }),
+    ]);
+  }
+
+  // iOS 上这个函数的 Promise 形式有时不 resolve（WebKit 早期只有 callback 版）。
+  // 两种都接，谁先回算谁；都不回就超时读一次 Notification.permission——
+  // 弹窗点过之后那个值是准的，就算回调丢了也能救回来。
+  function askPermission() {
+    return new Promise(function (resolve) {
+      var done = false;
+      function finish(p) {
+        if (done) return;
+        done = true;
+        resolve(p || Notification.permission);
+      }
+      setTimeout(function () { finish(Notification.permission); }, 12000);
+      try {
+        var r = Notification.requestPermission(finish);
+        if (r && typeof r.then === 'function') r.then(finish).catch(function () { finish(); });
+      } catch (e) {
+        finish();
+      }
+    });
+  }
+
   toggle.addEventListener('click', function () {
     // 先把没戏的情况说清楚，不动权限
     if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
@@ -177,35 +219,50 @@ const PAGE_SCRIPT = `(function () {
       say('通知被拒过了，网页这边弹不出来。去 设置 → 通知 → 晨暮星 里打开。');
       return;
     }
+    if (!KEY) {
+      say('服务器没把公钥发下来。看一下 .env 里的 VAPID_PUBLIC_KEY，改完要 pm2 restart vesper --update-env。');
+      return;
+    }
 
     toggle.disabled = true;
-    say('正在开…');
+    say('在问系统要不要通知权限…');
 
-    Notification.requestPermission()
+    askPermission()
       .then(function (perm) {
         if (perm !== 'granted') {
           toggle.disabled = false;
           say(perm === 'denied'
             ? '你点了不允许。这个系统只问一次，要改得去 设置 → 通知 → 晨暮星。'
-            : '还没允许。');
+            : '还没拿到权限（' + perm + '）。再点一下试试。');
           return null;
         }
-        return navigator.serviceWorker.register('/app/sw.js').then(function () {
-          return navigator.serviceWorker.ready;
-        });
+        say('权限有了，正在装 service worker…');
+        return withTimeout(
+          navigator.serviceWorker.register('/app/sw.js').then(function () {
+            return navigator.serviceWorker.ready;
+          }),
+          20000,
+          'service worker '
+        );
       })
       .then(function (reg) {
         if (!reg) return null;
-        return reg.pushManager.getSubscription().then(function (old) {
-          if (old) return old;
-          return reg.pushManager.subscribe({
-            userVisibleOnly: true,
-            applicationServerKey: toKey(KEY),
-          });
-        });
+        say('service worker 好了，正在向苹果要一个订阅…');
+        return withTimeout(
+          reg.pushManager.getSubscription().then(function (old) {
+            if (old) return old;
+            return reg.pushManager.subscribe({
+              userVisibleOnly: true,
+              applicationServerKey: toKey(KEY),
+            });
+          }),
+          25000,
+          '苹果那边'
+        );
       })
       .then(function (sub) {
         if (!sub) return null;
+        say('订阅拿到了，正在存到服务器…');
         var j = sub.toJSON();
         return post('/push/subscribe', {
           endpoint: j.endpoint,
@@ -254,7 +311,7 @@ const PAGE_SCRIPT = `(function () {
     offBtn.addEventListener('click', function () {
       offBtn.disabled = true;
       // 两边都要撤：浏览器这边退订，服务器那边删记录
-      (navigator.serviceWorker.getRegistration('/app/sw.js') || Promise.resolve(null))
+      Promise.resolve(navigator.serviceWorker.getRegistration('/app/sw.js'))
         .then(function (reg) { return reg ? reg.pushManager.getSubscription() : null; })
         .then(function (sub) {
           var ep = sub ? sub.endpoint : '';
