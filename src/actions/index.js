@@ -10,6 +10,7 @@ import proofDrink from './proof-drink.js';
 import readBook from './read-book.js';
 import { describeActivity, describeActivityDetail } from './activity.js';
 import { addActivityMoment } from '../moments-store.js';
+import { pushAsync } from '../push.js';
 
 const actions = {
   bark,
@@ -45,9 +46,20 @@ export async function executeAction(decision) {
   // 摇罐子（shake_jar）也不在：它在自己里面写好了卡片，落出来的那句话收在详情里。
   // 翻批注本（read_memo）同理：卡片在它自己里面写，批注正文收在详情里。
   // 自斟（proof_drink）也不在：喝了什么在小酒馆 /bar 的时间轴里，不必再往动态里塞一张卡。
+  //
+  // 通知和行动卡走同一句话（2026-11-05）：
+  // describeActivity() 生成的就是「允朔刚刚逛了 Lutopia 论坛，随便逛了逛」
+  // 这样的人话，直接当通知正文，不另写一套说法——两处各写一遍，
+  // 改了一边忘了另一边就是下一个坑。
+  // 详情不进通知：那里面是工具返回的整段内容，最多三千字。
   try {
     const text = describeActivity(decision, result);
-    if (text) addActivityMoment(text, describeActivityDetail(decision, result));
+    if (text) {
+      addActivityMoment(text, describeActivityDetail(decision, result));
+      // tag 固定：一次醒来可能做几件事，后一条盖前一条，不把锁屏堆成一片。
+      // 点通知进主页：行动卡就摆在那里（见 home-activity.js）
+      pushAsync({ title: text, url: '/home', tag: 'vp-act' });
+    }
   } catch (err) {
     console.error('executeAction(): 记录行为动态失败', err.message);
   }
