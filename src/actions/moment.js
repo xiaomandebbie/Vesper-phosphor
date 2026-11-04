@@ -5,6 +5,7 @@ import fs from 'fs';
 import path from 'path';
 import { addMoment } from '../state.js';
 import { getLastPostTs } from '../moments-store.js';
+import { pushAsync } from '../push.js';
 
 const MEDIA_DIR = process.env.MEDIA_DIR || '/opt/vesper/media';
 const IMAGES_DIR = path.join(MEDIA_DIR, 'images');
@@ -19,6 +20,10 @@ const IMAGE_TIMEOUT_MS = Number(process.env.IMAGE_TIMEOUT_MS) || 180000;
 
 // ElevenLabs 模型。不填是 eleven_v3（认 [breathing] / [whispers] 这类标签）。换模型只改 .env，不用动代码
 const ELEVENLABS_MODEL = (process.env.ELEVENLABS_MODEL || '').trim() || 'eleven_v3';
+
+// 通知里带多少字正文。锁屏上本来也显示不了太长，超了截掉
+const PUSH_BODY_CHARS = 60;
+const AI_NAME = process.env.AI_DISPLAY_NAME || 'TA';
 
 export const isImageEnabled = () => Boolean(IMAGE_API_URL && IMAGE_API_KEY && IMAGE_MODEL);
 export const isVoiceEnabled = () =>
@@ -155,5 +160,29 @@ export default async function moment(detail) {
 
   const [image_url, audio_url] = await Promise.all([generateImage(imagePrompt), generateAudio(voiceText)]);
   const id = addMoment({ content, image_url, audio_url });
+
+  // 通知（2026-11-05）。标题就是「允朔更新了动态」，正文带开头几十字。
+  //
+  // tag 带上 id：行动卡用固定的 vp-act（后一条盖前一条），动态不该跟它互盖，
+  // 也不该互盖彼此——两条动态至少隔 6 小时，本来就堆不起来。
+  //
+  // 不 await：动态已经落库了，推送发不出去不影响这一条。
+  try {
+    const chars = Array.from(content);
+    const body = content
+      ? chars.length > PUSH_BODY_CHARS
+        ? `${chars.slice(0, PUSH_BODY_CHARS).join('')}…`
+        : content
+      : '配了一张图';
+    pushAsync({
+      title: `${AI_NAME}更新了动态`,
+      body,
+      url: '/moments',
+      tag: `vp-moment-${id}`,
+    });
+  } catch (err) {
+    console.error('moment: 通知没发出去（动态已经发了）', err.message);
+  }
+
   return { ok: true, id, content, has_image: Boolean(image_url), has_audio: Boolean(audio_url) };
 }
