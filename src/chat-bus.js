@@ -10,10 +10,16 @@
 // 做的事」、把空正文用思考兜底。自己再写一遗就是两份代码干同一件事。
 //
 // 更要紧的是：走网关 = 网页聊天和 Aru 里那个 aru-chat 走同一条线路。
-// 她在「模型 · 连接 · 通知」里改「聊天」那一组，两边一起换——
-// 这正是她要的「只要他们共用上游」。
+// 她在「模型 · 连接 · 通知」里改「聊天」那一组，两边一起换。
 //
-// 所以这一层只管三件事：拼 messages、解 SSE、把字推给浏览器。
+// ── 记忆怎么进来的（2026-11-05）──
+//
+// 拼 messages 不在这儿干了，交给 memory-inject.js——她要的「注入逻辑也一样」
+// 就是那一层：指令、世界书六个位置、条目记忆每轮带、记忆目录、
+// 自动召回、最近几篇日记，按 Polaris 的顺序和预算规矩摆。
+//
+// 这边只负责两件事：把前文从 conversation_log 读成 history，
+// 以及在 memory_prompt 空着时给一份最小的底（persona）。
 //
 // ── 认证 ──
 //
@@ -35,6 +41,7 @@
 import fs from 'node:fs';
 import { getRecentConversation } from './state.js';
 import { formatDateTime } from './wall-time.js';
+import { buildMessages as buildWithMemory } from './memory-inject.js';
 
 const GATEWAY = String(process.env.VESPER_GATEWAY_URL || 'http://127.0.0.1:3002').replace(/\/+$/, '');
 // 网关上的线路名。aru-chat 和 chat 指向同一组上游（见 gateway.js 的 routingTable）。
@@ -78,11 +85,12 @@ export function emit(frame) {
   }
 }
 
-// ── 人格 ──
+// ── 底：指令空着时用这段 ──
+//
+// 真正的指令在「记忆 → 指令」里（memory_prompt 表）。这段只是她还没填时的底，
+// 别为了等一份设定把整个聊天卡在门外。
 //
 // .env 里 CHAT_PERSONA 直接写正文，CHAT_PERSONA_FILE 指一个文件。
-// 两个都没有就用下面这段最小的——没有人格文件也能先聊起来，
-// 别为了等一份设定把整个聊天卡在门外。
 let personaCache = null;
 let personaAt = 0;
 
@@ -120,33 +128,27 @@ function persona() {
   return personaCache;
 }
 
-// ── 拼 messages ──
+// ── 前文 ──
 //
-// 前文从 conversation_log 读：那是网关每轮追写的同一本账，
+// 从 conversation_log 读：那是网关每轮追写的同一本账，
 // Aru 里说的话和网页上说的话都在里面——所以两边看到的是同一段关系。
 //
-// 注意：不把本次要说的话先写进库再读，否则它会在 messages 里出现两次。
-// 写库由网关做（recordUserMessage）。
-function buildMessages(text) {
-  const out = [{ role: 'system', content: persona() }];
-
+// 注意：不包含本次要说的话——它由 memory-inject 摆在最后。
+// 写库由网关做（recordUserMessage），这边只读。
+function history() {
   let rows = [];
   try {
     rows = getRecentConversation(HISTORY_TURNS);
   } catch (err) {
     console.error('chat: 读不到前文，这轮只带当前这句', err.message);
+    return [];
   }
-
+  const out = [];
   for (const r of rows) {
     const content = String(r.content ?? '').trim();
     if (!content) continue;
-    out.push({
-      role: r.speaker === USER_NAME ? 'user' : 'assistant',
-      content,
-    });
+    out.push({ role: r.speaker === USER_NAME ? 'user' : 'assistant', content });
   }
-
-  out.push({ role: 'user', content: String(text ?? '').trim() });
   return out;
 }
 
@@ -158,11 +160,21 @@ export async function askUpstream(text, { streamId = String(Date.now()) } = {}) 
   const key = gatewayKey();
   if (!key) return { ok: false, error: '读不到 GATEWAY_API_KEY' };
 
-  const body = {
-    model: ROUTE,
-    messages: buildMessages(text),
-    stream: true,
-  };
+  // 指令、世界书、条目、目录、召回、日记都在这一步摆好
+  let messages;
+  try {
+    messages = buildWithMemory({ history: history(), text, fallbackSystem: persona() });
+  } catch (err) {
+    // 记忆这层坏了不应该让她连话都说不成：退回最简的三段
+    console.error('chat: 记忆这层出错，这轮只带前文', err.message);
+    messages = [
+      { role: 'system', content: persona() },
+      ...history(),
+      { role: 'user', content: String(text ?? '').trim() },
+    ];
+  }
+
+  const body = { model: ROUTE, messages, stream: true };
 
   emit({ type: 'typing', active: true });
 
