@@ -2,7 +2,7 @@
 //
 // 小满 2026-11-05：「我的主模型能不能直接改底层，像我在 aru 拉出来是 aru-chat，
 // 我想能改 aru-chat 的底层模型，现在是 deepseek 以后可以改为其他供应商」
-// 「连模型要更改 token 呀」
+// 「连模型要更改 token 呀」「可以保存以前的模型嘛」「换一个模型连接也可以换回之前的」
 //
 // ── aru-chat 是什么 ──
 //
@@ -17,6 +17,14 @@
 //
 // 照她给的 Aru 截图：功能模型是一页列表，每项带状态，点进去配具体的。
 // 这样一页上不会堆二十个输入框，而且每组各自保存、各自重启，互不影响。
+//
+// ── 线路预设 ──
+//
+// 每条线路可以存多组带名字的「地址 + 模型 + key」，点一下换回去（见 env-presets.js）。
+// 存的是 .env 里当前生效的那套，不是框里还没保存的 —— 所以顺序是
+// 先保存、再存为预设，页面上写清楚了。
+//
+// 换过去仍然走 writeFields，所以 .env.bak 那道保险照旧生效。
 //
 // ── 保存完重启谁 ──
 //
@@ -36,7 +44,8 @@
 // key 的形状对不对。
 
 import { exec } from 'node:child_process';
-import { FIELDS, GROUPS, readFields, writeFields, canEdit } from './env-store.js';
+import { FIELDS, GROUPS, readFields, readRawValues, writeFields, canEdit } from './env-store.js';
+import { listPresets, savePreset, loadPreset, markUsed, dropPreset, matchCurrent } from './env-presets.js';
 import { renderMenu, HEAD_SCRIPT, CHROME_CSS, CHROME_SCRIPT } from './page-chrome.js';
 import { renderTabs, TABS_CSS } from './tabs.js';
 
@@ -135,6 +144,17 @@ const STYLE = `
   button:active { opacity: 0.85; }
   button[disabled] { opacity: 0.5; cursor: default; }
   button.ghost { background: none; color: var(--accent); border: 1px solid var(--line); }
+  button.sm { min-height: 34px; padding: 0 12px; font-size: 13px; }
+  .pre { display: flex; align-items: center; gap: 8px; padding: 11px 0; border-top: 1px solid var(--line); }
+  .pre:first-of-type { border-top: 0; }
+  .pre-in { flex: 1; min-width: 0; }
+  .pre-name { display: block; font-size: 14px; font-weight: 600; color: var(--accent); }
+  .pre-what { display: block; margin-top: 3px; font-size: 11.5px; line-height: 1.5; color: var(--muted);
+    word-break: break-all; }
+  .now { font-size: 10.5px; font-weight: 400; color: #8a6a1a; background: #f8f1df;
+    border-radius: 999px; padding: 1px 8px; margin-left: 6px; }
+  .save-as { display: flex; gap: 8px; margin-top: 12px; }
+  .save-as input { flex: 1; }
   .back { display: inline-flex; align-items: center; min-height: 44px; margin-top: 18px;
     font-size: 13px; color: var(--accent); text-decoration: none; }
   a:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -184,7 +204,7 @@ function listPage() {
     ${main.map(row).join('')}
     <p class="hint" style="margin:0 2px 0">Aru 里那个 <code>aru-chat</code> 走的是「聊天」这条。
       它只是网关上的一个名字，底层连谁由这条线路的地址、模型、token 决定 ——
-      换供应商三个一起换。</p>
+      换供应商三个一起换。每条线路都能把配好的那套存成预设，以后点一下换回去。</p>
     <p class="sect">功能模型</p>
     ${feat.map(row).join('')}
     <p class="sect">通知</p>
@@ -253,6 +273,50 @@ function fieldHtml(key, cur) {
   </div>`;
 }
 
+// ── 预设那一块 ──
+// 「现在用的」是整组比出来的（地址 + 模型 + key 都对上），不是只看模型名：
+// 两家供应商很可能都叫 deepseek-chat。
+function presetBlock(g) {
+  let list = [];
+  let active = null;
+  try {
+    list = listPresets(g.id);
+    active = matchCurrent(g.id, readRawValues(g.keys));
+  } catch (err) {
+    console.error('env: 读预设失败', err.message);
+  }
+
+  const items = list
+    .map((p) => {
+      const on = active && active.id === p.id;
+      const what = [p.model, p.base].filter(Boolean).join(' · ');
+      const keyPart = p.hasKey ? `key 尾 ${p.keyTail}` : '没存 key';
+      return `<div class="pre">
+        <div class="pre-in">
+          <span class="pre-name">${escapeHtml(p.name)}${on ? '<span class="now">现在用的</span>' : ''}</span>
+          <span class="pre-what">${escapeHtml([what, keyPart].filter(Boolean).join(' · '))}</span>
+        </div>
+        ${on ? '' : `<button type="button" class="ghost sm" data-pre-use="${p.id}">换过去</button>`}
+        <button type="button" class="ghost sm" data-pre-del="${p.id}">删</button>
+      </div>`;
+    })
+    .join('');
+
+  return `<div class="card" data-pre-box>
+    <p class="hint" style="margin-bottom:10px">存过的线路。点「换过去」就把这一组地址、模型、key
+      一起换回那一套 —— 只动这一组，别的变量不碰。</p>
+    ${items || '<p class="hint" style="margin-bottom:4px">还没存过。先把上面配好、保存，再回来存成预设。</p>'}
+    <div class="save-as">
+      <input type="text" data-pre-name placeholder="给现在这套起个名字，比如 DeepSeek 官方"
+        maxlength="20" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" />
+      <button type="button" class="ghost" data-pre-save>存为预设</button>
+    </div>
+    <p class="hint" style="margin-top:10px">存的是 <strong>已经保存进 .env 的那套</strong>，不是上面框里还没保存的。
+      所以顺序是：先「保存并重启」，再回来存为预设。</p>
+    <p class="status" role="status" data-pre-status></p>
+  </div>`;
+}
+
 const DETAIL_SCRIPT = `(function () {
   var form = document.querySelector('[data-env-form]');
   if (!form) return;
@@ -283,6 +347,17 @@ const DETAIL_SCRIPT = `(function () {
     }).then(function (r) { return r.json().catch(function () { return {}; }); });
   }
 
+  function restartThen(r, done) {
+    if (!r.restart || !r.restart.length) return done('');
+    return post('${PREFIX}/restart', { targets: r.restart }).then(function (rr) {
+      if (rr.error) {
+        return done('\\n但重启没成：' + rr.error
+          + '\\n在服务器上手动跑：pm2 restart ' + r.restart.join(' ') + ' --update-env');
+      }
+      done('\\n' + (rr.restarted || []).join('、') + ' 已经重启，新设置现在生效了。');
+    });
+  }
+
   if (testBtn) {
     testBtn.addEventListener('click', function () {
       testBtn.disabled = true;
@@ -307,20 +382,90 @@ const DETAIL_SCRIPT = `(function () {
       .then(function (r) {
         if (r.error) { saveBtn.disabled = false; return say('没存成：' + r.error); }
         if (!r.changed || !r.changed.length) { saveBtn.disabled = false; return say('没什么改动。'); }
-        say('存好了：' + r.changed.join('、')
-          + (r.backup ? '\\n（旧的备份成 ' + r.backup + '）' : '')
-          + (r.restart && r.restart.length ? '\\n正在重启 ' + r.restart.join('、') + '…' : ''));
-        if (!r.restart || !r.restart.length) { saveBtn.disabled = false; return; }
-        return post('${PREFIX}/restart', { targets: r.restart }).then(function (rr) {
+        var head = '存好了：' + r.changed.join('、')
+          + (r.backup ? '\\n（旧的备份成 ' + r.backup + '）' : '');
+        say(head + (r.restart && r.restart.length ? '\\n正在重启 ' + r.restart.join('、') + '…' : ''));
+        return restartThen(r, function (tail) {
           saveBtn.disabled = false;
-          if (rr.error) return say('存好了，但重启没成：' + rr.error + '\\n在服务器上手动跑：pm2 restart ' + r.restart.join(' ') + ' --update-env');
-          say('存好了，' + (rr.restarted || []).join('、') + ' 已经重启。新设置现在生效了。');
+          say(head + tail);
         });
       })
       .catch(function (e) {
         saveBtn.disabled = false;
         say('没存成：' + (e && e.message ? e.message : String(e)));
       });
+  });
+
+  // ── 预设 ──
+  var box = document.querySelector('[data-pre-box]');
+  if (!box) return;
+  var pstatus = box.querySelector('[data-pre-status]');
+  var nameEl = box.querySelector('[data-pre-name]');
+  var saveAs = box.querySelector('[data-pre-save]');
+
+  function psay(m) { if (pstatus) pstatus.textContent = m || ''; }
+
+  saveAs.addEventListener('click', function () {
+    var name = (nameEl.value || '').trim();
+    if (!name) { nameEl.focus(); return psay('先给它起个名字。'); }
+    saveAs.disabled = true;
+    psay('在存…');
+    post('${PREFIX}/' + gid + '/presets', { name: name })
+      .then(function (r) {
+        saveAs.disabled = false;
+        if (r.error) return psay('没存成：' + r.error);
+        psay((r.updated ? '更新了「' : '存好了「') + r.name + '」。');
+        setTimeout(function () { location.reload(); }, 700);
+      })
+      .catch(function (e) {
+        saveAs.disabled = false;
+        psay('没存成：' + (e && e.message ? e.message : String(e)));
+      });
+  });
+
+  box.addEventListener('click', function (ev) {
+    var use = ev.target.closest('[data-pre-use]');
+    var del = ev.target.closest('[data-pre-del]');
+
+    if (use) {
+      var pid = use.getAttribute('data-pre-use');
+      use.disabled = true;
+      psay('在换…');
+      post('${PREFIX}/' + gid + '/presets/' + pid + '/use', {})
+        .then(function (r) {
+          if (r.error) { use.disabled = false; return psay('没换成：' + r.error); }
+          if (!r.changed || !r.changed.length) {
+            use.disabled = false;
+            return psay('这套和现在用的一样，没动。');
+          }
+          var head = '换成「' + (r.name || '') + '」了：' + r.changed.join('、');
+          psay(head + (r.restart && r.restart.length ? '\\n正在重启 ' + r.restart.join('、') + '…' : ''));
+          return restartThen(r, function (tail) {
+            psay(head + tail);
+            setTimeout(function () { location.reload(); }, 900);
+          });
+        })
+        .catch(function (e) {
+          use.disabled = false;
+          psay('没换成：' + (e && e.message ? e.message : String(e)));
+        });
+      return;
+    }
+
+    if (del) {
+      var did = del.getAttribute('data-pre-del');
+      if (!window.confirm('删掉这份预设？.env 里现在生效的那套不受影响。')) return;
+      del.disabled = true;
+      post('${PREFIX}/' + gid + '/presets/' + did + '/delete', {})
+        .then(function (r) {
+          if (r.error) { del.disabled = false; return psay('没删成：' + r.error); }
+          location.reload();
+        })
+        .catch(function (e) {
+          del.disabled = false;
+          psay('没删成：' + (e && e.message ? e.message : String(e)));
+        });
+    }
   });
 })();`;
 
@@ -348,6 +493,8 @@ function detailPage(g) {
       </div>
       <p class="status" role="status" data-env-status></p>
     </div>
+    <p class="sect">存过的线路</p>
+    ${presetBlock(g)}
     <p class="hint">API Key 那一栏空着提交就是不改。要清空得专门填 <code>__clear__</code> ——
       得是个明确的动作，不能是「没填」。</p>
     <a class="back" href="${PREFIX}">‹ 回模型</a>`,
@@ -377,10 +524,11 @@ async function testChatLine(g, vals) {
 
   const base = String(vals[baseKey] ?? '').trim();
   const model = String(vals[modelKey] ?? '').trim();
-  // key 没在框里填就读已存的原文（readFields 不给原文，这里单独读一次）
+  // key 没在框里填就读 .env 里存的原文（readFields 不给原文，这里单独读一次）
   let apiKey = String(vals[keyKey] ?? '').trim();
   if (!apiKey) {
-    apiKey = String(process.env[keyKey] ?? '').trim() || String(process.env.DEEPSEEK_API_KEY ?? '').trim();
+    const raw = readRawValues([keyKey, 'DEEPSEEK_API_KEY']);
+    apiKey = String(raw[keyKey] ?? '').trim() || String(raw.DEEPSEEK_API_KEY ?? '').trim();
   }
 
   if (!base) return { error: `${baseKey} 是空的` };
@@ -477,6 +625,57 @@ export function registerEnvRoutes(app, { requireBasicAuth }) {
     }
   });
 
+  // ── 预设 ──
+  // 存的是 .env 里当前生效的那套（readRawValues 带 key 原文），
+  // 不是请求里送上来的 —— 页面上那个输入框只给名字。
+  app.post(`${PREFIX}/:id/presets`, requireBasicAuth, (req, res) => {
+    if (!sameOrigin(req)) return res.status(403).json({ error: '请求来源不对' });
+    const g = groupById(String(req.params.id));
+    if (!g) return res.status(404).json({ error: '没有这一组' });
+    try {
+      res.json(savePreset(g.id, req.body?.name, readRawValues(g.keys)));
+    } catch (err) {
+      console.error('env: 存预设失败', err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // 换过去：仍然走 writeFields，所以白名单、备份、原子写都照旧生效。
+  // 预设里没有的字段不动 —— 不替她决定要不要清空。
+  app.post(`${PREFIX}/:id/presets/:pid/use`, requireBasicAuth, (req, res) => {
+    if (!sameOrigin(req)) return res.status(403).json({ error: '请求来源不对' });
+    const g = groupById(String(req.params.id));
+    if (!g) return res.status(404).json({ error: '没有这一组' });
+    try {
+      const got = loadPreset(req.params.pid);
+      if (got.error) return res.json({ error: got.error });
+      if (got.groupId !== g.id) return res.json({ error: '这份预设不是这条线路的' });
+
+      const patch = {};
+      for (const [k, v] of Object.entries(got.values)) {
+        if (canEdit(k) && g.keys.includes(k)) patch[k] = v;
+      }
+      if (!Object.keys(patch).length) return res.json({ error: '这份预设是空的' });
+
+      const r = writeFields(patch);
+      if (r.ok) markUsed(req.params.pid);
+      res.json({ ...r, name: got.name });
+    } catch (err) {
+      console.error('env: 换预设失败', err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post(`${PREFIX}/:id/presets/:pid/delete`, requireBasicAuth, (req, res) => {
+    if (!sameOrigin(req)) return res.status(403).json({ error: '请求来源不对' });
+    try {
+      res.json(dropPreset(req.params.pid) ? { ok: true } : { error: '找不到这份预设' });
+    } catch (err) {
+      console.error('env: 删预设失败', err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   app.get(`${PREFIX}/:id`, requireBasicAuth, (req, res) => {
     const g = groupById(String(req.params.id));
     if (!g) return res.status(404).send('没有这一组');
@@ -522,5 +721,5 @@ export function registerEnvRoutes(app, { requireBasicAuth }) {
     }
   });
 
-  console.log(`env: 模型设置页 ${PREFIX}`);
+  console.log(`env: 模型设置页 ${PREFIX}（含线路预设）`);
 }
