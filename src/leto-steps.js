@@ -1,6 +1,9 @@
 // Leto 连着走几步。和锈潮（xiuchao-steps.js）、论坛、听歌、上班、花园同一个路子，
 // 只从 decide.js 借一个 askJson。
 //
+// 系统提示里那段 Leto 说明在 src/leto.js（decide.js 25 行 import 的就是它）。
+// 这边不再写一份——同名两份将来改错一边很难查。
+//
 // ── 为什么非得有这个 ──
 //
 // phosphor 一轮是「调一次模型 → 执行动作 → 写日志 → 结束」，工具返回的东西
@@ -21,7 +24,14 @@
 // 那是我替他定的规矩。小满 11-04：「除了回消息还可以用所有48个工具」。
 //
 // 现在只拦一件事：续步里不能跳到别的 server（那是别的 continueXxx 的活）。
-// Leto 自己那 48 把他挑哪把都行：读、回、收表情、发朋友圈、上岛、摔骰子。
+//
+// ── 2026-11-05 16:38：别鼓励他猜工具 ──
+//
+// leto_island_act 的 do 填错了，Leto 把一百多个合法值全列回来。
+// 根在下面 nextStep 里我自己写的一句「工具名忘了就随便先试一个」。
+// 小岛的 do 有一百多个枚举值，还分 item / parts / tx,ty / want 这些配套字段，
+// 「随便试」在这里是必错的。而小岛自带说明书：leto_island_look 返回最后一段
+// 就写着每个 do 怎么填（短版只列名字，full: true 给全文）。所以改成指他去看那一段。
 //
 // ── 交回之后不硬停 ──
 //
@@ -43,16 +53,16 @@ const AI_NAME = process.env.AI_DISPLAY_NAME || 'TA';
 const RESULT_MAX_CHARS = 2500;
 const DETAIL_MAX_CHARS = 1500;
 
-function steps(envKey, fallback) {
+function stepLimit(envKey, fallback) {
   const raw = String(process.env[envKey] ?? '').trim();
   const n = Number(raw);
   return raw && Number.isInteger(n) && n >= 0 ? Math.min(n, 20) : fallback;
 }
 
 // 被叫醒那轮：6 步。调用十分钟过期，走太多步对面不等了。
-export const LETO_WAKE_MAX_STEPS = steps('LETO_WAKE_MAX_STEPS', 6);
+export const LETO_WAKE_MAX_STEPS = stepLimit('LETO_WAKE_MAX_STEPS', 6);
 // 自己过去：15 步。和锈潮的上限一样，没人等着。
-export const LETO_MAX_STEPS = steps('LETO_MAX_STEPS', 15);
+export const LETO_MAX_STEPS = stepLimit('LETO_MAX_STEPS', 15);
 
 // 交回这次调用的三把。不再是硬终点，只用来换提示词的语气。
 const FINAL_TOOLS = new Set(['leto_reply', 'leto_decline', 'leto_blind_answer']);
@@ -158,15 +168,22 @@ async function nextStep(messages, { tool, resultText, fixable, remaining, wake, 
 看过不想回用 leto_decline，盲答题用 leto_blind_answer。
 调用十分钟就过期，先把这件结掉再做别的——这一轮不交回，对面就一直等着。
 已经读到话了就直接回，不必再去查一遍。`
-    : `Leto 那 48 把工具你那边都有，想用哪把用哪把：群里说话、私聊、发朋友圈、
-给人评论点赞、收表情、拍一拍、摔骰子、上岛干活、看 Leto Times、交意见。
-工具名忘了就随便先试一个，那边会把用法告诉你。`;
+    : `Leto 那几十把工具你那边都有，想用哪把用哪把：群里说话、私聊、发朋友圈、
+给人评论点赞、收表情、拍一拍、摔骰子、上岛干活、看 Leto Times、交意见。`;
+
+  // 小岛单独说一句：它的 do 有一百多个值，谁也猜不中，但岛自带说明书。
+  // 2026-11-05 16:38 那次就是猜的，Leto 把全部合法值列了回来。
+  const island = `要上岛干活（leto_island_act）先调一次 leto_island_look：它返回的最后一段
+写着每个 do 怎么填、坐标和东西的小名叫什么。当天第二次看给的是短版（只列 do 的名字），
+要每种怎么填就带 full: true。别凭空猜 do 和参数名。`;
 
   const prompt = `${body}
 
 还能再走 ${remaining} 步。
 
 ${focus}
+
+${island}
 
 那边的人和 Agent 都是真的，別只看不说，也別为了凑数说话。
 不想再动了就给 null，那边不会因为你走开而消失。
@@ -270,46 +287,4 @@ export async function continueLeto(decision, firstResult, messages, selfNote) {
 
   const handed = steps.some((s) => s.final);
   console.log(`leto: 这次在那边走了 ${steps.length} 步${handed ? '，话交回了' : ''}`);
-}
-
-// 系统提示里那一段。只跟配置有关（步数），进程不重启就不变，
-// 所以放 system 不影响前缀缓存。和 xiuchaoSection() 同一个路子。
-export function letoSection() {
-  return `\n\n## Leto
-https://leto.sarl。那边有真人、有别的 Agent，有群聊、私聊、朋友圈、广场、小岛、小游戏。
-和论坛、锈潮同一个性质，但多一件事：**那边的人能叫得动你**。
-被 @、被私聊、被拍一拍时，唤醒桥会把话投进来，note 以「[Leto」开头，
-里面带着调用编号。那种时候先把那个结掉再做别的——调用十分钟就过期。
-
-通过 mcp_call 调用，**server 一直填 "leto"**，要做的事放在 tool 里：
-
-  {"server":"leto","tool":"leto_list_groups","args":{}}
-      先看这里：你在哪几个群、哪个有新消息、私聊里有没有人找你
-  {"server":"leto","tool":"leto_read","args":{"conversation_id":"上面查到的"}}
-      读那个群的新消息。被叫醒时改传 invocation_id 就读那一条
-  {"server":"leto","tool":"leto_post","args":{"conversation_id":"...","text":"..."}}
-      没人 @ 你也能主动在群里说话。空一行拆成两条
-  {"server":"leto","tool":"leto_reply","args":{"invocation_id":"inv_...","text":"..."}}
-      回被叫醒的那一条。不想回用 leto_decline
-  {"server":"leto","tool":"leto_list_pending","args":{}}
-      叫了你、你还没回的都在这里。唤醒漏了也能在这里补回来
-
-还有：私聊（leto_dm）、朋友圈和广场（leto_moments / leto_moment_post /
-leto_moment_comment / leto_moment_like）、联系人（leto_friends / leto_friend_add /
-leto_friend_answer）、表情（leto_list_stickers / leto_add_sticker）、
-拍一拍（leto_pat）、骰子（leto_roll）、盲答（leto_blind_propose / leto_blind_answer）、
-小岛（leto_island_look / leto_island_act / leto_island_say）、小报（leto_times）、
-改资料（leto_update_profile）、交意见（leto_feedback_submit）——一共四十多把，
-哪把都能用。工具名不确定就先试一个，那边会把用法告诉你。
-
-进去之后可以接着走：被叫醒那一轮最多再走 ${LETO_WAKE_MAX_STEPS} 步（调用会过期，别拖），
-自己过去逛最多 ${LETO_MAX_STEPS} 步。
-
-那边的人和 Agent 和论坛上的一样是真的。別只看不说，也別为了凑数说话；
-不透露能定位到现实里的细节，也別把小满的私事带到群里。
-这是闲事，不是活儿。想去就去，不想去就不去。`;
-}
-
-export function letoConfigSummary() {
-  return `Leto：被叫醒最多 ${LETO_WAKE_MAX_STEPS} 步，自己过去最多 ${LETO_MAX_STEPS} 步`;
 }
