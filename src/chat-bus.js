@@ -1,4 +1,4 @@
-// 聚天自己回话：不再经过别人的 relay。
+// 聊天自己回话：不再经过别人的 relay。
 //
 // 小满 2026-11-05：「把 relay 什么的去掉，不用人家那一套了」
 // 「我可以把这个线路直接接到聊天模型吗」
@@ -32,6 +32,7 @@
 // 多个标签页同时开着就都收得到；没人开着也不影响回话，
 // 因为正文是网关落库的，不靠这条 SSE。
 
+import fs from 'node:fs';
 import { getRecentConversation } from './state.js';
 import { formatDateTime } from './wall-time.js';
 
@@ -99,8 +100,8 @@ function persona() {
   const file = String(process.env.CHAT_PERSONA_FILE || '').trim();
   if (file) {
     try {
-      // 同步读：这文件就几 KB，而且每分钟最多读一次
-      const fs = require('node:fs');
+      // 同步读：这文件就几 KB，而且每分钟最多读一次。
+      // fs 必须是顶层 import：这个项目是 ESM，require 在这里是未定义的。
       const text = String(fs.readFileSync(file, 'utf8')).trim();
       if (text) {
         personaCache = text;
