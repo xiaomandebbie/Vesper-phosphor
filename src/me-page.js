@@ -8,13 +8,17 @@
 // 节律那个走现有的 POST /wake/mode——silent 不给按，那是人工开关
 // （见 README 「设计上的几个故意」），从页面上轻易点到不对。
 //
-// ── 模型和通知那两行（2026-11-05）──
+// ── 模型那一行（2026-11-05）──
 //
-// 都只是一行带 › 的条目，和上面三行长得一样；具体的配置全在里面
-// （/me/models 和 /me/push）。小满：「要和其他外观一致，点进去更改」。
+// 只是一行带 › 的条目，和上面三行长得一样；具体的配置全在里面
+// （/me/models）。小满：「要和其他外观一致，点进去更改」。
 //
-// 那两行的 HTML 由各自的模块生成（env-ui.js / push-ui.js），因为只有它们
-// 知道自己配好了没有；这边只管摆在哪。两边用的是同一套 .row 类名。
+// 通知不在这一页单独占一行：它已经是「模型 · 连接 · 通知」里的一项。
+// 小满 2026-11-05：「那就不需要个人还有一个通知入口了」。
+// /me/push 这个页面本身留着，从模型页点进去。
+//
+// 那一行的 HTML 由 env-ui.js 自己生成，因为只有它知道配好了几条线路；
+// 这边只管摆在哪。两边用的是同一套 .row 类名。
 
 import { getWakeState } from './state.js';
 import { getProfile } from './moments-store.js';
@@ -22,7 +26,6 @@ import { pm2LogsDir } from './logs-page.js';
 import { renderMenu, HEAD_SCRIPT, CHROME_CSS, CHROME_SCRIPT } from './page-chrome.js';
 import { renderTabs, TABS_CSS } from './tabs.js';
 import { renderModelsRow } from './env-ui.js';
-import { renderPushRow } from './push-ui.js';
 
 const PREFIX = '/me';
 
@@ -37,7 +40,7 @@ function escapeHtml(value) {
 
 function renderWho() {
   let ai = 'TA';
-  let me = '\u6211';
+  let me = '我';
   let aiAvatar = '';
   let myAvatar = '';
   try {
@@ -48,15 +51,15 @@ function renderWho() {
     aiAvatar = a.avatarUrl || '';
     myAvatar = u.avatarUrl || '';
   } catch (err) {
-    console.error('me page: \u8bfb\u4e0d\u5230\u540d\u5b57', err.message);
+    console.error('me page: 读不到名字', err.message);
   }
   const face = (url, name) =>
     url
       ? `<img class="face" src="${escapeHtml(url)}" alt="" />`
-      : `<span class="face blank" aria-hidden="true">${escapeHtml(Array.from(name)[0] || '\u2726')}</span>`;
+      : `<span class="face blank" aria-hidden="true">${escapeHtml(Array.from(name)[0] || '✦')}</span>`;
   return `<div class="who">
     <div class="who-pair">${face(myAvatar, me)}${face(aiAvatar, ai)}</div>
-    <p class="who-names">${escapeHtml(me)} <span aria-hidden="true">\u00b7</span> ${escapeHtml(ai)}</p>
+    <p class="who-names">${escapeHtml(me)} <span aria-hidden="true">·</span> ${escapeHtml(ai)}</p>
   </div>`;
 }
 
@@ -69,18 +72,18 @@ function renderMode() {
   }
   const label =
     mode === 'silent'
-      ? '\u6682\u505c\u4e2d'
+      ? '暂停中'
       : mode === 'low-frequency'
-        ? '\u4f4e\u9891\uff08\u95f4\u9694\u4f1a\u62c9\u957f\uff09'
-        : '\u6b63\u5e38';
+        ? '低频（间隔会拉长）'
+        : '正常';
   // silent 是人工开关，页面上不给按——轻易点到就等于从他的世界里消失
   const hint =
     mode === 'silent'
-      ? '\u73b0\u5728\u662f\u6682\u505c\u72b6\u6001\uff0c\u8981\u6062\u590d\u5f97\u7528\u63a5\u53e3\uff08POST /wake/mode\uff09\u3002'
-      : '\u4ed6\u81ea\u5df1\u4e5f\u80fd\u8c03\u8fd9\u4e2a\u3002\u6682\u505c\uff08silent\uff09\u53ea\u7559\u7ed9\u63a5\u53e3\uff0c\u8fd9\u91cc\u4e0d\u653e\u6309\u94ae\u3002';
+      ? '现在是暂停状态，要恢复得用接口（POST /wake/mode）。'
+      : '他自己也能调这个。暂停（silent）只留给接口，这里不放按钮。';
   return `<div class="row flat">
     <div class="row-in">
-      <span class="row-name">\u5524\u9192\u8282\u5f8b</span>
+      <span class="row-name">唤醒节律</span>
       <span class="row-what">${hint}</span>
     </div>
     <span class="row-val">${label}</span>
@@ -91,21 +94,21 @@ function renderRows() {
   const hasLogs = Boolean(pm2LogsDir());
   const rows = [
     {
-      name: '\u81ea\u5b9a\u4e49',
-      what: '\u6539\u4ed6\u548c\u4f60\u7684\u5934\u50cf\u3001\u540d\u5b57',
+      name: '自定义',
+      what: '改他和你的头像、名字',
       href: '/moments/profile',
     },
     {
-      name: '\u540e\u53f0\u65e5\u5fd7',
+      name: '后台日志',
       what: hasLogs
-        ? 'VPS \u4e0a\u6240\u6709 pm2 \u8fdb\u7a0b\u6700\u8fd1\u7684\u65e5\u5fd7\uff0c\u6309\u8fdb\u7a0b\u5206\u5f00\u770b'
-        : '\u627e\u4e0d\u5230 pm2 \u65e5\u5fd7\u76ee\u5f55',
+        ? 'VPS 上所有 pm2 进程最近的日志，按进程分开看'
+        : '找不到 pm2 日志目录',
       href: hasLogs ? '/logs' : '',
-      note: '\u53ef\u7528 PM2_LOGS_DIR \u6307\u5b9a',
+      note: '可用 PM2_LOGS_DIR 指定',
     },
     {
-      name: '\u6536\u85cf',
-      what: '\u4f60\u6536\u8d77\u6765\u7684\u90a3\u51e0\u6761\u52a8\u6001',
+      name: '收藏',
+      what: '你收起来的那几条动态',
       href: '/moments/favorites',
     },
   ];
@@ -114,29 +117,23 @@ function renderRows() {
       const inner = `<div class="row-in"><span class="row-name">${r.name}</span><span class="row-what">${r.what}</span></div>`;
       if (!r.href) {
         return `<div class="row off">${inner}<span class="row-note">${escapeHtml(
-          r.note || '\u6ca1\u914d\u7f6e'
+          r.note || '没配置'
         )}</span></div>`;
       }
-      return `<a class="row" href="${r.href}">${inner}<span class="row-go" aria-hidden="true">\u203a</span></a>`;
+      return `<a class="row" href="${r.href}">${inner}<span class="row-go" aria-hidden="true">›</span></a>`;
     })
     .join('');
 }
 
-// 模型和通知那两行。各自的模块挂了吗读不到时不该把整页拖下水，
-// 所以各自包一层 try
+// 模型那一行。读不到时不该把整页拖下水，所以包一层 try。
+// 通知在这一页上没有单独的行：它在 /me/models 里面。
 function renderExtras() {
-  const out = [];
   try {
-    out.push(renderModelsRow());
+    return renderModelsRow();
   } catch (err) {
     console.error('me page: 模型那行没渲染出来', err.message);
+    return '';
   }
-  try {
-    out.push(renderPushRow());
-  } catch (err) {
-    console.error('me page: 通知那行没渲染出来', err.message);
-  }
-  return out.join('');
 }
 
 const STYLE = `
@@ -188,7 +185,7 @@ function layout(body) {
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-<title>\u4e2a\u4eba \u00b7 \u6668\u66ae\u661f</title>
+<title>个人 · 晨暮星</title>
 <script>${HEAD_SCRIPT}<\/script>
 <style>${STYLE}${CHROME_CSS}${TABS_CSS}</style>
 </head>
@@ -204,24 +201,24 @@ export function registerMeRoutes(app, { requireBasicAuth }) {
     try {
       res.send(
         layout(`<header class="hero">
-        <h1 class="title">\u4e2a\u4eba</h1>
-        <p class="subtitle" lang="en">Me <span aria-hidden="true">\u2726</span> \u8bbe\u7f6e</p>
+        <h1 class="title">个人</h1>
+        <p class="subtitle" lang="en">Me <span aria-hidden="true">✦</span> 设置</p>
       </header>
       ${renderWho()}
       ${renderRows()}
       ${renderExtras()}
       ${renderMode()}
       <form class="out" method="POST" action="/logout">
-        <button type="submit">\u9000\u51fa\u767b\u5f55</button>
+        <button type="submit">退出登录</button>
       </form>
-      <p class="foot">\u9000\u51fa\u4e4b\u540e\u8981\u91cd\u65b0\u8f93\u4e00\u6b21\u5bc6\u7801\u3002</p>`)
+      <p class="foot">退出之后要重新输一次密码。</p>`)
       );
     } catch (err) {
-      console.error('me page: \u6e32\u67d3\u5931\u8d25', err);
-      res.status(500).send(layout('<p class="foot">\u8fd9\u4e00\u9875\u51fa\u9519\u4e86\u3002</p>'));
+      console.error('me page: 渲染失败', err);
+      res.status(500).send(layout('<p class="foot">这一页出错了。</p>'));
     }
   });
 
-  console.log(`me: \u4e2a\u4eba\u9875 ${PREFIX}`);
+  console.log(`me: 个人页 ${PREFIX}`);
   return { enabled: true };
 }
