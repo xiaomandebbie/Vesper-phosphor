@@ -7,12 +7,22 @@
 // 顺带放两个开关：节律（normal / low-frequency）和退出登录。
 // 节律那个走现有的 POST /wake/mode——silent 不给按，那是人工开关
 // （见 README 「设计上的几个故意」），从页面上轻易点到不对。
+//
+// ── 模型和通知那两行（2026-11-05）──
+//
+// 都只是一行带 › 的条目，和上面三行长得一样；具体的配置全在里面
+// （/me/models 和 /me/push）。小满：「要和其他外观一致，点进去更改」。
+//
+// 那两行的 HTML 由各自的模块生成（env-ui.js / push-ui.js），因为只有它们
+// 知道自己配好了没有；这边只管摆在哪。两边用的是同一套 .row 类名。
 
 import { getWakeState } from './state.js';
 import { getProfile } from './moments-store.js';
 import { pm2LogsDir } from './logs-page.js';
 import { renderMenu, HEAD_SCRIPT, CHROME_CSS, CHROME_SCRIPT } from './page-chrome.js';
 import { renderTabs, TABS_CSS } from './tabs.js';
+import { renderModelsRow } from './env-ui.js';
+import { renderPushRow } from './push-ui.js';
 
 const PREFIX = '/me';
 
@@ -112,6 +122,23 @@ function renderRows() {
     .join('');
 }
 
+// 模型和通知那两行。各自的模块挂了吗读不到时不该把整页拖下水，
+// 所以各自包一层 try
+function renderExtras() {
+  const out = [];
+  try {
+    out.push(renderModelsRow());
+  } catch (err) {
+    console.error('me page: 模型那行没渲染出来', err.message);
+  }
+  try {
+    out.push(renderPushRow());
+  } catch (err) {
+    console.error('me page: 通知那行没渲染出来', err.message);
+  }
+  return out.join('');
+}
+
 const STYLE = `
   :root { --ink: #252525; --muted: #5e5e5e; --accent: #4d4d4d; --gold: #818181;
     --card: #fdfdfd; --line: #e2e2e2; }
@@ -162,12 +189,12 @@ function layout(body) {
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <title>\u4e2a\u4eba \u00b7 \u6668\u66ae\u661f</title>
-<script>${HEAD_SCRIPT}</script>
+<script>${HEAD_SCRIPT}<\/script>
 <style>${STYLE}${CHROME_CSS}${TABS_CSS}</style>
 </head>
 <body><main>${renderMenu(PREFIX)}${body}</main>
 ${renderTabs(PREFIX)}
-<script>${CHROME_SCRIPT}</script></body>
+<script>${CHROME_SCRIPT}<\/script></body>
 </html>`;
 }
 
@@ -182,6 +209,7 @@ export function registerMeRoutes(app, { requireBasicAuth }) {
       </header>
       ${renderWho()}
       ${renderRows()}
+      ${renderExtras()}
       ${renderMode()}
       <form class="out" method="POST" action="/logout">
         <button type="submit">\u9000\u51fa\u767b\u5f55</button>
