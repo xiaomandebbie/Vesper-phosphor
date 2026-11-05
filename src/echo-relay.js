@@ -19,25 +19,36 @@
 // Aru 里说的话和网页上说的话都在里面，所以两边看到的是同一段关系。
 // 这也是她要的「让他们读取的上下文一样」。
 //
-// 前端一个字没改：路由名、返回形状、SSE 帧的字段名全沿用原来那套
+// ── 按窗取（2026-11-05）──
+//
+// 小满：「开了新窗相当于一次分割，之前的内容包括聊天和动作都在之前的窗，
+// 新的动作和新的聊天记录就在新的窗」。
+//
+// 所以 history 收一个 ?window=<id>：按那个窗的时间段取（见 chat-windows.js）。
+// 不带这个参数就还是全部——旧的存档和别处调用不会因为这次改动坏掉。
+//
+// 攒着的话同理：它们还没递出去，所以只属于最新那个窗。
+// 翻老窗时不该看到那几条半透的泡泡，那是「现在」的事。
+//
+// 前端一个字没改路由名和帧形状：沿用原来那套
 // （chat-page.js 的 onFrame 认 reply_delta / typing，msgTs 认 ts）。
 //
 // ── 路由 ──
-//   GET  /chat/api/history         ← conversation_log
-//   GET  /chat/api/stream (SSE)    ← 本进程自己推
-//   POST /chat/api/send            → 落本地队列（不立刻惊动他）
-//   POST /chat/api/flush           → 合成一条递给网关（点「让他读」）
-//   GET  /chat/api/pending         → 还攒着几条
+//   GET  /chat/api/history?window=   ← conversation_log（+ 归档）
+//   GET  /chat/api/stream (SSE)      ← 本进程自己推
+//   POST /chat/api/send              → 落本地队列（不立刻惊动他）
+//   POST /chat/api/flush             → 合成一条递给网关（点「让他读」）
+//   GET  /chat/api/pending?window=   → 还攒着几条
 //   POST /chat/api/pending/:id/edit | drop
 //
 // 读不到 GATEWAY_API_KEY 就整个不挂，/chat 页退回原来的样子（输入框发不出去）。
 // 不装作能用：那把 key 就在本机 .env 里，和网关读的是同一个。
 import { getRecentConversation } from './state.js';
+import { listWindows, listWindowMessages } from './chat-windows.js';
 import {
   gatewayKey,
   addClient,
   clientCount,
-  askUpstream,
   emit,
 } from './chat-bus.js';
 import {
@@ -59,16 +70,31 @@ const HISTORY_LIMIT = 200;
 //
 // from: 'human' 是她说的，其余算他说的（见 chat-page.js 的 paint）。
 // id 只用于前端去重，所以用 ts 加下标拼一个稳定的——
-// 不依赖 conversation_log 有没有自增主键，那个我没核过。
+// 不依赖 conversation_log 有没有自增主键。
 function toMessage(row, i) {
-  const content = String(row.content ?? '').trim();
   return {
     id: `log-${row.ts}-${i}`,
     from: row.speaker === USER_NAME ? 'human' : 'ai',
-    text: content,
+    text: String(row.content ?? '').trim(),
     ts: row.ts,
     kind: 'reply',
   };
+}
+
+// 这个窗是最新的那个吗。攒着的话只属于最新的窗。
+function isNewest(wid) {
+  if (!Number.isInteger(wid) || wid <= 0) return true;
+  try {
+    const list = listWindows();
+    return !list.length || list[0].id === wid;
+  } catch {
+    return true;
+  }
+}
+
+function askedWindow(req) {
+  const n = Number(req.query?.window);
+  return Number.isInteger(n) && n > 0 ? n : null;
 }
 
 export function registerEchoRelay(app, { requireBasicAuth }) {
@@ -78,12 +104,18 @@ export function registerEchoRelay(app, { requireBasicAuth }) {
   }
 
   // 历史：从早到晚，和前端的期待一致（它自己截最后几条）。
+  // 带 ?window= 就只给那个窗那段时间的；不带就是全部。
   app.get('/chat/api/history', requireBasicAuth, (req, res) => {
     res.set('Cache-Control', 'no-store');
     try {
+      const wid = askedWindow(req);
+      if (wid) {
+        const scoped = listWindowMessages(wid, HISTORY_LIMIT);
+        // null = 没这个窗（比如刚被删了），那就退回全部，不给一个空页
+        if (scoped) return res.json({ messages: scoped });
+      }
       const rows = getRecentConversation(HISTORY_LIMIT);
-      const messages = rows.map(toMessage).filter((m) => m.text);
-      res.json({ messages });
+      res.json({ messages: rows.map(toMessage).filter((m) => m.text) });
     } catch (err) {
       console.error('chat: 取历史失败', err.message);
       res.status(500).json({ error: 'history failed' });
@@ -120,7 +152,11 @@ export function registerEchoRelay(app, { requireBasicAuth }) {
     }
   });
 
+  // 攒着的话只属于最新那个窗：它们还没递出去，是「现在」的事。
+  // 翻老窗时返回空，不该在当时那一摹里冲进几条半透的泡泡。
   app.get('/chat/api/pending', requireBasicAuth, (req, res) => {
+    const wid = askedWindow(req);
+    if (wid && !isNewest(wid)) return res.json({ pending: [] });
     res.json({ pending: listPending() });
   });
 
@@ -192,5 +228,3 @@ export async function replyToChat(text) {
     return { ok: false, status: 0, body: err.message };
   }
 }
-
-export { askUpstream };
