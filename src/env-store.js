@@ -46,7 +46,7 @@ const KEEP_BACKUPS = 10;
 // restart 是改完该重启哪几个进程。
 export const FIELDS = {
   // 主模型：聊天那条线
-CLIENT_UPSTREAM_BASE_URL: { kind: 'url', restart: ['vesper-gateway'], hint: '只写域名，不带 /v1' },
+  CLIENT_UPSTREAM_BASE_URL: { kind: 'url', restart: ['vesper-gateway'], hint: '只写域名，不带 /v1' },
   CLIENT_UPSTREAM_API_KEY: { kind: 'secret', restart: ['vesper-gateway'] },
   CLIENT_UPSTREAM_MODEL: { kind: 'text', restart: ['vesper-gateway'] },
 
@@ -187,6 +187,27 @@ export function readFields() {
       spec.kind === 'secret'
         ? { set: Boolean(raw), tail: raw ? raw.slice(-4) : '', value: '' }
         : { set: Boolean(raw), value: raw };
+  }
+  return out;
+}
+
+// 读 .env 里当前生效的原文，包括 key 原文。
+//
+// 和 readFields 的分工：readFields 是发给页面的，所以故意不给 key 原文；
+// 这个函数只在服务器内部用——存线路预设时要把「现在这套」整组存下来，
+// 不带 key 的预设换回去一定 401，等于没存。
+//
+// 返回值不要直接 res.json 出去。
+//
+// 只返回真正有值的字段：空值不进预设，不然「这一项当时是空的」和
+// 「这一项没记」就分不开了。
+export function readRawValues(keys) {
+  const env = parse(readRaw());
+  const out = {};
+  for (const k of keys ?? Object.keys(FIELDS)) {
+    if (!Object.prototype.hasOwnProperty.call(FIELDS, k)) continue;
+    const v = String(env[k] ?? '').trim();
+    if (v) out[k] = v;
   }
   return out;
 }
