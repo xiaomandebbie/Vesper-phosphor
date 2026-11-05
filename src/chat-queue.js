@@ -3,24 +3,27 @@
 // 小满 2026-10-30：「我可以逐条发送，可以发完再点一次让允朔读。也可以发完
 // 不点，在允朔下一次唤醒的时候读取并回复。」
 //
-// 所以发出去的话不直接进 relay，先落这张表。两条出口：
-//   点「让他读」  → flushPending()，按顺序递给 relay，他当场回
-//   不点          → 他下次醒来时网关调 markPendingRead()，读到的是整批
+// 所以发出去的话不立刻问模型，先落这张表。两条出口：
+//   点「让他读」  → flushPending()，合成一条递上去，他当场回
+//   不点          → 他下次醒来时 phosphor 调 flushPending（见 phosphor.js）
 //
-// 为什么不改 Tidal_Echo 的 app.py：那边的 /app/send 就是「发即触发」，
-// 攒着这层是晨暮星自己的事。上游代码不动，它以后怎么更新都不受影响——
-// 和记忆库转发（memory-proxy.js）同一个做法。
+// ── 2026-11-05：拔掉 relay ──
 //
-// 密钥读文件，不进浏览器；这个模块是 relay 的唯一出口，echo-relay.js 和
-// gateway.js 都从这儿走。
-import fs from 'fs';
+// 小满：「把 relay 什么的去掉，不用人家那一套了」。
+//
+// 原来这里是 Tidal_Echo relay 的唯一出口：读它的密钥、把话 POST 给它、
+// 等它落库再通过 SSE 扇回来。现在改成递给自己的网关（见 chat-bus.js）——
+// 和 Aru 里那个 aru-chat 走同一条线路，换供应商两边一起换。
+//
+// 表结构、函数名、返回形状全部没动：phosphor.js 和 gateway.js 还按原样引。
+// via 这个列的含义跟着改了：原来 'relay' 是「进了别人的库」，
+// 现在是 'chat'（她点了让他读）和 'wake'（他醒来自己读到）。
+// 旧数据里那些 'relay' 不改，那是当时的事实。
 import db from './state.js';
-
-const RELAY_URL = String(process.env.ECHO_RELAY_URL || 'http://127.0.0.1:3011').replace(/\/+$/, '');
-const ENV_FILE = process.env.ECHO_RELAY_ENV || '/root/companion-relay/relay.env';
+import { askUpstream, joinPending } from './chat-bus.js';
 
 // 攒着的话。sent=0 是还没出去的；出去之后不删，置 sent=1，
-// 万一 relay 那边丢了还能查到说过什么。
+// 万一上游那边丢了还能查到说过什么。
 db.exec(`
 CREATE TABLE IF NOT EXISTS chat_pending (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -34,9 +37,9 @@ CREATE INDEX IF NOT EXISTS idx_chat_pending_unsent ON chat_pending (sent, id);
 `);
 
 // 后加的列。已存在时会报错，忽略即可（和 moments-store.js 同一个做法）。
-// via：这条是怎么到他那边的。relay = 她点了「让他读」当场递的；
+// via：这条是怎么到他那边的。chat = 她点了「让他读」当场递的；
 // wake = 她没点，他下次醒来自己读到的。两条路径得分得清：
-// 前者进了 relay 的库、会走 SSE 回来，后者只是注入进了那一轮的输入。
+// 前者当场就有回复，后者是注入进了那一轮的输入。
 try {
   db.exec('ALTER TABLE chat_pending ADD COLUMN via TEXT');
 } catch {
@@ -51,35 +54,6 @@ function stmt(sql) {
     cache.set(sql, s);
   }
   return s;
-}
-
-let cachedSecret;
-export function relaySecret() {
-  if (cachedSecret !== undefined) return cachedSecret;
-  const direct = String(process.env.ECHO_RELAY_SECRET || '').trim();
-  if (direct) {
-    cachedSecret = direct;
-    return cachedSecret;
-  }
-  try {
-    const m = fs.readFileSync(ENV_FILE, 'utf8').match(/^RELAY_SECRET=(.*)$/m);
-    cachedSecret = (m ? m[1].trim() : '') || null;
-  } catch {
-    cachedSecret = null;
-  }
-  return cachedSecret;
-}
-
-export function relayBase() {
-  return RELAY_URL;
-}
-
-// 打 relay 的统一出口。密钥在这儿加，调用方不用知道它。
-export async function relayFetch(path, init = {}) {
-  const secret = relaySecret();
-  if (!secret) throw new Error('读不到 RELAY_SECRET');
-  const headers = { ...(init.headers || {}), Authorization: 'Bearer ' + secret };
-  return fetch(RELAY_URL + path, { ...init, headers });
 }
 
 export function addPending(text, windowId = null) {
@@ -102,45 +76,49 @@ export function pendingCount() {
   return stmt('SELECT COUNT(*) AS n FROM chat_pending WHERE sent = 0').get()?.n ?? 0;
 }
 
-// 按顺序递给 relay。一条失败就停下，剩下的留着下次再递——
-// 半批递进去比一条也没递更难收拾，但顺序不能乱。
+// 点「让他读」：把攒着的几句合成一条递给网关，他当场回。
+//
+// 为何合成一条（而不是一条一条发）：她点这个的意思是「这几句一起读」。
+// 逐条递他会回好几次，而且回第一句时看不到后面几句。
+//
+// 成功才标已读：上游报错时这几句话留在表里，下次再试。
+// （这条是原来就有的规矩，没动。）
+//
+// 返回形状和以前一样：{ sent, failed, remaining, error }。
+// sent 是「递上去几句话」，不是「发了几次请求」——phosphor 那边拿它打日志。
 export async function flushPending(limit = 50) {
   const rows = listPending(limit);
   if (!rows.length) return { sent: 0, failed: 0, remaining: 0 };
-  const mark = stmt("UPDATE chat_pending SET sent = 1, sent_at = ?, via = 'relay' WHERE id = ?");
-  let sent = 0;
-  let failed = 0;
-  let error = null;
-  for (const row of rows) {
-    try {
-      const r = await relayFetch('/app/send', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ text: row.text }),
-      });
-      if (!r.ok) throw new Error('HTTP ' + r.status);
-      mark.run(Date.now(), row.id);
-      sent++;
-    } catch (err) {
-      failed++;
-      error = err.message;
-      break;
-    }
+
+  const text = joinPending(rows);
+  if (!text) return { sent: 0, failed: 0, remaining: pendingCount() };
+
+  let r;
+  try {
+    r = await askUpstream(text);
+  } catch (err) {
+    console.error('chat: 递攒着的话失败', err.message);
+    return { sent: 0, failed: rows.length, remaining: pendingCount(), error: err.message };
   }
-  if (sent) console.log('chat: 递了 ' + sent + ' 条攒着的话给 relay');
-  if (error) console.error('chat: 递攒着的话失败', error);
-  return { sent, failed, remaining: pendingCount(), error };
+
+  if (!r.ok) {
+    console.error('chat: 递攒着的话失败', r.error);
+    return { sent: 0, failed: rows.length, remaining: pendingCount(), error: r.error };
+  }
+
+  const mark = stmt("UPDATE chat_pending SET sent = 1, sent_at = ?, via = 'chat' WHERE id = ?");
+  const now = Date.now();
+  for (const row of rows) mark.run(now, row.id);
+
+  console.log(`chat: 递了 ${rows.length} 句攒着的话，他回了 ${r.text.length} 字`);
+  return { sent: rows.length, failed: 0, remaining: pendingCount(), reply: r.text };
 }
 
-// 他醒来自己读到了（网关把这几句注入进了那一轮的输入，见 gateway.js）。
+// 他醒来自己读到了（网关把这几句注入进了那一轮的输入）。
 //
 // 读到就算读过，和动态里 markUserMomentsSeen 一个道理：没回也不重复递。
 // 这意味着这一轮如果上游报错，那几句话不会再出现在下一轮——
 // 但数据还在表里，查得到。
-//
-// 和 flushPending 的区别：这条路径不打 relay，所以那几句话不会进 relay 的库、
-// 也不会走 SSE 回来。网页上那几个半透气泡会停在半透状态，直到刷页；
-// 刷页后它们不再出现在 pending 里。
 export function markPendingRead(ids) {
   if (!Array.isArray(ids) || !ids.length) return 0;
   const mark = stmt("UPDATE chat_pending SET sent = 1, sent_at = ?, via = 'wake' WHERE id = ? AND sent = 0");
@@ -152,31 +130,8 @@ export function markPendingRead(ids) {
   return n;
 }
 
-// 唤醒时回一句。这条会出现在网页聊天里，和他当场回的那种一模一样。
-//
-// 小满 10-30：「唤醒是晨暮星吧，应该改法和动态我的留言一样」。
-// 所以不走 /app/send（那是她说话的入口），走 /channel/out——
-// AI 侧就是从这个口回话的，relay 落库之后走 SSE 推给网页。
-//
-// 返回 { ok, status, body }。失败不抛：一句回复发不出去不应该拖垮整次唤醒。
-export async function replyToChat(text) {
-  const t = String(text ?? '').trim();
-  if (!t) return { ok: false, status: 0, body: 'empty' };
-  try {
-    const r = await relayFetch('/channel/out', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ chat_id: 'me', text: t }),
-    });
-    const body = await r.text().catch(() => '');
-    return { ok: r.ok, status: r.status, body: body.slice(0, 300) };
-  } catch (err) {
-    return { ok: false, status: 0, body: err.message };
-  }
-}
-
 // 改攒着还没递出去的那条。已经递出去的改不了（sent = 0 这个条件）——
-// 它已经进了 relay 的库和他的上文，在这边改只是自己看见不同的字。
+// 它已经进了他的上文，在这边改只是自己看见不同的字。
 export function editPending(id, text) {
   if (!Number.isInteger(id)) return false;
   const t = String(text ?? '').trim();
