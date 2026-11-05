@@ -140,8 +140,15 @@ export function status() {
 
 // ── 调 embedding ──
 //
-// OpenAI 兼容的 /v1/embeddings。地址写到哪一层都认：
-// 带 /embeddings 的原样用，只写域名的自己补 /v1/embeddings。
+// OpenAI 兼容的 /v1/embeddings。
+//
+// 地址写到哪一层都认，三种：
+//   .../embeddings  → 原样用
+//   .../v1          → 补 /embeddings
+//   光域名          → 补 /v1/embeddings
+//
+// 2026-11-05：之前只判了第一种，其余一律补 /v1/embeddings——
+// 她填的 https://api.siliconflow.cn/v1 就被拼成了 /v1/v1/embeddings，404。
 async function embed(texts) {
   const s = getSettings();
   const base = String(s.embedding_base_url || '').trim();
@@ -150,9 +157,12 @@ async function embed(texts) {
   if (!base) throw new Error('还没填 embedding 的地址');
   if (!model) throw new Error('还没填 embedding 模型');
 
-  const url = /\/embeddings\/?$/.test(base)
-    ? base.replace(/\/$/, '')
-    : `${base.replace(/\/+$/, '')}/v1/embeddings`;
+  const trimmed = base.replace(/\/+$/, '');
+  const url = /\/embeddings$/.test(trimmed)
+    ? trimmed
+    : /\/v\d+$/.test(trimmed)
+      ? `${trimmed}/embeddings`
+      : `${trimmed}/v1/embeddings`;
 
   const res = await fetch(url, {
     method: 'POST',
