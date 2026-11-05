@@ -22,6 +22,15 @@
 // 代价是：同一段时间里的东西没法拆到两个窗。但她要的就是按时间分，
 // 所以这不是妥協。
 //
+// ── 最老那个窗往前敞开到底 ──
+//
+// 她最老的窗是 10-31 01:54 开的，但聊天和卡片比它早得多。
+// 若按字面取 [created_at, 下一个)，10-31 之前的东西会落在所有窗外面——
+// 谁都看不到。那就是「我的聊天记录没了」。
+//
+// 所以最老那个窗的左边是 0：它装下「第二个窗开之前的全部」。
+// 这也符合直觉：第一次分割之前，所有东西本来就在同一个屋子里。
+//
 // ── 删窗删的是什么 ──
 //
 // 只删那个分割点，不删话。删掉之后那段时间并回前一个（更老的）窗里。
@@ -72,11 +81,7 @@ export function getWindow(id) {
   return stmt('SELECT id, title, created_at FROM chat_windows WHERE id = ?').get(id) || null;
 }
 
-// 第一次进来没窗，建一个。
-//
-// created_at 故意用 0：这是「最开头那个窗」，得装下所有已经存在的历史。
-// 如果用 Date.now()，之前所有的聊天和卡片都会落在它左边的空白里，
-// 谁都看不到——那就是「我的聊天记录没了」。
+// 第一次进来没窗，建一个。created_at 用 0：它得装下所有已经存在的历史。
 export function ensureWindow() {
   const list = listWindows();
   if (list.length) return list;
@@ -100,21 +105,26 @@ export function renameWindow(id, title) {
 
 // 删掉这个分割点。话和卡片不动，它们并回前一个更老的窗。
 export function dropWindow(id) {
-  if (!Number.isInteger(id)) return { error: '窗号不对' };
-  const w = getWindow(id);
+  const n0 = Number(id);
+  if (!Number.isInteger(n0)) return { error: '窗号不对' };
+  const w = getWindow(n0);
   if (!w) return { error: '没有这个窗' };
   const n = stmt('SELECT COUNT(*) AS c FROM chat_windows').get().c;
   if (n <= 1) return { error: '这是最后一个窗，删了就没地方说话了' };
-  stmt('DELETE FROM chat_windows WHERE id = ?').run(id);
-  console.log(`chat: 删了窗 #${id}（话没删，并回上一个窗）`);
+  stmt('DELETE FROM chat_windows WHERE id = ?').run(n0);
+  console.log(`chat: 删了窗 #${n0}（话没删，并回上一个窗）`);
   return { ok: true };
 }
 
 export const titleOf = (w) =>
   w.title || (w.created_at ? `${formatDateTime(w.created_at).slice(5, 16)} 的窗` : '最开头那个窗');
 
-// 这个窗管哪段时间。to 是下一个更新的窗开的那一刻；
-// 没有更新的就是 Infinity——最新那个窗是开着口的，新东西落进它。
+// 这个窗管哪段时间。
+//
+// to = 下一个更新的窗开的那一刻；没有更新的就是 Infinity
+//      （最新那个窗是开着口的，新东西落进它）。
+// from = 自己的 created_at；但最老那个窗是 0——比它更早的历史也归它，
+//        否则那些话落在所有窗外面，谁都看不到。
 export function windowRange(id) {
   const w = getWindow(Number(id));
   if (!w) return null;
@@ -123,7 +133,17 @@ export function windowRange(id) {
      WHERE created_at > ? OR (created_at = ? AND id > ?)
      ORDER BY created_at ASC, id ASC LIMIT 1`
   ).get(w.created_at, w.created_at, w.id);
-  return { from: w.created_at, to: next ? next.created_at : Infinity, window: w };
+  const older = stmt(
+    `SELECT 1 AS yes FROM chat_windows
+     WHERE created_at < ? OR (created_at = ? AND id < ?)
+     LIMIT 1`
+  ).get(w.created_at, w.created_at, w.id);
+  return {
+    from: older ? w.created_at : 0,
+    to: next ? next.created_at : Infinity,
+    window: w,
+    oldest: !older,
+  };
 }
 
 // ── 这个窗里的聊天 ──
@@ -172,8 +192,9 @@ export function listWindowMessages(id, limit = 200) {
 // 小满：「聊天窗里面的动作卡片只显示用的工具名，详细的不用写，
 // 这些在主页看得到」。
 //
-// 所以这边不带 detail，正文也切短到工具这一层。动态页（主页）那边一个字没改，
-// 它读的是同一条 moments 记录的完整 content 和 detail。
+// 所以这边不带 detail，正文也切短到工具这一层。没有 detail，前端那边
+// 就不把卡片画成可点的（见 chat-page.js 的 cardEl）——正好是她要的效果。
+// 动态页（主页）一个字没改，它读的是同一条 moments 记录的完整 content 和 detail。
 //
 // 切法：掉开头的「允朔刚刚」，再切到第一个「：」或「，」。
 //   「允朔刚刚逛了 Lutopia 论坛，翻了翻自己发过的东西」 → 「逛了 Lutopia 论坛」
@@ -222,9 +243,9 @@ export function windowCards(id, limit = 60) {
 
 // 列表里的预览：这个窗最后一下是什么
 export function windowPreview(id) {
-  const msgs = listWindowMessages(id, 1);
+  const msgs = listWindowMessages(id, 1) || [];
   const cards = windowCards(id, 1);
-  const last = [...(msgs || []), ...cards.map((c) => ({ ts: c.ts, text: c.body }))]
+  const last = [...msgs, ...cards.map((c) => ({ ts: c.ts, text: c.body }))]
     .sort((a, b) => b.ts - a.ts)[0];
   if (!last?.text) return '';
   const chars = Array.from(last.text);
