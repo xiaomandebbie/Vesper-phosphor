@@ -1,21 +1,20 @@
-// 记忆的编辑入口，挂在导览 Memory 那一条下面（/memories/manage）。
+// 记忆的编辑入口，挂在导览 Memory 那一条下面（/memories/manage/…）。
 //
 // 小满 2026-11-05：「编辑入口在导览 Memory 界面」
+// 「记忆条目布局参考 aru 的做」「设置的内容也放在个人」
 //
-// 为什么是子路径而不是新开一栏：tabs.js 对 /memories/… 仍然高亮 Memory，
-// 所以不用动导航，也不会把原来那个记忆库列表页挤掉。
+// 六块：指令、条目、长期资料、信息卡、世界书、日记。
+// 设置和导入不在这儿列入口——她要求摆到个人页，所以这边只留路由。
 //
-// 七块，对应她要的那几项：
-//   指令      系统提示词
-//   条目      每一轮都注入，所以要短
-//   资料      只注入标题，正文要读时再翻
-//   信息卡    按主题持续追写，标题命中带正文
-//   世界书    常驻/关键词、六个位置、优先级
-//   日记      自动总结
-//   设置      开关和每轮上限
+// ── 条目页为什么改成气泡 ──
 //
-// 表单全走 POST + 303 回原页：不写前端状态，刷新就是真实的库。
-// 这一页宁可笨一点，不要再出「页面上写着成功、库里没改」那种事。
+// 之前每条是「输入框 + 存 + 删 + 时间」四件套，十条就是四十个控件，
+// 读起来像表格不像记忆。Aru 那边是：一条一个气泡，点进去才改，
+// 右下角一个垃圾桶。所以这边按那个来：气泡里就是正文，改过了「存」才出来。
+//
+// Aru 条目页顶上那两个开关（读取全局条目 / 不共享到全局）没做：
+// 它们管的是多位协作者之间怎么共享，晨暮星这边只有他一个。
+// 做两个点了也不生效的开关，比没有更坏。
 
 import {
   getSettings, setSetting, SETTING_DEFAULTS, RECALL_BUDGETS,
@@ -24,13 +23,13 @@ import {
   listDocs, getDoc, saveDoc, dropDoc,
   listCards, getCard, saveCard, dropCard,
   listJournal, getJournal, saveJournal, dropJournal,
-  counts, searchAll,
+  counts,
 } from './memory-store.js';
 import {
   listBooks, getBook, saveBook, dropBook,
   listEntries as listWbEntries, getEntry as getWbEntry,
   saveEntry as saveWbEntry, dropEntry as dropWbEntry,
-  POSITIONS, ROLES, counts as wbCounts,
+  POSITIONS, ROLES,
 } from './world-books.js';
 import { renderMenu, HEAD_SCRIPT, CHROME_CSS, CHROME_SCRIPT } from './page-chrome.js';
 import { renderTabs, TABS_CSS } from './tabs.js';
@@ -51,14 +50,14 @@ function sameOrigin(req) {
 }
 
 const STYLE = `
-  :root { --ink:#252525; --muted:#5e5e5e; --accent:#4d4d4d; --gold:#818181;
-    --card:#fdfdfd; --soft:#f2f2f2; --line:#e2e2e2; }
+  :root{--ink:#252525;--muted:#5e5e5e;--accent:#4d4d4d;--gold:#818181;
+    --card:#fdfdfd;--soft:#f2f2f2;--line:#e2e2e2;--bub:#eef3fb;--bub-line:#dde6f3}
   *{box-sizing:border-box}
   body{margin:0;min-height:100vh;color:var(--ink);
     font-family:-apple-system,"PingFang SC","Helvetica Neue",sans-serif}
   main{position:relative;z-index:1;max-width:620px;margin:0 auto;padding:18px 16px 60px}
   .hero{text-align:center;margin:6px 0 14px}
-  .title{margin:0;font-size:24px;font-weight:200;letter-spacing:.28em;padding-left:.28em;color:#3a3a3a}
+  .title{margin:0;font-size:23px;font-weight:200;letter-spacing:.26em;padding-left:.26em;color:#3a3a3a}
   .subs{display:flex;gap:6px;overflow-x:auto;margin:0 -16px 16px;padding:0 16px 4px;
     -webkit-overflow-scrolling:touch}
   .subs::-webkit-scrollbar{display:none}
@@ -95,24 +94,41 @@ const STYLE = `
   .sw{display:flex;align-items:center;justify-content:space-between;gap:12px;
     padding:11px 0;border-top:1px solid var(--line)}
   .sw:first-child{border-top:0}
-  .mono{font-variant-numeric:tabular-nums}
   .back{display:inline-flex;align-items:center;min-height:44px;margin-top:14px;
     font-size:13px;color:var(--accent);text-decoration:none}
   .empty{margin:10px 2px;font-size:12.5px;line-height:1.7;color:var(--muted)}
+
+  /* 条目：照 Aru 那个样子——输入框带一个 +，下面一条一个气泡 */
+  .add{display:flex;align-items:flex-end;gap:9px;background:var(--bub);
+    border:1px solid var(--bub-line);border-radius:16px;padding:11px 12px;margin-bottom:14px}
+  .add textarea{flex:1;min-height:44px;background:none;border:0;padding:4px 2px;
+    font-size:15px;line-height:1.6;resize:none}
+  .add textarea:focus{outline:none}
+  .add button{flex:none;width:40px;min-height:40px;padding:0;border-radius:50%;
+    font-size:21px;line-height:1}
+  .bub{background:var(--bub);border:1px solid var(--bub-line);border-radius:16px;
+    padding:13px 14px 9px;margin-bottom:10px}
+  .bub textarea{width:100%;min-height:0;background:none;border:0;padding:0;
+    font-size:15px;line-height:1.7;color:var(--ink);resize:none;overflow:hidden}
+  .bub textarea:focus{outline:none}
+  .bub-foot{display:flex;align-items:center;gap:9px;margin-top:7px}
+  .bub-when{flex:1;font-size:10.5px;color:#9aa6b8;font-variant-numeric:tabular-nums}
+  .bub-foot button{min-height:30px;padding:0 10px;font-size:12.5px;border-radius:9px}
+  .bub-foot .keep{display:none;background:#1a1a1a}
+  .bub.dirty .keep{display:inline-block}
+  .bub-foot .bin{background:none;border:0;color:#9aa6b8;font-size:15px;padding:0 4px;min-height:30px}
 `;
 
 const SUBS = [
-  ['', '总览'],
   ['/prompt', '指令'],
   ['/entries', '条目'],
   ['/docs', '长期资料'],
   ['/cards', '信息卡'],
   ['/books', '世界书'],
   ['/journal', '日记'],
-  ['/settings', '设置'],
 ];
 
-function layout(here, title, body) {
+function layout(here, title, body, script) {
   const subs = SUBS.map(([p, label]) =>
     `<a class="sub${p === here ? ' on' : ''}" href="${P}${p}">${esc(label)}</a>`
   ).join('');
@@ -126,40 +142,15 @@ function layout(here, title, body) {
 <style>${CHROME_CSS}${TABS_CSS}${STYLE}</style>
 </head>
 <body><main>${renderMenu('/memories')}
-<header class="hero"><h1 class="title">记忆</h1></header>
+<header class="hero"><h1 class="title">${esc(title)}</h1></header>
 <div class="subs">${subs}</div>
 ${body}</main>
 ${renderTabs('/memories')}
-<script>${CHROME_SCRIPT}<\/script></body>
+<script>${script || ''}${CHROME_SCRIPT}<\/script></body>
 </html>`;
 }
 
 const when = (ts) => (ts ? formatDateTime(ts).slice(0, 16) : '');
-
-// ── 总览 ──
-
-function overview() {
-  const c = counts();
-  const w = wbCounts();
-  const s = getSettings();
-  const rows = [
-    ['指令', getPrompt() ? `${Array.from(getPrompt()).length} 字` : '还没写', '/prompt'],
-    ['条目记忆', `${c.entries} 条 · 每一轮都带`, '/entries'],
-    ['长期资料', `${c.docs} 份 · 只带标题`, '/docs'],
-    ['信息卡', `${c.cards} 张 · 标题命中带正文`, '/cards'],
-    ['世界书', `${w.books} 本 · ${w.entries} 条`, '/books'],
-    ['日记', `${c.journal} 篇`, '/journal'],
-  ];
-  return layout('', '记忆',
-    `<div class="card">${rows.map(([n, v, p]) =>
-      `<a class="sw" href="${P}${p}" style="text-decoration:none;color:inherit">
-        <span class="nm">${esc(n)}</span>
-        <span class="wt" style="flex:none;margin:0">${esc(v)} ›</span>
-      </a>`).join('')}</div>
-    <p class="hint">每轮上限 ${esc(s.recall_budget)} tokens（记忆目录 + 自动召回 + 最近日记）。
-      条目记忆和世界书由你控制，不计入这个上限。</p>
-    <a class="back" href="/memories">‹ 回记忆库</a>`);
-}
 
 // ── 指令 ──
 
@@ -180,34 +171,50 @@ function promptPage() {
     </div>`);
 }
 
-// ── 条目 ──
+// ── 条目：Aru 那种气泡 ──
+
+const ENTRY_SCRIPT = `(function () {
+  // 气泡里的 textarea 跟着内容长，不出滚动条
+  function grow(el) {
+    el.style.height = 'auto';
+    el.style.height = (el.scrollHeight + 2) + 'px';
+  }
+  document.querySelectorAll('.bub textarea').forEach(function (el) {
+    grow(el);
+    var was = el.value;
+    el.addEventListener('input', function () {
+      grow(el);
+      // 改过了「存」才出来；改回原样就再收起去
+      el.closest('.bub').classList.toggle('dirty', el.value !== was);
+    });
+  });
+  var add = document.querySelector('.add textarea');
+  if (add) add.addEventListener('input', function () { grow(add); });
+})();`;
 
 function entriesPage() {
   const rows = listEntries();
-  const items = rows.map((r) => `<div class="card">
+  const items = rows.map((r) => `<div class="bub">
     <form method="post" action="${P}/entries/${esc(r.id)}">
-      <div class="f"><textarea name="content" style="min-height:80px">${esc(r.content)}</textarea></div>
-      <div class="acts">
-        <button type="submit" class="sm">存</button>
-        <button type="submit" class="sm danger" name="drop" value="1"
-          onclick="return confirm('删掉这条？')">删</button>
-        <span class="tag">${esc(when(r.created_at))}</span>
+      <textarea name="content" rows="1">${esc(r.content)}</textarea>
+      <div class="bub-foot">
+        <span class="bub-when">${esc(when(r.created_at))}</span>
+        <button type="submit" class="keep">存</button>
+        <button type="submit" class="bin" name="drop" value="1"
+          aria-label="删掉这条" onclick="return confirm('删掉这条？')">垃</button>
       </div>
     </form>
   </div>`).join('');
   return layout('/entries', '条目记忆',
-    `<div class="card">
-      <form method="post" action="${P}/entries">
-        <div class="f">
-          <label for="n">写下他应该记住的事</label>
-          <textarea id="n" name="content" style="min-height:72px"
-            placeholder="比如：生日、固定约定、某份资料放在哪…"></textarea>
-        </div>
-        <div class="acts"><button type="submit">加上</button></div>
-      </form>
-      <p class="hint">这 ${rows.length} 条每一轮都会进对话，所以每条保持简短。不计入每轮上限。</p>
-    </div>
-    ${items || '<p class="empty">还没有条目。</p>'}`);
+    `<form class="add" method="post" action="${P}/entries">
+      <textarea name="content" rows="1"
+        placeholder="写下他应该记住的事…"></textarea>
+      <button type="submit" aria-label="加上">+</button>
+    </form>
+    ${items || '<p class="empty">还没有条目。</p>'}
+    <p class="hint" style="margin:14px 2px 0">这 ${rows.length} 条每一轮都会进对话，
+      所以每条保持简短。不计入每轮上限。改完才会出现「存」。</p>`,
+    ENTRY_SCRIPT);
 }
 
 // ── 长期资料 ──
@@ -230,7 +237,7 @@ function docsPage() {
       </form>
       <p class="hint">${rows.length} 份。模型平时只看到标题，需要的时候再读正文。</p>
     </div>
-    ${items || '<p class="empty">还没有长期资料。先新建一份，或者等导入备份。</p>'}`);
+    ${items || '<p class="empty">还没有长期资料。</p>'}`);
 }
 
 function docPage(d) {
@@ -353,7 +360,7 @@ function entryForm(bookId, e) {
         <div class="f"><label>扫多少条（空=跟书）</label>
           <input name="scanDepth" type="number" value="${e?.scan_depth ?? ''}" /></div>
       </div>
-      <div class="f"><label>按深度插入时，距Picture最后几条（只对「按深度插入」有效）</label>
+      <div class="f"><label>按深度插入时，插在倒数第几条前（只对「按深度插入」有效）</label>
         <input name="injectDepth" type="number" value="${e?.inject_depth ?? ''}" /></div>
       <div class="sw"><span class="nm">区分大小写</span>
         <input type="checkbox" name="caseSensitive" value="1" style="width:auto"
@@ -462,7 +469,7 @@ function journalDetail(j) {
     <a class="back" href="${P}/journal">‹ 回日记</a>`);
 }
 
-// ── 设置 ──
+// ── 设置（入口在个人页）──
 
 function settingsPage() {
   const s = getSettings();
@@ -474,7 +481,7 @@ function settingsPage() {
   </div>`;
   const budgets = RECALL_BUDGETS.map((b) =>
     `<option value="${b}"${s.recall_budget === b ? ' selected' : ''}>${Number(b) / 1000}K</option>`).join('');
-  return layout('/settings', '记忆设置',
+  return layout('', '记忆设置',
     `<div class="card">
       <form method="post" action="${P}/settings">
         ${sw('cross_conversation_recall', '跳对话记忆', '按当前话题把过去的内容找回来')}
@@ -493,11 +500,14 @@ function settingsPage() {
       <p class="hint">每轮上限管的是记忆目录 + 自动召回 + 最近日记这三块，超了先减召回。
         条目记忆和世界书由你控制，不计入。</p>
     </div>
-    <p class="sect">语义索引</p>
     <div class="card">
-      <p class="hint">还没开。现在的召回是按关键词找的——这一层单独也能用。
-        embedding 模型和向量索引是下一步，到时候在这儿配。</p>
-    </div>`);
+      <a class="row" href="${P}/vectors" style="text-decoration:none;color:inherit">
+        <div class="row-in"><span class="nm">语义索引</span>
+          <span class="wt">embedding 模型、建索引、开关</span></div>
+        <span class="go">›</span>
+      </a>
+    </div>
+    <a class="back" href="/me">‹ 回个人</a>`);
 }
 
 // ── 路由 ──
@@ -512,7 +522,7 @@ export function registerMemoryUI(app, { requireBasicAuth }) {
     res.set('Cache-Control', 'no-store');
     try {
       const html = fn(req);
-      if (html == null) return res.redirect(303, P);
+      if (html == null) return res.redirect(303, '/memories');
       res.send(html);
     } catch (err) {
       console.error('memory ui:', err);
@@ -521,7 +531,9 @@ export function registerMemoryUI(app, { requireBasicAuth }) {
   };
   const back = (res, to) => res.redirect(303, `${P}${to}`);
 
-  app.get(P, requireBasicAuth, page(() => overview()));
+  // 总览就是记忆页本身（大框版），不再另做一个
+  app.get(P, requireBasicAuth, (req, res) => res.redirect(302, '/memories'));
+
   app.get(`${P}/prompt`, requireBasicAuth, page(() => promptPage()));
   app.get(`${P}/entries`, requireBasicAuth, page(() => entriesPage()));
   app.get(`${P}/docs`, requireBasicAuth, page(() => docsPage()));
@@ -629,12 +641,6 @@ export function registerMemoryUI(app, { requireBasicAuth }) {
     back(res, `/books/${req.params.id}`);
   });
 
-  const entryFields = (b, id) => ({
-    id,
-    bookId: b,
-    title: undefined,
-  });
-
   app.post(`${P}/books/:bid/entries`, requireBasicAuth, (req, res) => {
     if (guard(req, res)) return;
     saveWbEntry({ ...req.body, bookId: req.params.bid, constantActive: !!req.body?.constantActive,
@@ -674,8 +680,9 @@ export function registerMemoryUI(app, { requireBasicAuth }) {
   app.post(`${P}/settings`, requireBasicAuth, (req, res) => {
     if (guard(req, res)) return;
     // 复选框没勾时浏览器不发这个字段，所以开关要显式置 0
-    const bools = ['cross_conversation_recall', 'maps_information_cards', 'maps_long_term_references'];
-    for (const k of bools) setSetting(k, req.body?.[k] ? '1' : '0');
+    for (const k of ['cross_conversation_recall', 'maps_information_cards', 'maps_long_term_references']) {
+      setSetting(k, req.body?.[k] ? '1' : '0');
+    }
     for (const k of ['recall_budget', 'recent_journal_count', 'recall_top_k']) {
       if (Object.prototype.hasOwnProperty.call(req.body ?? {}, k)) setSetting(k, req.body[k]);
     }
