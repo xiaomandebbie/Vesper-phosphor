@@ -14,6 +14,10 @@
 #
 # 锚点用 registerLightProxy 那一行：它就在这组的最后。
 #
+# 位置体检只认 _globalJson 这个名字，不认后面的参数：
+# 那行被改过（express.json({ limit: '2mb' })，2026-11-05 修 413 时动的）。
+# 写死完整形状就是上一版「找不到位置标记」的原因。
+#
 # 在 /root/vesper-phosphor 下跑。幂等。
 
 import os
@@ -100,17 +104,23 @@ if not ok:
     print('\n有锚点没对上，没写盘。把上面那几行发给小克。')
     sys.exit(1)
 
-# 位置体检：确认真的在 express.json() 前面
+# 位置体检：确认真的在全局 json 解析前面。
+# 只认 _globalJson 这个名字——后面的参数改过（limit: '2mb'）。
 s = bodies[vp]
 at_proxy = s.find('registerUranusProxy(app,')
-at_json = s.find('const _globalJson = express.json()')
-if at_proxy < 0 or at_json < 0:
-    print('\n找不到位置标记，没写盘。')
+at_json = s.find('_globalJson')
+if at_proxy < 0:
+    print('\n找不到代理那一行，没写盘。')
+    sys.exit(1)
+if at_json < 0:
+    print('\n找不到 _globalJson——这个文件和我读到的不一样，没写盘。')
+    print('把这两行的输出发给小克：')
+    print('  grep -n "express.json" src/vesper.js')
     sys.exit(1)
 if at_proxy > at_json:
-    print('\n代理挂在了 express.json() 后面——图片上传会坏。没写盘。')
+    print('\n代理挂在了全局 json 后面——图片上传会坏。没写盘。')
     sys.exit(1)
-print('\n位置对：代理在 express.json() 之前')
+print('\n位置对：代理在全局 json 解析之前')
 
 for path, body in bodies.items():
     shutil.copy(path, '/root/' + os.path.basename(path) + '.before-uranus')
@@ -119,10 +129,5 @@ for path, body in bodies.items():
 
 print('\n写好了。接下来：')
 print('  node --check src/uranus-proxy.js && node --check src/vesper.js \\')
-print('    && node --check src/discover-page.js')
-print('')
-print('然后往 .env 加两行（密码换成你自己的）：')
-print('  URANUS_USER=Uranus')
-print('  URANUS_PASSWORD=你那个密码')
-print('')
-print('  pm2 restart vesper --update-env')
+print('    && node --check src/discover-page.js \\')
+print('    && pm2 restart vesper --update-env')
