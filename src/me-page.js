@@ -95,8 +95,28 @@ function renderRows() {
   const rows = [
     {
       name: '自定义',
-      what: '改他和你的头像、名字',
+      what: '改他和你的头像、名字、聊天气泡',
       href: '/moments/profile',
+    },
+    {
+      name: 'MCP',
+      what: '他手上连着哪几个服务、每个有哪些工具',
+      href: '/me/mcp',
+    },
+    {
+      name: '记忆设置',
+      what: '每轮上限、跳对话记忆、语义索引',
+      href: '/memories/manage/settings',
+    },
+    {
+      name: '导入记忆',
+      what: '把 Aru 导出的条目、资料、信息卡、日记、世界书搬过来',
+      href: '/memories/manage/import',
+    },
+    {
+      name: '导入聊天记录',
+      what: '只导一位协作者的，其他人的不进来',
+      href: '/memories/manage/import/chat-page',
     },
     {
       name: '后台日志',

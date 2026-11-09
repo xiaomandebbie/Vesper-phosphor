@@ -42,6 +42,7 @@ import { listWindows, listWindowMessages } from './chat-windows.js';
 import { formatDateTime } from './wall-time.js';
 import { buildMessages as buildWithMemory } from './memory-inject.js';
 import { toolPrompt, parseCall, stripCall, runTool, callLabel } from './memory-tools.js';
+import { saveTrace } from './chat-trace.js';
 
 const GATEWAY = String(process.env.VESPER_GATEWAY_URL || 'http://127.0.0.1:3002').replace(/\/+$/, '');
 const ROUTE = String(process.env.CHAT_ROUTE_NAME || 'aru-chat');
@@ -238,6 +239,17 @@ export async function askUpstream(text, { streamId = String(Date.now()) } = {}) 
     ];
   }
 
+  // 这一轮真正带进去的召回。memory-inject 把它拼成一条 system 消息，
+  // 摆在最后一句话前面——按标记认它，不用改 memory-inject 的内部结构。
+  const recalledText = (() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const c = String(messages[i]?.content ?? '');
+      if (/<memory_directory>|<recalled>|<recent_days>/.test(c)) return c;
+    }
+    return '';
+  })();
+  const usedTools = [];
+
   emit({ type: 'typing', active: true });
 
   let finalText = '';
@@ -271,6 +283,7 @@ export async function askUpstream(text, { streamId = String(Date.now()) } = {}) 
         detail: out,
       });
       console.log(`chat: 他用了 ${call.name}`);
+      usedTools.push({ label: callLabel(call), detail: out });
 
       // 把这一轮的输出和工具结果接回去。
       // 工具结果用 system：role='tool' 会被 message-repair 修掉，
@@ -288,6 +301,14 @@ export async function askUpstream(text, { streamId = String(Date.now()) } = {}) 
   }
 
   const done = finalText.trim();
+
+  // 落盘：不存的话退出重进就没了（conversation_log 只有三列）。
+  try {
+    saveTrace({ reasoning: lastReasoning, recalled: recalledText, tools: usedTools });
+  } catch (err) {
+    console.error('chat: 痕迹没存下', err.message);
+  }
+
   emit({ type: 'reply_delta', stream_id: streamId, done: true, final_text: done });
   emit({ type: 'typing', active: false });
 

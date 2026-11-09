@@ -1,96 +1,76 @@
-// 梦和 Ombre 记忆库之间的两步。
-//
-// 小满 2026-11-04：「我想他正常做梦，一开始不记得，等想起来之后
-// ombre brain 里记录的做了一个梦可以更新为梦的内容，他就可以翻记忆库看到了」
-//
-// 所以是两步：
-//   做梦当时 —— hold 一条「某时做了一个梦」，把返回的 bucket id 记在梦里；
-//   想起来之后 —— trace 把那条的正文换成整个梦。
-//
-// 为什么这样和之前的顾虑不矛盾：
-//   dreams.js 开头那段担心的是「没想起来之前就被搜到」。这一点没变：
-//   想起来之前，Ombre 里就是字面上那一句话，没标题、没摘要、没触发词，
-//   breath_search 怎么查都查不出内容——因为那里真的没有，不是被标记挡着。
-//   （当时不用 digested 就是这个理由：它的说明里写着「仍可由显式 query 找回」。）
-//   变的是想起来之后：那一刻他本来就读到了全文，再藏着没意义。
-//   以前是「读一遍就永远忘了」，现在是「读一遍之后就真的记得了」。
-//   后者更像人：梦想不起来时是空的，想起来了就是一段记忆。
-//
-// 为什么单独一个文件：dreams.js 已经很长，而这两步是一件完整的事。
-// 和 my-comments.js、moments-posts.js 一个做法。
+// src/dreams-ombre.js
+// 梦在 Ombre 里的两层：做梦那一刻只留一条事件记录（时间戳加一句话）；
+// 被想起来之后，再把整段梦写回同一条桶。
+// 附加层，任何一步失败只打日志，不拖住做梦，也不拖住「想起来」。
 
 import { callTool, isConnected } from './mcp-manager.js';
 
-const USER_NAME = process.env.USER_DISPLAY_NAME || '她';
+const SERVER = 'ombre-brain';
 
-function toolText(result) {
-  if (!Array.isArray(result?.content)) return '';
-  return result.content
-    .filter((c) => c?.type === 'text' && typeof c.text === 'string')
-    .map((c) => c.text)
-    .join('\n')
-    .trim();
+function texts(res) {
+  const out = [];
+  if (!res) return out;
+  if (typeof res === 'string') return [res];
+  if (Array.isArray(res.content)) {
+    for (const p of res.content) if (p && typeof p.text === 'string') out.push(p.text);
+  }
+  if (res.structuredContent) { try { out.push(JSON.stringify(res.structuredContent)); } catch (e) {} }
+  if (!out.length) { try { out.push(JSON.stringify(res)); } catch (e) {} }
+  return out;
 }
 
-// hold 返回的是一行人话，形如「新建→f988f7bcce68 dream」或者「合并→xxxx …」。
-// 里面那串十六进制就是 bucket id。没有结构化返回，只能这么认；
-// 认不出来就返回 null，谁都不崩，只是以后改不了这一条。
-export function parseBucketId(text) {
-  const m = String(text || '').match(/\b([0-9a-f]{8,32})\b/i);
-  return m ? m[1] : null;
+function bucketIdOf(res) {
+  if (!res || typeof res !== 'object') return null;
+  if (typeof res.bucket_id === 'string') return res.bucket_id;
+  if (res.structuredContent) { const i = bucketIdOf(res.structuredContent); if (i) return i; }
+  for (const t of texts(res)) {
+    const m = t.match(/bucket_id"?\s*[:=]\s*"?([0-9a-zA-Z_-]+)/);
+    if (m) return m[1];
+  }
+  return null;
 }
 
-// 第一步：做梦当时。只存一句话，不带标题也不带摘要——
-// 能还原出内容的东西等于没攒。返回 bucket id（拿不到就 null）。
+function contentOf(d, hit, recalledAt) {
+  const L = [];
+  L.push('【梦】' + (d.title || '没标题的梦'));
+  const tone = [d.tone, d.intensity].filter(Boolean).join(' ');
+  if (tone) L.push('调子 ' + tone);
+  const at = d.createdAt || d.at;
+  if (at) L.push('做的时辰 ' + at);
+  if (recalledAt) L.push('想起来的时辰 ' + recalledAt);
+  if (hit) L.push('被这句勾起来：' + hit);
+  if (Array.isArray(d.triggers) && d.triggers.length) L.push('触发词 ' + d.triggers.join('、'));
+  const body = d.fragment || d.body || d.text || '';
+  if (body) { L.push(''); L.push(body); }
+  return L.join('\n').trim();
+}
+
 export async function rememberDreamEvent(at) {
-  if (!isConnected('ombre-brain')) return null;
+  if (!isConnected(SERVER)) return null;
   try {
-    const res = await callTool('ombre-brain', 'hold', {
-      content: `${at} 做了一个梦。`,
+    const res = await callTool(SERVER, 'hold', {
+      content: at + ' 做了一个梦。',
       domain: 'dream',
       tags: '梦',
       importance: 3,
       why_remembered: '知道那一夜有过什么，不知道是什么',
     });
-    return parseBucketId(toolText(res));
+    const id = bucketIdOf(res);
+    if (!id) console.error('dream-ombre: 事件写进去了，但没读出 bucket id（这个梦以后改不回去）');
+    return id;
   } catch (err) {
-    console.error('dream: 事件记录没存上', err.message);
+    console.error('dream-ombre: 事件记录没写进去', err && err.message);
     return null;
   }
 }
 
-const TONE_WORD = { good: '好梦', bad: '魇梦', neutral: '说不上好坏' };
-
-// 想起来之后写回 Ombre 的正文。
-// 带上「什么时候做的」和「什么时候想起来的」：这两个时间可能差很远，
-// 以后翻到这条时得分得清哪个是梦里、哪个是想起来那一天。
-function revealedBody(d, hit, now) {
-  const tone = TONE_WORD[d.tone] || TONE_WORD.neutral;
-  const head = `${d.at} 做的梦，「${d.title}」。${tone}。`;
-  const how = hit
-    ? `${now} 想起来了——话里的「${hit}」碎到了它。`
-    : `${now} 想起来了。`;
-  return `${head}\n${how}\n\n${String(d.body ?? '').trim()}`;
-}
-
-// 第二步：把那条换成整个梦。
-//
-// 不等结果（谁都不在这儿 await）：梦浮现这件事在本地已经成立了，
-// 记忆库补正文是附加的，失败不该拖住唤醒那一轮。
-// 这也是为什么 markRecalled 还是同步函数：phosphor.js 那边一行都不用改。
-//
-// importance 抬到 5：它从「知道有过一个梦」变成了一段真的记忆。
-// why_remembered 不动：Ombre 只补空值不覆盖，而那句话是当时的心思，留着。
-export function revealDreamInOmbre(d, hit = '', now = '') {
-  if (!d?.ombreId || !isConnected('ombre-brain')) return;
-  callTool('ombre-brain', 'trace', {
-    bucket_id: d.ombreId,
-    content: revealedBody(d, hit, now),
-    title: d.title || '一个梦',
-    tags: `梦,${TONE_WORD[d.tone] || TONE_WORD.neutral}`,
-    importance: 5,
-    meaning_replace: `做的时候不记得内容，${now || '后来'}被一个词碎到才想起来。${USER_NAME}那边一直留着。`,
-  })
-    .then(() => console.log(`dream: 「${d.title}」已写回记忆库（${d.ombreId}）`))
-    .catch((err) => console.error('dream: 写回记忆库失败（梦还是想起来了）', err.message));
+export function revealDreamInOmbre(d, hit = '', recalledAt = '') {
+  if (!d || !d.ombreId || !isConnected(SERVER)) return;
+  try {
+    Promise.resolve(callTool(SERVER, 'trace', { bucket_id: d.ombreId, content: contentOf(d, hit, recalledAt) }))
+      .then(() => console.log('dream-ombre: 「' + (d.title || '梦') + '」写回记忆库了'))
+      .catch((err) => console.error('dream-ombre: 写回记忆库失败（梦本身还在）', err && err.message));
+  } catch (err) {
+    console.error('dream-ombre: 写回记忆库失败（梦本身还在）', err && err.message);
+  }
 }

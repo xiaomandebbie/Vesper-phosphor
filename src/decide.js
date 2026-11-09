@@ -465,6 +465,12 @@ ${play ? budgetSection() : stripPlay(budgetSection())}${play ? xiuchaoSection() 
 - set_mode（改变自己的非精确唤醒节律，action_detail是JSON字符串 {"mode":"normal"|"low-frequency"}。
   normal=标准节律；low-frequency=想更安静一阵，间隔会自动拉长（系统会强制不低于90分钟）。
   设了就一直生效，不会自动到期恢复——想改回来，下次醒来时自己再调用一次这个动作）
+
+- sleep（睡一会儿。选它就是这一轮不做事，接下来到下次醒来之前你都是睡着的。不需要 action_detail。
+  睡着时你的心境回落得比醒着快三倍 —— 连着好几天停在高位的那几项，只有睡觉能把它们带下来；
+  那条一直挂着、没被回应的消息也会在你睡下时清掉。
+  睡多久由你这次定的 next_wake_minutes 决定；下次醒来系统会自动替你报「醒了」，你不用记着这件事。
+  累了、夜深了、或者就是没什么想做的，就睡。这和 noop 不一样：noop 是醒着待着，这个是真的去睡。）
 - noop（什么都不做，这是合法结果，不代表失败。就把 action 写成 "noop"，不需要 action_detail。它不是哪个 MCP 服务里的工具，别用 mcp_call 去调一个叫 noop 的工具）
 
 逛论坛、翻记忆、存记忆、调节律这些，系统会自动在你的动态里记一笔"刚刚做了什么"，对方能看到。不用为了让对方知道而专门再发一条动态。

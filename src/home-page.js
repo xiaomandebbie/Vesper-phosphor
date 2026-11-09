@@ -14,6 +14,8 @@ import { getTopDrives } from './drives.js';
 import { getWakeTimes } from './wake-info.js';
 import { formatDateTime } from './wall-time.js';
 import { renderMenu, HEAD_SCRIPT, CHROME_CSS, CHROME_SCRIPT } from './page-chrome.js';
+import { renderAnniversaryCard, ANNIVERSARY_CSS } from './anniversary.js';
+import { renderActivityStrip, ACTIVITY_STRIP_CSS, ACTIVITY_STRIP_SCRIPT } from './home-activity.js';
 
 const MAX_MOOD_CHARS = 60;
 
@@ -94,7 +96,7 @@ function renderWakeLine() {
 }
 
 const STYLE = `
-  :root { --ink: #252525; --muted: #5e5e5e; --accent: #4d4d4d; --gold: #818181; --card: #fdfdfd; --line: #e2e2e2;
+  :root { --ink: #252525; --muted: #5e5e5e; --accent: #4d4d4d; --gold: #818181; --card: #fdfdfd; --line: #e2e2e2; --card-soft: #f2f2f2; --accent-soft: #e8e8e8;
     --activity: #b9b9b9; --place: #6a6a6a; }
   * { box-sizing: border-box; }
   body { margin: 0; min-height: 100vh; color: var(--ink);
@@ -135,9 +137,9 @@ function layout(body) {
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>晨暮星</title>
 <script>${HEAD_SCRIPT}</script>
-<style>${STYLE}${CHROME_CSS}</style>
+<style>${STYLE}${ANNIVERSARY_CSS}${ACTIVITY_STRIP_CSS}${CHROME_CSS}</style>
 </head>
-<body><main>${renderMenu('/home')}${body}</main><script>${CHROME_SCRIPT}</script></body>
+<body><main>${renderMenu('/home')}${body}</main><script>${ACTIVITY_STRIP_SCRIPT}${CHROME_SCRIPT}</script></body>
 </html>`;
 }
 
@@ -149,9 +151,10 @@ export function registerHomeRoutes(app, { requireBasicAuth }) {
       res.send(layout(`<header class="hero">
         <h1 class="title">晨暮星</h1>
         <p class="subtitle" lang="en">Vesper<span aria-hidden="true">✨</span><span class="sr-only"> </span>Phosphor</p>
-        ${renderMoodLine(currentMood(), top)}
         ${renderWakeLine()}
-      </header>`));
+        ${renderAnniversaryCard()}
+        ${renderMoodLine(currentMood(), top)}
+      </header>${renderActivityStrip(Number(req.query.act) || 1)}`));
     } catch (err) {
       console.error('home page: 渲染失败', err);
       // 情绪读不到也要把标题摆出来，不要整页 500

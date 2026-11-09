@@ -46,7 +46,9 @@ function stmt(sql) {
   return s;
 }
 
-const P = '/memories/manage/chats';
+// 挂在聊天那一栈（小满：「就放在聊天界面」）。
+// /chat/:id 带了 (\\d+) 只接数字，所以这条不会被它抦住。
+const P = '/chat/archive';
 
 function esc(v) {
   return String(v ?? '')
@@ -179,8 +181,8 @@ function layout(title, body) {
 <script>${HEAD_SCRIPT}<\/script>
 <style>${CHROME_CSS}${TABS_CSS}${STYLE}</style>
 </head>
-<body><main>${renderMenu('/memories')}${body}</main>
-${renderTabs('/memories')}
+<body><main>${renderMenu('/chat')}${body}</main>
+${renderTabs('/chat')}
 <script>${CHROME_SCRIPT}<\/script></body>
 </html>`;
 }
@@ -197,7 +199,7 @@ function listPage() {
       <p class="empty">还没有。到「个人 → 导入聊天记录」跑一次就行。
         已经导过一次的也要再跑：第一版没存「哪几句是同一天的」，
         所以那两万条分不回窗——重跑只补这张表，归档不会双份。</p>
-      <a class="back" href="/memories">‹ 回记忆</a>`);
+      <a class="back" href="/chat">‹ 回聊天</a>`);
   }
   const items = rows.map((w) => `<a class="win" href="${P}/${esc(w.id)}">
     <div class="win-top">
@@ -213,7 +215,7 @@ function listPage() {
     `<header class="hero"><h1 class="title">以前的聊天</h1></header>
     <p class="lead">${c.chats} 个对话 · ${c.messages} 条话。从 Aru 备份里搬过来的。</p>
     ${items}
-    <a class="back" href="/memories">‹ 回记忆</a>`);
+    <a class="back" href="/chat">‹ 回聊天</a>`);
 }
 
 const PAGE_SIZE = 400;

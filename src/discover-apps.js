@@ -141,11 +141,11 @@ export function renderAppGrid(spots) {
 
 export const APPS_CSS = `
   /* 一行四个圆角方块。颜色全走 var()，跟着整屋的配色和早晚四张脸 */
-  .apps { display: grid; grid-template-columns: repeat(4, 1fr); gap: 20px 10px; margin: 2px 0 0; }
+  .apps { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px 8px; margin: 2px 0 0; }
   .app { display: flex; flex-direction: column; align-items: center; gap: 7px;
     -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
   .app-tile { position: relative; display: flex; align-items: center; justify-content: center;
-    width: 100%; aspect-ratio: 1 / 1; overflow: hidden;
+    width: 78%; aspect-ratio: 1 / 1; overflow: hidden;
     /* 22% 比正圆角更贴近 iOS 图标那种弧度 */
     border-radius: 22%;
     background: var(--card, #fdfdfd); border: 1px solid var(--line, #e2e2e2);
@@ -153,7 +153,7 @@ export const APPS_CSS = `
     color: var(--accent, #4d4d4d); text-decoration: none;
     transition: transform 0.14s ease; }
   .app-tile img { width: 100%; height: 100%; object-fit: cover; display: block; }
-  .app-glyph { font-size: 25px; line-height: 1; }
+  .app-glyph { font-size: 21px; line-height: 1; }
   .app-tile:active { transform: scale(0.93); }
   .app-tile.off { opacity: 0.4; }
   /* 名字只一行，长了省略号——折行会把下一排顶歪 */

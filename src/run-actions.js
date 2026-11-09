@@ -31,10 +31,10 @@ export function registerContinuers(list) {
   continuers = Array.isArray(list) ? list.filter((f) => typeof f === 'function') : [];
 }
 
-async function runContinuers(decision, result, messages) {
+async function runContinuers(decision, result, messages, selfNote) {
   for (const fn of continuers) {
     try {
-      await fn(decision, result, messages);
+      await fn(decision, result, messages, selfNote);
     } catch (err) {
       console.error(`run-actions: ${fn.name || '续步'} 出错（不影响其他）`, err.message);
     }
@@ -257,7 +257,7 @@ export async function runActions(decision, messages, { kind = 'non_precise', sel
       }
     }
 
-    await runContinuers(one, result, messages);
+    await runContinuers(one, result, messages, selfNote);
     results.push({ action: item.action, action_detail: item.action_detail, result });
   }
 

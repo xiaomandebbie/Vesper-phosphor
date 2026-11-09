@@ -62,6 +62,7 @@ import path from 'path';
 import { callTool, isConnected } from './mcp-manager.js';
 import { wallParts, formatDate, formatDateTime } from './wall-time.js';
 import { getSharedContext } from './context.js';
+import { rememberDreamEvent, revealDreamInOmbre } from './dreams-ombre.js';
 
 const AI_NAME = process.env.AI_DISPLAY_NAME || 'TA';
 const USER_NAME = process.env.USER_DISPLAY_NAME || '她';
@@ -449,17 +450,18 @@ export async function maybeDream() {
   // Ombre 里只留事件记录：时间戳加一句话。
   // 不带标题也不带摘要——能还原出内容的东西等于没攒。
   // 所以他知道那一夜有过什么，但不知道是什么。
-  if (isConnected('ombre-brain')) {
-    try {
-      await callTool('ombre-brain', 'hold', {
-        content: `${at} 做了一个梦。`,
-        domain: 'dream',
-        tags: '梦',
-        importance: 3,
-        why_remembered: '知道那一夜有过什么，不知道是什么',
-      });
-    } catch (err) {
-      console.error('dream: 事件记录没存上', err.message);
+  // 记下那条的 bucket id：想起来之后要回去把它改成正文（见 dreams-ombre.js）
+  const ombreId = await rememberDreamEvent(at);
+  if (ombreId) {
+    const fresh = loadAll();
+    const mine = fresh.find((x) => x.id === id);
+    if (mine) {
+      mine.ombreId = ombreId;
+      try {
+        saveAll(fresh);
+      } catch (err) {
+        console.error('dream: bucket id 没存下来（以后改不了那一条）', err.message);
+      }
     }
   }
 
@@ -505,7 +507,7 @@ ${d.body}
 }
 
 // 读完了。现在才攒。
-export function markRecalled(id) {
+export function markRecalled(id, hit = '') {
   const list = loadAll();
   const d = list.find((x) => x.id === id);
   if (!d || d.recalledAt) return false;
@@ -513,6 +515,9 @@ export function markRecalled(id) {
   try {
     saveAll(list);
     console.log(`dream: 「${d.title}」被想起来了，从他这边攒掉；页面上还留着`);
+    // 记忆库里那条「做了一个梦」现在换成整个梦。
+    // 不 await：梦浮现在本地已经成立，写回记忆库是附加的，失败不该拖住这一轮。
+    revealDreamInOmbre(d, hit, d.recalledAt);
     return true;
   } catch (err) {
     console.error('dream: 标记失败（梦还在）', err.message);

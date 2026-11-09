@@ -223,7 +223,8 @@ const CHAT_SCRIPT = `(function () {
   var goEl = document.getElementById('go');
   var whoEl = document.getElementById('who');
   var stEl = document.getElementById('st');
-  var BATCH = 400000;
+  // 48 KB 一批。这个数是记忆导入那边跑通了的，不自己猜。
+  var BATCH = 48000;
   var zip = null;
   var convMap = null;
 

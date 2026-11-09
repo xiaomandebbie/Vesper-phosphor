@@ -133,6 +133,9 @@ const ACTION_TIER = {
   // 他每次都选读书，别的三件全被挤掉；完全不计费又会变成每次醒来都读。
   // 所以单给它一本账，记在 books_log 里，见下面 booksRemaining。
   read_book: 0,
+  // 睡觉不花钱、不调模型、不惊动任何人，所以 0 级。
+  // 不写在这儿会 fallback 成 1 级，那样它得和论坛、听歌抢座位，然后被静默丢掉。
+  sleep: 0,
   bark: 3,
   moment: 3,
   diary: 3,

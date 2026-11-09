@@ -42,6 +42,15 @@ CREATE TABLE IF NOT EXISTS imported_conversations (
   created_at INTEGER
 );
 
+CREATE TABLE IF NOT EXISTS imported_chat (
+  id TEXT PRIMARY KEY,
+  conversation_id TEXT NOT NULL,
+  ts INTEGER NOT NULL,
+  speaker TEXT NOT NULL,
+  content TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_ic_conv ON imported_chat (conversation_id, ts);
+
 CREATE TABLE IF NOT EXISTS imported_messages (
   id TEXT PRIMARY KEY,
   imported_at INTEGER NOT NULL
@@ -108,7 +117,16 @@ function putMessages(rows, keep) {
   const owner = stmt('SELECT collaborator_id FROM imported_conversations WHERE id = ?');
   const seen = stmt('SELECT 1 AS yes FROM imported_messages WHERE id = ?');
   const mark = stmt('INSERT OR REPLACE INTO imported_messages (id, imported_at) VALUES (?, ?)');
-  const put = stmt('INSERT INTO conversation_archive (ts, speaker, content) VALUES (?, ?, ?)');
+  // 四列：archived_at 是 NOT NULL（state.js:65）。
+  // ts 是当时说这句话的时间，archived_at 是搬进来的时间，两回事。
+  // 多写一份带对话编号的：归档表没有那一列，没它就没法按窗分组。
+  const putIC = stmt(
+    'INSERT OR REPLACE INTO imported_chat (id, conversation_id, ts, speaker, content)'
+      + ' VALUES (?, ?, ?, ?, ?)'
+  );
+  const put = stmt(
+    'INSERT INTO conversation_archive (ts, speaker, content, archived_at) VALUES (?, ?, ?, ?)'
+  );
 
   const now = Date.now();
   let n = 0;
@@ -133,12 +151,16 @@ function putMessages(rows, keep) {
       continue;
     }
 
+    // 这一句在 seen 检查之前：第一版已经进了归档的那两万条，
+    // 重跑时归档要跳过，但这张表得补上。
+    putIC.run(id, cid, when, role === 'user' ? USER_NAME : AI_NAME, content);
+
     if (seen.get(id)) {
       dup++;
       continue;
     }
 
-    put.run(when, role === 'user' ? USER_NAME : AI_NAME, content);
+    put.run(when, role === 'user' ? USER_NAME : AI_NAME, content, now);
     mark.run(id, now);
     n++;
   }

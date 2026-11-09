@@ -9,6 +9,7 @@ import { applyProof } from './proof-gateway.js';
 import { observeUserMessage, doingBlock } from './doing.js';
 import { repairMessages } from './message-repair.js';
 import { listPending, markPendingRead } from './chat-queue.js';
+import { injectElsewhere } from './cross-front.js';
 // 攒着的话前面要标一个「MM-DD HH:mm」（见 injectPendingChat）
 import { formatDateTime } from './wall-time.js';
 
@@ -387,6 +388,7 @@ app.post('/v1/chat/completions', requireGatewayAuth, async (req, res) => {
   // 放在所有注入之前、对所有线路生效：孤立的 tool 消息和聊天还是唤醒无关，
   // 哪条路带着它上去都会被上游拒，而且坏序列一旦进了历史就每轮都带着。
   messages = repairMessages(messages);
+  if (recordConversation) messages = injectElsewhere(messages);
 
   // 小酒馆（见 proof-gateway.js）：只管聊天这条线路。
   // 每轮读一次 Proof 状态追在输入末尾；断片期间把那段从模型可见输入里捡掉。

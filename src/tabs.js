@@ -19,29 +19,29 @@
 const TABS = [
   {
     href: '/chat',
-    label: '\u804a\u5929',
+    label: 'Chat',
     icon:
       '<path d="M12 4c-4.4 0-8 2.8-8 6.3 0 2 1.2 3.8 3 5-.1 1-.5 2-1.2 2.9 1.5-.3 2.8-1 3.7-1.8.8.2 1.6.3 2.5.3 4.4 0 8-2.8 8-6.4S16.4 4 12 4z"/>',
   },
   {
     href: '/memories',
-    label: '\u8bb0\u5fc6',
+    label: 'Memory',
     icon: '<path d="M12 3.5l1.9 5.1 5.1 1.9-5.1 1.9L12 17.5l-1.9-5.1L5 10.5l5.1-1.9z"/>',
   },
   {
     href: '/home',
-    label: '\u4e3b\u9875',
+    label: 'Home',
     icon: '<path d="M12 3.8l8 6.4V20h-5.6v-5.2H9.6V20H4v-9.8z"/>',
   },
   {
     href: '/discover',
-    label: '\u53d1\u73b0',
+    label: 'Discover',
     icon:
       '<path d="M12 3.6a8.4 8.4 0 100 16.8 8.4 8.4 0 000-16.8zm3.4 5l-2 4.6-4.6 2 2-4.6z"/>',
   },
   {
     href: '/me',
-    label: '\u4e2a\u4eba',
+    label: 'Me',
     icon:
       '<path d="M12 4.2a3.6 3.6 0 100 7.2 3.6 3.6 0 000-7.2zM5.2 19.8c0-3.4 3-5.4 6.8-5.4s6.8 2 6.8 5.4z"/>',
   },

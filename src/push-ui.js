@@ -237,10 +237,11 @@ const PAGE_SCRIPT = `(function () {
           return null;
         }
         say('权限有了，正在装 service worker…');
+        // 不等 ready：它等的是「有 worker 真正接管了这个页面」，
+        // 而订阅只要 registration 就够。旧 worker 卡着不退时
+        // ready 永远等不到（2026-11-05 她这台就是）。
         return withTimeout(
-          navigator.serviceWorker.register('/app/sw.js').then(function () {
-            return navigator.serviceWorker.ready;
-          }),
+          navigator.serviceWorker.register('/app/sw.js'),
           20000,
           'service worker '
         );

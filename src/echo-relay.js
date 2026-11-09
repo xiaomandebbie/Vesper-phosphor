@@ -45,6 +45,7 @@
 // 不装作能用：那把 key 就在本机 .env 里，和网关读的是同一个。
 import { getRecentConversation } from './state.js';
 import { listWindows, listWindowMessages } from './chat-windows.js';
+import { attachTraces } from './chat-trace.js';
 import {
   gatewayKey,
   addClient,
@@ -112,10 +113,10 @@ export function registerEchoRelay(app, { requireBasicAuth }) {
       if (wid) {
         const scoped = listWindowMessages(wid, HISTORY_LIMIT);
         // null = 没这个窗（比如刚被删了），那就退回全部，不给一个空页
-        if (scoped) return res.json({ messages: scoped });
+        if (scoped) return res.json({ messages: attachTraces(scoped) });
       }
       const rows = getRecentConversation(HISTORY_LIMIT);
-      res.json({ messages: rows.map(toMessage).filter((m) => m.text) });
+      res.json({ messages: attachTraces(rows.map(toMessage).filter((m) => m.text)) });
     } catch (err) {
       console.error('chat: 取历史失败', err.message);
       res.status(500).json({ error: 'history failed' });

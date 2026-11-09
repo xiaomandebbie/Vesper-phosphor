@@ -43,6 +43,8 @@
 import db from './state.js';
 import { listMomentsBetween, getProfile } from './moments-store.js';
 import { tidyActivityContent, tidyActivityDetail } from './actions/activity.js';
+import { lookCSS } from './chat-look.js';
+import { windowCards, windowPreview, dropWindow } from './chat-windows.js';
 import { renderMenu, HEAD_SCRIPT, CHROME_CSS, CHROME_SCRIPT } from './page-chrome.js';
 import { renderTabs, TABS_CSS } from './tabs.js';
 import { formatDateTime } from './wall-time.js';
@@ -165,6 +167,14 @@ const LIST_STYLE = `
     border: 1px solid var(--line); background: #fff; font-size: 15px; color: var(--ink); }
   .rename button { flex: none; min-width: 52px; height: 38px; border-radius: 12px; border: none;
     background: #1a1a1a; color: #fdfdfd; font-size: 13px; }
+  .win-del { flex: none; margin: 0; }
+  .arch { display: flex; align-items: center; gap: 10px; margin: 16px 0 0; padding: 13px 14px;
+    background: rgba(255, 255, 255, 0.72); border: 1px dashed var(--line); border-radius: 16px;
+    color: inherit; text-decoration: none; }
+  .arch:active { background: #f2f2f2; }
+  .arch-n { flex: none; font-size: 14px; font-weight: 600; color: var(--ink); }
+  .arch-w { flex: 1; min-width: 0; font-size: 11.5px; line-height: 1.5; color: var(--muted); }
+  .arch-g { flex: none; color: #b0b0b0; font-size: 17px; }
   .foot { margin: 20px 6px 0; font-size: 11px; line-height: 1.7; color: #a0a0a0; }
 `;
 
@@ -283,6 +293,15 @@ const ROOM_STYLE = `
     font-size: 12px; line-height: 1.75; color: var(--muted);
     white-space: pre-wrap; word-break: break-word; }
   .think.on .think-body { display: block; }
+
+  /* 工具卡片：头像旁边一行小字，点开看详情。
+     47px = 头像 38 + 间距 9，和 .think 一个缩进 */
+  .card.tool { width: auto; max-width: 80%; margin: 0 0 11px 47px; padding: 6px 13px;
+    text-align: left; border: 1px solid var(--line); border-radius: 999px;
+    background: rgba(255, 255, 255, 0.72); }
+  .card.tool .card-body { display: inline; margin: 0; font-size: 11.5px; color: var(--muted); }
+  .card.tool .card-more { display: inline; margin: 0 0 0 5px; font-size: 11px; }
+  .card.tool:active { background: #f0f0f0; }
 
   .msg-act { margin: 0 0 12px; text-align: center; font-size: 11px; color: #9a9a9a; }
   .typing { margin: 0 0 12px 47px; font-size: 12px; color: var(--muted); }
@@ -645,6 +664,30 @@ const ROOM_SCRIPT = `(function () {
   var mine = [];
   var pendingN = 0;
 
+  // 历史里的思考链、召回、工具。
+  //
+  // 顺序和当时一样：先想，再查，再说。所以这三样都在气泡前面。
+  // 召回和工具走 .card.tool tap，点一下进详情弹窗（details + sheet 这套现成的）。
+  function traceOf(m) {
+    if (m.reasoning) thinking(m.reasoning);
+    if (Array.isArray(m.tools)) {
+      for (var i = 0; i < m.tools.length; i++) {
+        toolCard({
+          id: 'tl-' + m.ts + '-' + i,
+          label: m.tools[i].label,
+          detail: m.tools[i].detail
+        });
+      }
+    }
+    if (m.recalled) {
+      toolCard({
+        id: 'rc-' + m.ts,
+        label: '\u5e26\u7740\u8fd9\u4e9b\u8bb0\u5fc6\u56de\u7684',
+        detail: m.recalled
+      });
+    }
+  }
+
   function paint(it) {
     if (it.t === 'card') { cardEl(it.c); return; }
     if (it.t === 'pending') {
@@ -662,6 +705,8 @@ const ROOM_SCRIPT = `(function () {
     }
     if (kind === 'thinking') { thinking(m.text || ''); return; }
     var human = m.from === 'human';
+    // 他说的话：先把那一轮的思考链、工具、召回补在前面
+    if (!human) traceOf(m);
     // relay 历史里我的消息都已经递过了，所以都算已读
     group(human ? 'human' : 'ai', m.text || '', msgTs(m), human ? { read: 'read' } : {});
   }
@@ -684,6 +729,65 @@ const ROOM_SCRIPT = `(function () {
       }
     }
     paint({ t: 'msg', m: m });
+    toBottom();
+  }
+
+  // 边想边推的思考链。同一轮只建一个框，后续只更新正文。
+  // 折叠/展开走的是现有的 [data-think] handler，这边不再绑事件。
+  var thinks = {};
+  function liveThink(sid, text) {
+    var box = thinks[sid];
+    if (!box) {
+      box = document.createElement('div');
+      box.className = 'think';
+      var top = document.createElement('button');
+      top.type = 'button';
+      top.className = 'think-top';
+      top.setAttribute('data-think', '1');
+      var caret = document.createElement('span');
+      caret.className = 'think-caret';
+      caret.setAttribute('aria-hidden', 'true');
+      caret.textContent = '\u25b6';
+      var label = document.createElement('span');
+      label.textContent = '\u60f3\u4e86\u60f3';
+      top.appendChild(caret);
+      top.appendChild(label);
+      var body = document.createElement('div');
+      body.className = 'think-body';
+      box.appendChild(top);
+      box.appendChild(body);
+      thinks[sid] = box;
+      put(box);
+    }
+    var b = box.querySelector('.think-body');
+    if (b) b.textContent = text;
+    toBottom();
+  }
+
+  // 工具卡片。用 class="card tap" 是为了蹭现有的详情弹窗：
+  // 那个 handler 认 .card.tap 和 data-detail，不用再写一遗。
+  function toolCard(d) {
+    var id = d.id || ('t' + Date.now());
+    var has = !!d.detail;
+    if (has) details[id] = d.detail;
+    var el = document.createElement(has ? 'button' : 'div');
+    el.className = 'card tool' + (has ? ' tap' : '');
+    if (has) {
+      el.type = 'button';
+      el.setAttribute('data-detail', id);
+    }
+    var b = document.createElement('span');
+    b.className = 'card-body';
+    b.textContent = d.label || '\u7528\u4e86\u4e2a\u5de5\u5177';
+    el.appendChild(b);
+    if (has) {
+      var m = document.createElement('span');
+      m.className = 'card-more';
+      m.setAttribute('aria-hidden', 'true');
+      m.textContent = '\u203a';
+      el.appendChild(m);
+    }
+    put(el);
     toBottom();
   }
 
@@ -713,6 +817,14 @@ const ROOM_SCRIPT = `(function () {
         b.textContent = d.text.indexOf(cur) === 0 ? d.text : cur + d.text;
         toBottom();
       }
+      return;
+    }
+    if (d.type === 'thinking') {
+      liveThink(d.stream_id || 'one', d.text || '');
+      return;
+    }
+    if (d.type === 'tool') {
+      toolCard(d);
       return;
     }
     if (d.type) return;
@@ -748,7 +860,13 @@ const ROOM_SCRIPT = `(function () {
     if (tag) cards = JSON.parse(tag.textContent || '[]');
   } catch (e) { cards = []; }
 
-  fetch('/chat/api/history', { credentials: 'same-origin' })
+  var winId = (function () {
+    var s = document.querySelector('[data-stream]');
+    var v = s && s.getAttribute('data-win');
+    return v ? '?window=' + encodeURIComponent(v) : '';
+  })();
+
+  fetch('/chat/api/history' + winId, { credentials: 'same-origin' })
     .then(function (r) { return r.ok ? r.json() : null; })
     .then(function (d) {
       var all = (d && d.messages) || [];
@@ -760,7 +878,7 @@ const ROOM_SCRIPT = `(function () {
       for (var i = 0; i < all.length; i++) {
         if (all[i].id != null) seen[all[i].id] = 1;
       }
-      return fetch('/chat/api/pending', { credentials: 'same-origin' })
+      return fetch('/chat/api/pending' + winId, { credentials: 'same-origin' })
         .then(function (r) { return r.ok ? r.json() : null; })
         .then(function (p) { return { msgs: msgs, pend: (p && p.pending) || [] }; })
         .catch(function () { return { msgs: msgs, pend: [] }; });
@@ -1152,15 +1270,18 @@ function renderList(list, now) {
       <a class="win-go" href="${PREFIX}/${w.id}">
         <span class="win-name">${escapeHtml(titleOf(w))}</span>
         <span class="win-when">${escapeHtml(formatDateTime(w.created_at).slice(5, 16))} 开的</span>
-        ${
-          isNewest
-            ? `${last ? `<span class="win-last">${escapeHtml(last)}</span>` : ''}` +
-              `<span class="win-tag">行动卡片在这里</span>`
-            : ''
-        }
+        ${(() => {
+          const p = windowPreview(w.id);
+          return `${p ? `<span class="win-last">${escapeHtml(p)}</span>` : ''}` +
+            (isNewest ? `<span class="win-tag">新的都进这里</span>` : '');
+        })()}
       </a>
       <button type="button" class="win-edit" data-edit="${w.id}"
         aria-label="改名字">✎</button>
+      <form class="win-del" method="POST" action="${PREFIX}/${w.id}/delete"
+        onsubmit="return confirm('删掉这个窗？说过的话和做过的事都不删，它们并回上一个窗。')">
+        <button type="submit" class="win-edit" aria-label="删掉这个窗">🗑</button>
+      </form>
       <form class="rename" data-rename="${w.id}" method="POST" action="${PREFIX}/${w.id}/rename">
         <input type="text" name="title" value="${escapeHtml(w.title || '')}"
           placeholder="给这个窗起个名字" maxlength="${MAX_TITLE}" />
@@ -1173,7 +1294,12 @@ function renderList(list, now) {
     <button type="submit">＋ 开一个新窗</button>
   </form>
   ${items}
-  <p class="foot">行动卡片只往最新那个窗里摆，老窗就是当时那一摹。</p>`;
+  <a class="arch" href="/chat/archive">
+    <span class="arch-n">以前的聊天</span>
+    <span class="arch-w">从 Aru 备份里搬过来的原话，按对话分</span>
+    <span class="arch-g" aria-hidden="true">›</span>
+  </a>
+  <p class="foot">开一个新窗就是切一刀：之前的聊天和动作都留在之前那个窗，新的都进最新这个。删窗只删这道分割线，话不会删。</p>`;
 }
 
 // 卡片不再服务端直接写成 HTML：要和消息按时间混排，必须交给前端。
@@ -1218,6 +1344,16 @@ export function registerChatRoutes(app, { requireBasicAuth }) {
     }
   });
 
+  app.post(`${PREFIX}/:id/delete`, requireBasicAuth, (req, res) => {
+    try {
+      const r = dropWindow(Number(req.params.id));
+      if (r.error) console.warn('chat: 没删成', r.error);
+    } catch (err) {
+      console.error('chat: 删窗失败', err.message);
+    }
+    return res.redirect(302, PREFIX);
+  });
+
   app.post(`${PREFIX}/:id/rename`, requireBasicAuth, form, (req, res) => {
     const id = Number(req.params.id);
     try {
@@ -1237,7 +1373,7 @@ export function registerChatRoutes(app, { requireBasicAuth }) {
       if (!w) return res.redirect(302, PREFIX);
       const list = listWindows();
       const isNewest = list.length && list[0].id === w.id;
-      const cards = isNewest ? activityCards(now) : [];
+      const cards = windowCards(w.id);
       // 头像和名字用动态页那同一份，不另开一套
       const ta = getProfile('assistant');
       const me = getProfile('user');
@@ -1245,10 +1381,10 @@ export function registerChatRoutes(app, { requireBasicAuth }) {
       res.send(
         layout(
           `${titleOf(w)} · 晨暮星`,
-          ROOM_STYLE,
+          ROOM_STYLE + lookCSS(),
           `<div class="room-top"><span class="room-name">${escapeHtml(titleOf(w))}</span></div>
       ${renderCards(cards)}
-      <div class="stream" data-stream
+      <div class="stream" data-stream data-win="${w.id}"
         data-ta-name="${escapeHtml(ta.name)}" data-ta-av="${escapeHtml(ta.avatarUrl || '')}"
         data-me-name="${escapeHtml(me.name)}" data-me-av="${escapeHtml(me.avatarUrl || '')}"></div>
       <form class="composer" data-send onsubmit="return false">

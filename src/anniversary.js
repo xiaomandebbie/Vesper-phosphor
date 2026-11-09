@@ -136,7 +136,7 @@ export function renderAnniversaryCard() {
   return `<a class="anniv${bg ? ' has-bg' : ''}" href="${PREFIX}"${bg ? ` style="background-image:url('${bg}')"` : ''} aria-label="${escapeHtml(foot)}，点开改日子和背景图">
     <span class="anniv-inner">
       <span class="anniv-label" aria-hidden="true">TOGETHER · ${escapeHtml(a.label)}</span>
-      <span class="anniv-faces">${faceHtml('user')}<i class="anniv-heart" aria-hidden="true">\u2661</i>${faceHtml('assistant')}</span>
+      <span class="anniv-faces">${faceHtml('assistant')}<i class="anniv-heart" aria-hidden="true">\u2661</i>${faceHtml('user')}</span>
       <span class="anniv-num" aria-hidden="true">${big}</span>
       <span class="anniv-foot">${foot}</span>
     </span>
@@ -183,6 +183,19 @@ export const ANNIVERSARY_CSS = `
     font-size: 13px; color: var(--muted, #665a70); text-decoration: none;
     border: 1px dashed var(--line, #eadfe6); }
   .anniv-set:active { background: var(--card-soft, #f3eef2); }
+  /* ── 字看不清的修法（2026-11-04）──
+     两个原因叠在一起：backdrop-filter 把背景图糊成一团（她挑图就是想看见图），
+     而文字还是深灰的，压在暗背景上就没了。
+     所以：模糊去掉；有背景图时盖一层暗遮罩、字换白的。
+     背景图是随手挑的，亮暗不可控，只有「压暗 + 白字」在任何图上都认得出。
+     没背景图那张卡照旧走浅底深字，不受影响。 */
+  .anniv-inner { -webkit-backdrop-filter: none; backdrop-filter: none; }
+  /* 背景图上什么都不盖（2026-11-04：「完全不要灰色，字可以用灰色」）。
+     字还是灰的，只给一道极淡的白描边把它从花纹里拎出来——
+     那是沿着字形的一圈，不是一块底色。 */
+  .anniv.has-bg .anniv-inner { background: none; }
+  .anniv.has-bg .anniv-label, .anniv.has-bg .anniv-foot, .anniv.has-bg .anniv-num,
+  .anniv.has-bg .anniv-heart { text-shadow: 0 1px 2px rgba(255, 255, 255, 0.85); }
   @media (prefers-reduced-motion: reduce) { .anniv:active { transform: none; } }
 `;
 
@@ -233,7 +246,7 @@ function layout(body, script = '') {
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <title>纪念日 · 晨暮星</title>
 <script>${HEAD_SCRIPT}<\/script>
-<style>
+<style>${CHROME_CSS}${TABS_CSS}
   :root { --ink: #2b2233; --muted: #665a70; --accent: #7a3e5d; --gold: #b7792f;
     --card: #fffdfb; --card-soft: #f3eef2; --line: #eadfe6; }
   * { box-sizing: border-box; }

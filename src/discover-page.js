@@ -31,6 +31,7 @@ import {
 } from './page-chrome.js';
 import { renderTabs, TABS_CSS } from './tabs.js';
 import { renderAppGrid, APPS_CSS, APPS_SCRIPT, registerDiscoverAppRoutes } from './discover-apps.js';
+import { uranusEnabled } from './uranus-proxy.js';
 
 const PREFIX = '/discover';
 const AI_NAME = process.env.AI_DISPLAY_NAME || 'TA';
@@ -160,6 +161,14 @@ function spots() {
       href: forum,
       note: '\u6ca1\u914d NAV_FORUM_URL',
       external: true,
+    },
+    {
+      key: 'uranus',
+      name: '\u79c1\u57df',
+      what: '\u4ed6\u5728 iMessage \u90a3\u8fb9\u7684\u6837\u5b50\u3002\u8dd1\u5728\u672c\u673a\uff0c\u4ece\u8fd9\u513f\u8f6c\u4e00\u9053\u8fdb\u53bb',
+      meta: '',
+      href: uranusEnabled() ? '/uranus' : '',
+      note: '\u6ca1\u914d URANUS_PAGE_URL \u6216\u8005\u586b\u4e86 off',
     },
   ];
 }

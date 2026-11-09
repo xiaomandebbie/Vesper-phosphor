@@ -43,6 +43,7 @@ import { continueGarden } from './garden-steps.js';
 import { continueXiuchao } from './xiuchao-steps.js';
 import { getSharedContext, countRecentChat } from './context.js';
 import { getTopDrives, isDrivesEnabled } from './drives.js';
+import { reportWake } from './drives-sleep.js';
 import { getUnseenStarReplies, markStarRepliesSeen, hasStarToday, starWindowLabel } from './star-jar.js';
 import { collectFromHer, handleFromHer } from './from-her.js';
 import { handleBarOffers } from './actions/bar-offers.js';
@@ -539,7 +540,15 @@ async function runDecisionCycle({ kind, scheduledAt = null, selfNote = null, cle
   const density = countRecentChat(2 * 60 * 60 * 1000);
   const recentMessages = getSharedContext(DECIDE_CONTEXT_LIMIT);
   // 长期记忆和 Drivesoid 最明显的三项情绪互不依赖，一起取。任何一个取不到都是 null，不影响这一轮唤醒。
-  const [{ breathSummary, feelSummary }, drivesTop] = await Promise.all([
+
+  // 先告诉情绪系统「醒了」。Drivesoid 的 asleep 不会自己超时（见 drives-sleep.js），
+  // 所以每次醒来都无条件报一次；那边已经是 awake 时会直接忽略。
+  // 摆在读情绪之前：睡着时它的时间累积是停的，先翻成 awake 再读才是醒着的状态。
+  try {
+    await reportWake();
+  } catch (err) {
+    console.error('[' + kind + '] 报醒来失败（不影响这次）:', err.message);
+  }  const [{ breathSummary, feelSummary }, drivesTop] = await Promise.all([
     getMemorySummary(),
     getTopDrives({ refresh: true }),
   ]);
@@ -638,7 +647,7 @@ async function runDecisionCycle({ kind, scheduledAt = null, selfNote = null, cle
     messages = out.messages;
     // 调用真的成功返回了，正文确实进过他的上下文 —— 现在才算浮现过。
     // 前面报错或超时就走不到这里，梦还在，下次再碰。
-    if (dreamHit) markRecalled(dreamHit.id);
+    if (dreamHit) markRecalled(dreamHit.id, dreamHit.hit);
     console.log(`[${kind}] decision:`, decision);
   } catch (err) {
     errorMessage = err.message;
@@ -764,7 +773,13 @@ async function runDecisionCycle({ kind, scheduledAt = null, selfNote = null, cle
   // 15:45 那三条分享是在她聊天的中间插进来的。最近一条消息不到 20 分钟
   // 就不问分享，攒着，等下次醒来再说。typeof 那一步是保险：
   // recentMessages 不在这个作用域时降级成「照旧问」，不报错。
-  const SHARE_QUIET_MIN = Number(process.env.SHARE_QUIET_MINUTES) || 20;
+
+  // 他这一轮选了睡觉：别再问「有想说的吗」。
+  // askShare 的回答会当成 bark 推送出去 —— 睡着的人发推送，页面就说假话了。
+  const _slept = (Array.isArray(actionResults) ? actionResults : []).some(
+    (r) => r && r.action === 'sleep' && r.result && r.result.ok
+  );
+  if (_slept) console.log('[' + kind + '] 他睡了，这次不问分享');  const SHARE_QUIET_MIN = Number(process.env.SHARE_QUIET_MINUTES) || 20;
   const _recent =
     typeof recentMessages !== 'undefined' && Array.isArray(recentMessages) ? recentMessages : [];
   const _lastMsgTs = Math.max(0, ..._recent.map((m) => Number(m && m.ts) || 0));
@@ -772,7 +787,7 @@ async function runDecisionCycle({ kind, scheduledAt = null, selfNote = null, cle
   if (!_quietEnough) {
     console.log('[' + kind + '] 分享：她刚说过话（不到 ' + SHARE_QUIET_MIN + ' 分钟），这次不插话');
   }
-  if (!errorMessage && actionResults.length && _quietEnough) {
+  if (!errorMessage && actionResults.length && _quietEnough && !_slept) {
     try {
       const share = await askShare(messages, actionResults);
       if (share) {

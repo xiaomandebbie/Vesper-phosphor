@@ -39,6 +39,7 @@
 // 全部 INSERT OR REPLACE，用备份里的原 id。同一份备份导两次不会双份，
 // 重导新备份就是把改过的那几条覆上。中间断了重新跑也安全。
 
+import express from 'express';
 import db from './state.js';
 
 // 前端要抽的文件 → 这边的 kind。别的（messages / request_evidence /
@@ -226,6 +227,7 @@ const SCRIPT = `
   var fileEl = document.getElementById('f');
   var goEl = document.getElementById('go');
   var stEl = document.getElementById('st');
+  var BATCH_BYTES = 48000;
   var PARTS = ` + JSON.stringify(PARTS) + `;
 
   function say(m) { stEl.textContent = m || ''; }
@@ -252,16 +254,41 @@ const SCRIPT = `
     });
   }
 
+  // 64 位读法：低 32 + 高 32 × 2^32。文件再大也远没到 2^53，不用 BigInt。
+  function u64(b, i) { return u32(b, i) + u32(b, i + 4) * 4294967296; }
+
   // zip 的目录在尾部。只读最后 64 KB 找它。
+  //
+  // ZIP64：EOCD 往前 20 字节是定位器（签名 0x07064b50），
+  // 它指向真正的 64 位目录记录。她那份备份一个多 G，走的就是这条路。
   function findCD(f) {
     var span = Math.min(66560, f.size);
-    return slice(f, f.size - span, span).then(function (b) {
+    var base = f.size - span;
+    return slice(f, base, span).then(function (b) {
       for (var i = b.length - 22; i >= 0; i--) {
-        if (u32(b, i) === 101010256) {
-          return { size: u32(b, i + 12), at: u32(b, i + 16) };
+        if (u32(b, i) !== 101010256) continue;
+        var size = u32(b, i + 12);
+        var at = u32(b, i + 16);
+        // 定位器就在 EOCD 前面 20 字节
+        var L = i - 20;
+        if (L >= 0 && u32(b, L) === 117853008) {
+          var recAt = u64(b, L + 8);
+          return findCD64(f, recAt);
         }
+        if (at === 4294967295 || size === 4294967295) {
+          return Promise.reject(new Error('ZIP64 但找不到定位器'));
+        }
+        return { size: size, at: at };
       }
       return null;
+    });
+  }
+
+  // 64 位目录记录：签名 0x06064b50，偏移 40 是目录大小，48 是目录位置。
+  function findCD64(f, recAt) {
+    return slice(f, recAt, 56).then(function (r) {
+      if (u32(r, 0) !== 101075792) throw new Error('ZIP64 目录记录的头不对');
+      return { size: u64(r, 40), at: u64(r, 48) };
     });
   }
 
@@ -311,9 +338,16 @@ const SCRIPT = `
       var o = null;
       try { o = JSON.parse(t); } catch (e) { continue; }
       if (!o || !o.payload) continue;
+      // 粗估 UTF-8 字节：非 ASCII 算 3。估多了最多多发几批，估少了就是 413。
+      var n = t.length;
+      for (var k = 0; k < t.length; k++) if (t.charCodeAt(k) > 127) n += 2;
+      // 加这一条会超就先把手里的发走，它进下一批。
+      // 上一版是先 push 再检查，所以一篇长日记进批之后已经收不住了。
+      if (bytes && bytes + n > BATCH_BYTES) flush();
       batch.push(o);
-      bytes += t.length;
-      if (bytes > 60000) flush();
+      bytes += n;
+      // 单条本身就超阈值的，到这儿自己单独一批发出去。
+      if (bytes >= BATCH_BYTES) flush();
     }
     flush();
     return chain.then(function () { return done; });
@@ -344,6 +378,25 @@ const SCRIPT = `
         var cmtLen = u16(cd, p + 32);
         var localAt = u32(cd, p + 42);
         var name = new TextDecoder('utf-8').decode(cd.subarray(p + 46, p + 46 + nameLen));
+        // ZIP64：被写成 0xffffffff 的字段，真值在 extra field 的 0x0001 块里。
+        // 顺序是固定的：未压缩大小 → 压缩后大小 → 本地头偏移，
+        // 而且只为真正溢出的那几个存。
+        if (compSize === 4294967295 || localAt === 4294967295) {
+          var ex = p + 46 + nameLen;
+          var exEnd = ex + extraLen;
+          while (ex + 4 <= exEnd) {
+            var tag = u16(cd, ex);
+            var len = u16(cd, ex + 2);
+            if (tag === 1) {
+              var q = ex + 4;
+              if (u32(cd, p + 24) === 4294967295) q += 8;   // 未压缩大小
+              if (compSize === 4294967295) { compSize = u64(cd, q); q += 8; }
+              if (localAt === 4294967295) { localAt = u64(cd, q); }
+              break;
+            }
+            ex += 4 + len;
+          }
+        }
         p += 46 + nameLen + extraLen + cmtLen;
         if (want[name]) found[want[name]] = { method: method, size: compSize, at: localAt };
       }
@@ -441,7 +494,10 @@ export function registerImportRoutes(app, { requireBasicAuth }) {
     res.send(page());
   });
 
-  app.post('/memories/manage/import/batch', requireBasicAuth, (req, res) => {
+  // 这条路由单独给 2mb：全局 express.json() 默认 100 KB，
+  // 单篇日记再长也能过。只改这里，不动全局。
+  const bigJson = express.json({ limit: '2mb' });
+  app.post('/memories/manage/import/batch', requireBasicAuth, bigJson, (req, res) => {
     const kind = String(req.body?.kind ?? '');
     const rows = Array.isArray(req.body?.rows) ? req.body.rows : null;
     const writer = WRITERS[kind];

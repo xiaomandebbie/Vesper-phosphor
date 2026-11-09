@@ -20,6 +20,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { ombreDashboardBase, renderMenu, HEAD_SCRIPT, CHROME_CSS, CHROME_SCRIPT } from './page-chrome.js';
 import { renderTabs, TABS_CSS } from './tabs.js';
+import { counts as memCounts, getPrompt } from './memory-store.js';
+import { counts as wbCounts } from './world-books.js';
+import { chatCounts } from './memory-chats.js';
 
 const PREFIX = '/memories';
 const AI_NAME = process.env.AI_DISPLAY_NAME || 'TA';
@@ -46,6 +49,50 @@ function latentDir() {
 }
 
 // 现在有哪几个库。以后加库就往这儿添一条。
+// 记忆本体那六项。
+//
+// 小满 2026-11-05：「还是要和 ombre brain 这些一样做成这种框框，点击进入编辑。
+// 现在这两个库放在最后面」
+//
+// 所以和下面 libraries() 那两个库用同一种大框，摆在它们前面。
+// 类名沿用这个文件自己的 .lib，不再另弄一套。
+function memoryCards() {
+  let c = { entries: 0, docs: 0, cards: 0, journal: 0 };
+  let w = { books: 0, entries: 0 };
+  let hasPrompt = false;
+  try {
+    c = memCounts();
+    w = wbCounts();
+    hasPrompt = Boolean(getPrompt());
+  } catch (err) {
+    console.error('memories: 数不清记忆', err.message);
+  }
+  const M = '/memories/manage';
+  const rows = [
+    ['指令', '他是谁、怎么说话。摆在每次请求最前面',
+      hasPrompt ? '已经写了' : '还没写', `${M}/prompt`],
+    ['条目记忆', '每一轮都注入，所以要短。生日、固定约定、东西放哪儿',
+      `${c.entries} 条`, `${M}/entries`],
+    ['长期资料', '只注入标题，正文要读的时候再翻。人物设定、说明书',
+      `${c.docs} 份`, `${M}/docs`],
+    ['信息卡', '按主题持续追写。聊到哪一项就把那张翻开看',
+      `${c.cards} 张`, `${M}/cards`],
+    ['世界书', '常驻或关键词激活。六个注入位置、优先级、预算',
+      `${w.books} 本 · ${w.entries} 条`, `${M}/books`],
+    ['日记', '一天一篇。最近几篇进每轮，老的靠召回',
+      `${c.journal} 篇`, `${M}/journal`],
+  ];
+  return rows.map(([name, what, val, href]) =>
+    `<a class="lib" href="${href}">
+      <div class="lib-in">
+        <span class="lib-name">${escapeHtml(name)}</span>
+        <span class="lib-what">${escapeHtml(what)}</span>
+        <span class="lib-sub">${escapeHtml(val)}</span>
+      </div>
+      <span class="lib-go" aria-hidden="true">›</span>
+    </a>`).join('');
+}
+
 function libraries() {
   const ombre = ombreDashboardBase();
   const latent = latentDir();
@@ -230,7 +277,17 @@ function layout(body) {
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <title>\u8bb0\u5fc6 \u00b7 \u6668\u66ae\u661f</title>
 <script>${HEAD_SCRIPT}</script>
-<style>${STYLE}${CHROME_CSS}${TABS_CSS}</style>
+<style>${STYLE}${CHROME_CSS}${TABS_CSS}
+  .lib{display:flex;align-items:center;gap:12px;margin-bottom:11px;padding:16px 17px;
+    background:#fdfdfd;border:1px solid #e4e4e4;border-radius:18px;color:inherit;
+    text-decoration:none;box-shadow:0 1px 3px rgba(0,0,0,.05)}
+  .lib:active{background:#f4f4f4}
+  .lib-in{flex:1;min-width:0}
+  .lib-name{display:block;font-size:17px;font-weight:600;color:#1a1a1a}
+  .lib-what{display:block;margin-top:5px;font-size:13px;line-height:1.65;color:#5e5e5e}
+  .lib-sub{display:block;margin-top:6px;font-size:12px;color:#9a9a9a}
+  .lib-go{flex:none;color:#b0b0b0;font-size:20px}
+</style>
 </head>
 <body><main>${renderMenu(PREFIX)}${body}</main>
 ${renderTabs(PREFIX)}
@@ -248,6 +305,7 @@ export function registerMemoriesRoutes(app, { requireBasicAuth }) {
           AI_NAME
         )}</p>
       </header>
+      ${memoryCards()}
       ${renderList()}
       <p class="foot">\u4ee5\u540e\u88c5\u4e86\u65b0\u7684\u8bb0\u5fc6\u5e93\uff0c\u5c31\u5f80\u8fd9\u4e00\u9875\u6dfb\u4e00\u6761\u3002</p>`)
     );

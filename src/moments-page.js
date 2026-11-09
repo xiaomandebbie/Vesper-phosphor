@@ -33,6 +33,7 @@ import {
   saveProfileAvatar,
   resetProfileAvatar,
 } from './moments-store.js';
+import { getLook, saveLook, resetLook, LOOK_DEFAULTS, LOOK_LABELS, LOOK_RANGE } from './chat-look.js';
 import { listPosts } from './moments-posts.js';
 import { formatDateTime } from './wall-time.js';
 import { getTopDrives } from './drives.js';
@@ -45,6 +46,7 @@ import {
   registerMyMomentRoutes,
 } from './my-moments.js';
 import { renderCommentTools, MY_COMMENTS_CSS, registerMyCommentRoutes } from './my-comments.js';
+import { registerAnniversaryRoutes } from './anniversary.js';
 
 const MEDIA_DIR = process.env.MEDIA_DIR || '/opt/vesper/media';
 const MAX_COMMENT_CHARS = 1000;
@@ -581,11 +583,39 @@ function renderProfileCard(who, saved) {
   </section>`;
 }
 
+function renderLookCard(saved) {
+  const v = getLook();
+  const field = (key) => `<label for="lk-${key}">${LOOK_LABELS[key]}</label>
+          <input id="lk-${key}" name="${key}" type="color" value="${escapeHtml(v[key])}"
+            style="width:100%;height:40px;padding:2px;border-radius:10px" />`;
+  return `<section class="card" aria-labelledby="lk-title">
+    <h2 id="lk-title" class="section-title">聊天气泡</h2>
+    <form method="post" action="/moments/look">
+      <div class="profile-fields">
+        ${['me_bg', 'me_fg', 'ta_bg', 'ta_fg'].map(field).join('')}
+        <label for="lk-size">字体大小（${LOOK_RANGE.min}–${LOOK_RANGE.max}）</label>
+        <input id="lk-size" name="size" type="number" min="${LOOK_RANGE.min}"
+          max="${LOOK_RANGE.max}" step="1" value="${escapeHtml(v.size)}" />
+      </div>
+      <p class="hint">现在是这样：
+        <span style="display:inline-block;margin:4px 6px 0 0;padding:6px 12px;border-radius:14px;background:${v.ta_bg};color:${v.ta_fg};font-size:${v.size}px">TA 说的话</span>
+        <span style="display:inline-block;margin:4px 0 0;padding:6px 12px;border-radius:14px;background:${v.me_bg};color:${v.me_fg};font-size:${v.size}px">我说的话</span>
+      </p>
+      <p class="profile-status" role="status">${saved ? '已保存' : ''}</p>
+      <div class="profile-actions">
+        <button type="submit">保存</button>
+        <button type="submit" name="reset" value="1" class="ghost">恢复默认</button>
+      </div>
+    </form>
+  </section>`;
+}
+
 function renderProfilePage(saved) {
   return layout(
     '自定义 · 晨暮星',
     `<header class="hero hero-sm"><h1 class="title title-sm">自定义</h1></header>
-    ${PROFILE_WHO.map((w) => renderProfileCard(w, saved === w)).join('')}`,
+    ${PROFILE_WHO.map((w) => renderProfileCard(w, saved === w)).join('')}
+    ${renderLookCard(saved === 'look')}`,
     AVATAR_SCRIPT,
     '/moments/profile'
   );
@@ -617,6 +647,9 @@ export function registerMomentRoutes(app, { requireBasicAuth, requireApiKey }) {
   // 删我自己留的那条留言，见 my-comments.js。
   // /moments/comments/:id/delete 是四段，和下面 /moments/:id/comments 不会撞上
   registerMyCommentRoutes(app, { requireBasicAuth });
+  // 纪念日设置页（见 anniversary.js）。挂在这儿和上面两个一个理由：
+  // /moments/anniversary 要比下面的 /moments/:id/* 先匹配到
+  registerAnniversaryRoutes(app, { requireBasicAuth });
 
   // ---- 程序化访问（快捷指令、以后的前端）----
   // 这条还是给全部（含行动卡）：聊天页和快捷指令要用到行动卡，
@@ -664,8 +697,31 @@ export function registerMomentRoutes(app, { requireBasicAuth, requireApiKey }) {
   });
 
   app.get('/moments/profile', requireBasicAuth, (req, res) => {
-    const saved = PROFILE_WHO.includes(req.query.saved) ? req.query.saved : null;
+    const allow = [...PROFILE_WHO, 'look'];
+    const saved = allow.includes(req.query.saved) ? req.query.saved : null;
     res.send(renderProfilePage(saved));
+  });
+
+  app.post('/moments/look', requireBasicAuth, (req, res) => {
+    const back = '/moments/profile';
+    if (!sameOrigin(req)) return res.status(403).send(errorPage('请求来源不对', back));
+    try {
+      if (req.body?.reset) {
+        const r = resetLook();
+        if (r.error) return res.status(500).send(errorPage(r.error, back));
+      } else {
+        const patch = {};
+        for (const k of Object.keys(LOOK_DEFAULTS)) {
+          if (Object.prototype.hasOwnProperty.call(req.body ?? {}, k)) patch[k] = req.body[k];
+        }
+        const r = saveLook(patch);
+        if (r.error) return res.status(400).send(errorPage(r.error, back));
+      }
+    } catch (err) {
+      console.error('moments look: 保存失败', err);
+      return res.status(500).send(errorPage('保存失败了，看一下 vesper 的日志。', back));
+    }
+    res.redirect(303, `${back}?saved=look`);
   });
 
   app.post('/moments/profile/:who', requireBasicAuth, (req, res) => {

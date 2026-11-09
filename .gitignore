@@ -16,3 +16,8 @@ data/*.db-journal
 .env.*.swp
 *.swp
 *.swo
+
+.secrets/
+data/
+*.db
+*.db.bak

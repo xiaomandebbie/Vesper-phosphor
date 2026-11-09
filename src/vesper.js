@@ -26,6 +26,7 @@ import { registerBarMcp } from './bar-mcp.js';
 import { registerMemoryProxy } from './memory-proxy.js';
 import { registerMusicProxy } from './music-proxy.js';
 import { registerLightProxy } from './light-proxy.js';
+import { registerUranusProxy } from './uranus-proxy.js';
 import { registerShellRoutes } from './shell.js';
 import { registerSparkles } from './sparkles.js';
 import { registerAppIconRoutes } from './app-icon.js';
@@ -36,8 +37,16 @@ import { registerWalletMcp } from './wallet-mcp.js';
 import { registerWakeMcp } from './wake-mcp.js';
 import { registerGameRoutes } from './game-page.js';
 import { registerMemoriesRoutes } from './memories-page.js';
+import { registerMemoryUI } from './memory-ui.js';
+import { registerImportRoutes } from './memory-import.js';
+import { registerMemoryUI2 } from './memory-ui2.js';
+import { registerChatImportRoutes } from './memory-chat-import.js';
+import { registerChatsRoutes } from './memory-chats.js';
 import { registerDiscoverRoutes } from './discover-page.js';
 import { registerMeRoutes } from './me-page.js';
+import { registerMcpPage } from './mcp-page.js';
+import { registerEnvRoutes } from './env-ui.js';
+import { registerPushRoutes } from './push-ui.js';
 import { registerEchoRelay } from './echo-relay.js';
 import { registerChatRoutes } from './chat-page.js';
 
@@ -62,10 +71,16 @@ const musicProxy = registerMusicProxy(app, { requireBasicAuth });
 // 2026-10-30：这行被 git pull 的合并冲掉过一次，表现是 /lamp 返回 404。
 // 发现页、个人页当时也是同一个原因丢的。
 const lightProxy = registerLightProxy(app, { requireBasicAuth });
+// 私域页 /uranus（见 uranus-proxy.js）：本机 8787 那个 Uranus。
+// 和上面几个同理要拿原始请求体（它带图片上传和 SSE），
+// 所以必须在下面的 express.json() 之前。
+const uranusProxy = registerUranusProxy(app, { requireBasicAuth });
 // 书架 API 要收整份正文，比这儿的上限大得多，由 books-page.js 自己挂解析器。
 // 这里先跳过，否则请求体被这个 100kb/1mb 的解析器先吃掉 → 413。
 // 标记：books:skip-global-json
-const _globalJson = express.json();
+// 上限 2mb：默认只有 100 KB，而它在所有路由之前跑——
+// 路由自己写 limit 没用，请求在这儿就被打回 413 了（导入备份踩过）。
+const _globalJson = express.json({ limit: '2mb' });
 app.use((req, res, next) => {
   if (req.path.startsWith('/books/api')) return next();
   return _globalJson(req, res, next);
@@ -83,8 +98,7 @@ const API_KEY = process.env.REPORT_STATUS_API_KEY;
 const BASIC_USER = process.env.VESPER_BASIC_USER;
 const BASIC_PASS = process.env.VESPER_BASIC_PASS;
 const MEDIA_DIR = process.env.MEDIA_DIR || '/opt/vesper/media';
-// 0（或负数）= 永久保留。默认 30 天
-const MEDIA_MAX_AGE_DAYS = Number(process.env.MEDIA_MAX_AGE_DAYS ?? 30);
+const MEDIA_MAX_AGE_DAYS = Number(process.env.MEDIA_MAX_AGE_DAYS || 30);
 
 fs.mkdirSync(path.join(MEDIA_DIR, 'images'), { recursive: true });
 fs.mkdirSync(path.join(MEDIA_DIR, 'audio'), { recursive: true });
@@ -102,14 +116,9 @@ function safeParse(s) {
 
 // 只清动态的图片和语音。头像（avatars）和主屏幕图标（app-icon）不在这里，不会过期被删
 function pruneOldMedia() {
-  // MEDIA_MAX_AGE_DAYS=0 是「永久保留」，一个都不删。
-  //
-  // 这道闸必须有：不加的话填 0 等于 cutoff 就是此刻，于是所有图和语音
-  // 立刻被删光——正好跟「不要过期」相反，而且删完才发现。
-  //
-  // 注意语音条显示「已过期」并不是显示 bug：audioSeconds()
-  // （moments-page.js / favorites.js）按文件大小估时长，文件被这里删了
-  // 就返回 null，那时才渲染成那句话。动态正文和留言一直都在。
+  // 0（或负数）= 永久保留，一个都不删。
+  // 不加这道闸的话填 0 等于 cutoff 就是此刻，会把所有图和语音立刻删光，
+  // 正好跟「不要过期」相反。
   if (!(MEDIA_MAX_AGE_DAYS > 0)) return;
   const cutoff = Date.now() - MEDIA_MAX_AGE_DAYS * 24 * 60 * 60 * 1000;
   for (const sub of ['images', 'audio']) {
@@ -235,8 +244,7 @@ app.get('/wake/conversation', requireApiKey, (req, res) => {
   res.json(getRecentConversation(limit));
 });
 
-// 主页 /home（见 home-page.js）：导览里「回到主页」就是这里。
-// 现在摆纪念日卡、他此刻的心绪、唤醒时间，以及做过的事
+// 主页 /home（见 home-page.js）：导览里「回到主页」就是这里，内容先空着
 registerHomeRoutes(app, { requireBasicAuth });
 // 日记页 /diary（heartbeat 写的日记），见 diary-page.js。
 // 要挂在动态页之前：动态页里留着一个 /diary → /moments 的旧跳转，日记页没配时才轮到它
@@ -252,11 +260,10 @@ const barMcp = registerBarMcp(app);
 const barPage = registerBarRoutes(app, { requireBasicAuth });
 // 收藏（见 favorites.js）和星星罐（见 star-jar.js）：要挂在动态页之前。
 // /moments/favorites、/moments/star-jar 得比 /moments/:id 先匹配到，不然会被当成一个 id。
-// 这两页还在，只是不在菜单里了，从发现页进去
+// 这两页还在，只是不在菜单里了，从动态页进去
 registerFavoriteRoutes(app, { requireBasicAuth });
 registerStarJarRoutes(app, { requireBasicAuth });
-// 动态页 /moments（两个人各自发的动态、留言、点赞、自定义）以及对应接口，见 moments-page.js。
-// 行动卡不在这一页，在聊天页和主页
+// 动态页 /moments（标题、日历、按天看动态、留言、自定义）以及对应接口，见 moments-page.js
 registerMomentRoutes(app, { requireBasicAuth, requireApiKey });
 // 心绪页 /drives（Drivesoid 的情绪状态），见 drives-page.js
 registerDrivesRoutes(app, { requireBasicAuth });
@@ -276,13 +283,29 @@ const games = registerGameRoutes(app, { requireBasicAuth });
 // 小满：「记忆我可能会装很多个库所以先把 ombre brain 作为其中的一条」。
 // 这一页是列表，不是把 Ombre 开在这儿——那个是 /memory/ 转发。
 registerMemoriesRoutes(app, { requireBasicAuth });
+// 记忆的编辑入口（见 memory-ui.js）：指令、条目、资料、信息卡、世界书、日记
+registerMemoryUI(app, { requireBasicAuth });
+// 一键导入 Aru 备份（见 memory-import.js）
+registerImportRoutes(app, { requireBasicAuth });
+// 语义索引和聊天导入页（见 memory-ui2.js）
+registerMemoryUI2(app, { requireBasicAuth });
+// 只导入一位协作者的聊天记录（见 memory-chat-import.js）
+registerChatImportRoutes(app, { requireBasicAuth });
+// 导进来的聊天按窗看，挂在聊天那一栈（见 memory-chats.js）
+registerChatsRoutes(app, { requireBasicAuth });
+// 导进来的聊天按窗看（见 memory-chats.js）
 // 发现页 /discover（见 discover-page.js）：动态、音乐、梦境、共读、台灯这些入口。
-// 一行四个圆角方块，图标下面只写名字；长按进设置页改名字和图标（见 discover-apps.js）。
-// 没配好的不藏起来，只是淡下去、点不进。
+// 没配好的不藏起来，置灰并写明要填哪个变量。
 registerDiscoverRoutes(app, { requireBasicAuth });
 // 个人页 /me（见 me-page.js）：后台日志、自定义、收藏、唤醒节律、退出登录。
 // 里面那个 POST /logout 表单由 session-login.js 接（cookie 会话）。
 registerMeRoutes(app, { requireBasicAuth });
+// 他手上连着哪几个 MCP（见 mcp-page.js），只看不改
+registerMcpPage(app, { requireBasicAuth });
+// 模型 · 连接 · 通知 那一页（见 env-ui.js）：改 aru-chat 的底层、生图、语音、线路预设
+registerEnvRoutes(app, { requireBasicAuth });
+// PWA 通知的三条接口（见 push-ui.js）：订阅 / 取消 / 试一条
+registerPushRoutes(app, { requireBasicAuth });
 // 聊天接 relay（见 echo-relay.js）：/chat/api/history | stream | send。
 // 要挂在 /chat 页面路由之前：那边有 /chat/:id 和 /chat，得先把 api 那三条接走。
 const echo = registerEchoRelay(app, { requireBasicAuth });
@@ -307,6 +330,6 @@ app.get('/', (req, res) => res.redirect(302, musicProxy ? '/app' : '/home'));
 
 app.listen(PORT, () =>
   console.log(
-    `vesper listening on ${PORT}；主页：/home；日记页：${diaryPage ? '已开启' : '未配置'}；梦境页：/dreams；小酒馆：${barPage ? '/bar' : '未配置'}；小酒馆 MCP：${barMcp.enabled ? '/bar/mcp' : '未开（没配 BAR_MCP_TOKEN 或 Proof token）'}；记忆库：${memoryProxy ? `转发 ${memoryProxy}` : '未配置'}；音乐：${musicProxy ? `转发 ${musicProxy}，外壳 /app` : '未配置'}；星星罐：/moments/star-jar；钱包：/wallet${wallet.spendEnabled ? '' : '（没配 WALLET_SPEND_SECRET，扣款通知接口没开）'}；钱包 MCP：/wallet/mcp${wakeMcp.enabled ? `；约时间 MCP：/wake/mcp（最多挂 ${wakeMcp.maxPending} 个）` : '；约时间 MCP：未配 WAKE_MCP_TOKEN'}；共读书架：${books.enabled ? '/books' : '未配置（缺 BOOKS_UI_DIR）'}；共读 MCP：${booksMcp.enabled ? '/books/mcp' : '未开（没配 BOOKS_MCP_TOKEN）'}；图和语音：${MEDIA_MAX_AGE_DAYS > 0 ? `保留 ${MEDIA_MAX_AGE_DAYS} 天` : '永久保留'}`
+    `vesper listening on ${PORT}；主页：/home；日记页：${diaryPage ? '已开启' : '未配置'}；梦境页：/dreams；小酒馆：${barPage ? '/bar' : '未配置'}；小酒馆 MCP：${barMcp.enabled ? '/bar/mcp' : '未开（没配 BAR_MCP_TOKEN 或 Proof token）'}；记忆库：${memoryProxy ? `转发 ${memoryProxy}` : '未配置'}；音乐：${musicProxy ? `转发 ${musicProxy}，外壳 /app` : '未配置'}；星星罐：/moments/star-jar；钱包：/wallet${wallet.spendEnabled ? '' : '（没配 WALLET_SPEND_SECRET，扣款通知接口没开）'}；钱包 MCP：/wallet/mcp${wakeMcp.enabled ? `；约时间 MCP：/wake/mcp（最多挂 ${wakeMcp.maxPending} 个）` : '；约时间 MCP：未配 WAKE_MCP_TOKEN'}；共读书架：${books.enabled ? '/books' : '未配置（缺 BOOKS_UI_DIR）'}；共读 MCP：${booksMcp.enabled ? '/books/mcp' : '未开（没配 BOOKS_MCP_TOKEN）'}`
   )
 );
