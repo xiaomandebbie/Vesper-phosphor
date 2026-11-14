@@ -5,19 +5,37 @@
 // 形状和 wallet-mcp.js 一模一样，理由也一样：笔记在 data/state.db 里，
 // 那库已经被几个进程共用；再起一个就是多一个连接，而 vesper 本来就是 Express。
 //
+// ── 为什么是三把而不是一把「整篇写」 ──
+//
+// 第一版只有 notes_write，整篇替换。小满：「会不会工程太大，只需要新增和修改呀」
+// 改一句话要把没变的部分全抄一遍，慢、费 token、还容易抄丢。
+//
 // SDK 用低层的 Server 配原始 JSON Schema，不走 McpServer.tool()：
 // 后者要 zod，而 zod 只是 sdk 的间接依赖，没在 package.json 里声明。
 //
-// 无状态：一请求一对 server + transport，用完关。这个端点每次就是读一本、
-// 写一本，没有跟踪上下文的必要。
+// 无状态：一请求一对 server + transport，用完关。
 import crypto from 'crypto';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js';
-import { BOOKS, SLUGS, isBook, titleOf, readNote, writeNote, listNotes, describeNote } from './notes.js';
+import {
+  BOOKS,
+  SLUGS,
+  isBook,
+  titleOf,
+  listNotes,
+  listEntries,
+  describeNote,
+  addEntry,
+  editEntry,
+  deleteEntry,
+  getEntry,
+  markRead,
+  stampOf,
+} from './notes.js';
 import { formatDateTime } from './wall-time.js';
 
-// 这个端点能整篇覆盖笔记，所以和钱包那个同一个规矩：没配口令就不开。
+// 这个端点能改能删，所以和钱包那个同一个规矩：没配口令就不开。
 const MCP_TOKEN = process.env.NOTES_MCP_TOKEN || '';
 
 const AI_NAME = process.env.AI_DISPLAY_NAME || 'TA';
@@ -25,48 +43,86 @@ const USER_NAME = process.env.USER_DISPLAY_NAME || '她';
 
 // 走这个端点写的算谁。默认 user：这是小满在 Aru 里动手，
 // 和他自己收工时写的（走 run-actions，算 assistant）分开记。
-// 想让它算他写的，.env 里填 NOTES_MCP_SIGN_AS=assistant
+// 这个区分还决定未读：只有 assistant 写的才算新的。
 const SIGN_AS = process.env.NOTES_MCP_SIGN_AS === 'assistant' ? 'assistant' : 'user';
 
 const bookList = SLUGS.map((s) => `${s}（${BOOKS[s].title}）`).join('、');
+const bookProp = { type: 'string', enum: SLUGS, description: '哪一本' };
 
 const TOOLS = [
   {
     name: 'notes_list',
     description:
-      `看四本笔记本的目录：每本多少字、多久没更新、上次是谁写的。` +
-      `不带正文，要正文用 notes_read。不需要参数。`,
+      `看四本笔记本的目录：每本几条、多久没暨、有没有新的。` +
+      `最近改过的排最上面。不带正文，要正文用 notes_read。不需要参数。`,
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
   {
     name: 'notes_read',
     description:
-      `读一本笔记的全文。book 填：${bookList}。` +
-      `一次只读一本——四本全读费劲也没用。`,
+      `读一本笔记的全部条目，每条带编号和日期，最近改过的在最上面。` +
+      `book 填：${bookList}。\n` +
+      `要改、要删先读一遍——编号是从这里来的。一次只读一本。`,
     inputSchema: {
       type: 'object',
-      properties: {
-        book: { type: 'string', enum: SLUGS, description: '哪一本' },
-      },
+      properties: { book: bookProp },
       required: ['book'],
       additionalProperties: false,
     },
   },
   {
-    name: 'notes_write',
+    name: 'notes_add',
     description:
-      `把一本笔记**整篇重写**。book 填：${bookList}。\n` +
-      `注意是整篇替换，不是往后面追加：你交的这一篇会把原来那篇整个换掉。` +
-      `所以先用 notes_read 读一遍，把该留的拄过来、过时的丢掉，再一次性写回来。` +
-      `不限字数，但只写下次真用得上的：规则、进度、下次从哪接。` +
-      `旧的那篇会自动存进历史（留最近三份），写坏了能在网页上翻回来。`,
+      `往一本笔记里**添一条**（或几条）。book 填：${bookList}。\n` +
+      `一条写一件事，别把三件塞在一条里——以后只改其中一件就难办了。` +
+      `同一件事的进度别另开新条，用 notes_edit 改原来那条。不限字数。`,
     inputSchema: {
       type: 'object',
       properties: {
-        book: { type: 'string', enum: SLUGS, description: '哪一本' },
-        content: { type: 'string', description: '整篇正文，会换掉原来那篇' },
+        book: bookProp,
+        entries: {
+          type: 'array',
+          items: { type: 'string' },
+          minItems: 1,
+          description: '要添的条目，一个字符串一条',
+        },
       },
-      required: ['book', 'content'],
+      required: ['book', 'entries'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'notes_edit',
+    description:
+      `**改一条**。id 用 notes_read 里每条前面那个 #号，别自己编。\n` +
+      `交的 content 会把那一条换掉，其他条目一个字不动。` +
+      `「这条记下的日期」不变，只更新「改过的日期」。`,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'integer', description: '那条的编号' },
+        content: { type: 'string', description: '改后的全文' },
+      },
+      required: ['id', 'content'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'notes_delete',
+    description:
+      `**删一条**（或几条）。id 用 notes_read 里那个 #号。\n` +
+      `过时的、已经不对的就删——别留着旧的跟新的打架。删了不能恢复。`,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ids: {
+          type: 'array',
+          items: { type: 'integer' },
+          minItems: 1,
+          description: '要删的条目编号',
+        },
+      },
+      required: ['ids'],
       additionalProperties: false,
     },
   },
@@ -76,6 +132,7 @@ const text = (s) => ({ content: [{ type: 'text', text: String(s) }] });
 const fail = (s) => ({ isError: true, content: [{ type: 'text', text: String(s) }] });
 
 const whoName = (a) => (a === 'user' ? USER_NAME : AI_NAME);
+const noBook = (b) => fail(`没有「${b}」这本。固定四本：${SLUGS.join('、')}。`);
 
 function callNotesTool(name, args) {
   const a = args && typeof args === 'object' ? args : {};
@@ -84,40 +141,91 @@ function callNotesTool(name, args) {
     case 'notes_list': {
       const lines = listNotes().map((n) => {
         if (n.empty) return `${n.slug}　《${n.title}》　还是空的　${n.what}`;
-        const when = n.updatedAt ? formatDateTime(n.updatedAt).slice(5) : '不详';
-        return `${n.slug}　《${n.title}》　${n.chars} 字　${whoName(n.updatedBy)} ${when} 写的`;
+        const when = n.lastAt ? formatDateTime(n.lastAt).slice(5) : '不详';
+        const mark = n.unread ? `　新的 ${n.unread} 条` : '';
+        return `${n.slug}　《${n.title}》　${n.count} 条　${whoName(n.lastBy)} ${when} 改过${mark}`;
       });
-      return text(['四本笔记（固定四本，不新建）：', '', ...lines].join('\n'));
+      return text(['四本笔记（固定四本，最近改过的在前）：', '', ...lines].join('\n'));
     }
 
     case 'notes_read': {
       const book = String(a.book ?? '').trim();
-      if (!isBook(book)) return fail(`没有「${book}」这本。固定四本：${SLUGS.join('、')}。`);
-      return text(describeNote(book));
+      if (!isBook(book)) return noBook(book);
+      const out = describeNote(book);
+      // 读了就算看过了，清这一本的未读。只在 SIGN_AS 是 user 时清——
+      // 这张水位记的是小满看到哪了，他自己读不应该把她的红点消掉。
+      if (SIGN_AS === 'user') markRead(book);
+      return text(out);
     }
 
-    case 'notes_write': {
+    case 'notes_add': {
       const book = String(a.book ?? '').trim();
-      if (!isBook(book)) return fail(`没有「${book}」这本。固定四本：${SLUGS.join('、')}。`);
-      const content = String(a.content ?? '').trim();
-      // 空内容不当整篇重写：整篇覆盖是毁灭性的，一不小心传了空串就把那本抹了。
-      // 真要清空在网页上做，那边看得见自己在删什么。
-      if (!content) {
-        return fail(
-          `没写内容。notes_write 是整篇替换，传空的就把《${titleOf(book)}》抹了——` +
-          `所以这次没写。真要清空去网页上做。`
-        );
-      }
+      if (!isBook(book)) return noBook(book);
+      const list = Array.isArray(a.entries) ? a.entries : [];
+      const clean = list.map((s) => String(s ?? '').trim()).filter(Boolean);
+      if (!clean.length) return fail('entries 是空的，没添。');
 
-      const before = readNote(book);
-      const r = writeNote(book, content, SIGN_AS);
-      const lines = [`《${titleOf(book)}》写好了，${r.chars} 字（算 ${whoName(r.author)} 写的）。`];
-      if (before?.content) {
-        lines.push(
-          '',
-          `换掉的那篇 ${before.content.length} 字，已经存进历史了（网页上翻得到）。`
-        );
+      const made = [];
+      for (const c of clean) {
+        try {
+          made.push(addEntry(book, c, SIGN_AS));
+        } catch (err) {
+          return fail(`添到第 ${made.length + 1} 条时停了：${err.message}`);
+        }
       }
+      const total = listEntries(book).length;
+      return text(
+        [
+          `《${titleOf(book)}》添了 ${made.length} 条，现在共 ${total} 条。`,
+          '',
+          ...made.map((m) => `#${m.id}（${m.chars} 字）`),
+        ].join('\n')
+      );
+    }
+
+    case 'notes_edit': {
+      const id = Number(a.id);
+      if (!Number.isInteger(id)) return fail('id 要是整数，用 notes_read 里那个 #号。');
+      const content = String(a.content ?? '').trim();
+      if (!content) return fail('content 是空的。要删用 notes_delete。');
+
+      const before = getEntry(id);
+      if (!before) return fail(`没有 #${id} 这条。先 notes_read 看一下真实的编号。`);
+
+      let r;
+      try {
+        r = editEntry(id, content, SIGN_AS);
+      } catch (err) {
+        return fail(`没改上：${err.message}`);
+      }
+      return text(
+        [
+          `《${titleOf(r.slug)}》#${r.id} 改好了（${r.chars} 字）。`,
+          '',
+          `原来是：${before.content.length > 80 ? before.content.slice(0, 80) + '…' : before.content}`,
+        ].join('\n')
+      );
+    }
+
+    case 'notes_delete': {
+      const ids = Array.isArray(a.ids) ? a.ids.map(Number).filter(Number.isInteger) : [];
+      if (!ids.length) return fail('ids 是空的，没删。');
+
+      const gone = [];
+      const missing = [];
+      for (const id of ids) {
+        const e = deleteEntry(id);
+        if (e) gone.push(e);
+        else missing.push(id);
+      }
+      if (!gone.length) return fail(`这几条都不存在：${missing.join('、')}。先 notes_read 看一下。`);
+
+      const lines = [`删了 ${gone.length} 条：`, ''];
+      for (const e of gone) {
+        const snip = e.content.length > 60 ? e.content.slice(0, 60) + '…' : e.content;
+        lines.push(`《${titleOf(e.slug)}》#${e.id}　${snip}`);
+      }
+      if (missing.length) lines.push('', `这几个号没找到，跳过了：${missing.join('、')}`);
       return text(lines.join('\n'));
     }
 
@@ -143,7 +251,7 @@ function presentedToken(req) {
 
 function newServer() {
   const server = new Server(
-    { name: 'vesper-notes', version: '1.0.0' },
+    { name: 'vesper-notes', version: '2.0.0' },
     { capabilities: { tools: {} } }
   );
   server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS }));
@@ -206,5 +314,5 @@ export function registerNotesMcp(app) {
   app.get('/notes/mcp', notAllowed);
   app.delete('/notes/mcp', notAllowed);
 
-  return { enabled: true, signAs: SIGN_AS };
+  return { enabled: true, signAs: SIGN_AS, tools: TOOLS.length };
 }
