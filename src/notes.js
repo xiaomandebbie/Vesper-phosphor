@@ -6,18 +6,34 @@
 // 记错过两回。卡片、信息卡、长期资料那三样记的是他和小满的事，
 // 不是「菜子要浇几天」「上次做到哪一步」这种跟具体游戏绑在一起的东西。
 //
-// 小满 2026-11-15：「他们的唤醒步骤得先看笔记，执行动作，更新笔记」
+// ── 为什么是条目而不是一篇文 ──
 //
-// ── 几条规矩，都是他们两人定的 ──
+// 第一版我写的是「整篇重写」：每次收工让他把整本交一遍。
+// 小满 11-15：「每次都整篇重写吗…？会不会工程太大，只需要新增和修改呀」
+//
+// 她对。改一句话要把没变的部分全抄一遍，每次都是一整篇的 token，
+// 而且抄着抄着就把好东西抄丢了。现在是：
+//   新摸到一件事 → 添一条
+//   发现之前写的不对 → 改那一条
+//   已经没用了     → 删那一条
+// 别的条目一个字不动。
+//
+// 每条带两个时间：建的时候、上次改的时候（小满：「要记录各个条目的日期」）。
+// 这样他自己能看出哪条是上周的、哪条是今天刚摸出来的。
+//
+// ── 几条规矩 ──
 //
 // 1. 固定四本，不能新建——页面建杂了就没人读了。
-// 2. 不限字数（小满 11-15：「那不限制字数了」）。
-// 3. **整篇重写，不是往后面接**。小满：「过时的笔记要删掉，随时更新保持正确」。
+// 2. 条数不限，单条不限字数（小满 11-15：「那不限制字数了」）。
+// 3. 过时的要删（小满：「过时的笔记要删掉，随时更新保持正确」）。
 //    允朱：「宁可少留，也别留着旧的跟新的打架」。
 // 4. 一次只读一本，四个不全读。
 //
-// 旧版本留最近三份：整篇重写是毁灭性的，写坏了得有张网。不给他看，
-// 只在页面上翻得到——让他看旧版就又回到「旧的跟新的打架」了。
+// ── 已读水位 ──
+//
+// 小满要发现页像微信一样标未读数字。要算未读就必须有一条「你看到哪了」，
+// 所以这边多一张 note_reads。只记她的水位：他写的东西对她来说是新的，
+// 她自己写的不算。点进那一本就清掉那一本的。
 import db from './state.js';
 import { formatDateTime } from './wall-time.js';
 
@@ -29,7 +45,7 @@ const USER_NAME = process.env.USER_DISPLAY_NAME || '她';
 export const BOOKS = {
   xiuchao: { title: '锈潮纪事', what: '星落村里那些路、那些人、做到哪一步' },
   garden: { title: '花园日志', what: '种了什么、几天浇一次、哪块地是谁的' },
-  workkk: { title: '上班笔记', what: '这份工怎么干、钱怂么算、下次从哪接' },
+  workkk: { title: '上班笔记', what: '这份工怎么干、钱怎么算、下次从哪接' },
   leto: { title: 'Leto 见闻', what: '那边的人、小岛怎么干活、东西什么价' },
 };
 
@@ -37,24 +53,20 @@ export const SLUGS = Object.keys(BOOKS);
 export const isBook = (slug) => Object.hasOwn(BOOKS, String(slug ?? '').trim());
 export const titleOf = (slug) => BOOKS[slug]?.title ?? slug;
 
-// 旧版本留几份
-const KEEP_VERSIONS = 3;
-
 db.exec(`
-CREATE TABLE IF NOT EXISTS notes (
-  slug TEXT PRIMARY KEY,
-  content TEXT NOT NULL DEFAULT '',
-  updated_at INTEGER,
-  updated_by TEXT
-);
-CREATE TABLE IF NOT EXISTS note_versions (
+CREATE TABLE IF NOT EXISTS note_entries (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   slug TEXT NOT NULL,
   content TEXT NOT NULL,
-  ts INTEGER NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
   author TEXT
 );
-CREATE INDEX IF NOT EXISTS idx_note_versions_slug ON note_versions (slug, ts);
+CREATE INDEX IF NOT EXISTS idx_note_entries_slug ON note_entries (slug, updated_at);
+CREATE TABLE IF NOT EXISTS note_reads (
+  slug TEXT PRIMARY KEY,
+  ts INTEGER NOT NULL
+);
 `);
 
 const cache = new Map();
@@ -67,116 +79,166 @@ function stmt(sql) {
   return s;
 }
 
-// 读一本。没写过也返回一个完整形状，content 是空串。
-export function readNote(slug) {
-  if (!isBook(slug)) return null;
-  const row = stmt('SELECT content, updated_at, updated_by FROM notes WHERE slug = ?').get(slug);
-  return {
-    slug,
-    title: titleOf(slug),
-    content: row?.content ?? '',
-    updatedAt: row?.updated_at ?? null,
-    updatedBy: row?.updated_by ?? null,
-  };
-}
-
-// 整篇替换。author 是 'assistant'（他自己写）或 'user'（小满写）。
-// 写之前把现在这份收进旧版本：整篇重写是毁灭性的，得留一张网。
-export function writeNote(slug, content, author = 'assistant') {
-  if (!isBook(slug)) throw new Error(`没有这本笔记：${slug}`);
-  const text = String(content ?? '').trim();
-  const who = author === 'user' ? 'user' : 'assistant';
-  const now = Date.now();
-
-  const prev = stmt('SELECT content, updated_by FROM notes WHERE slug = ?').get(slug);
-  if (prev?.content) {
-    stmt('INSERT INTO note_versions (slug, content, ts, author) VALUES (?, ?, ?, ?)').run(
-      slug,
-      prev.content,
-      now,
-      prev.updated_by ?? null
-    );
-    stmt(
-      `DELETE FROM note_versions WHERE slug = ? AND id NOT IN (
-         SELECT id FROM note_versions WHERE slug = ? ORDER BY ts DESC, id DESC LIMIT ?
-       )`
-    ).run(slug, slug, KEEP_VERSIONS);
-  }
-
-  stmt(
-    `INSERT INTO notes (slug, content, updated_at, updated_by) VALUES (?, ?, ?, ?)
-     ON CONFLICT(slug) DO UPDATE SET content = excluded.content,
-       updated_at = excluded.updated_at, updated_by = excluded.updated_by`
-  ).run(slug, text, now, who);
-
-  console.log(`notes: 《${titleOf(slug)}》整篇重写了（${text.length} 字，${who}）`);
-  return { slug, chars: text.length, author: who, updatedAt: now };
-}
-
-// 页面上翻旧版本用。不给他看——让他看旧版就又回到「旧的跟新的打架」了。
-export function listVersions(slug) {
+// 一本里的条目。最近改过的排最上面（小满：「点进去最新修改过的在最上面」）。
+export function listEntries(slug) {
   if (!isBook(slug)) return [];
   return stmt(
-    'SELECT id, content, ts, author FROM note_versions WHERE slug = ? ORDER BY ts DESC, id DESC'
+    `SELECT id, content, created_at, updated_at, author FROM note_entries
+     WHERE slug = ? ORDER BY updated_at DESC, id DESC`
   ).all(slug);
 }
 
-// 四本的目录：每本多少字、多久没更新。不带正文。
+export function getEntry(id) {
+  return stmt('SELECT id, slug, content, created_at, updated_at, author FROM note_entries WHERE id = ?').get(
+    Number(id)
+  );
+}
+
+// 添一条。返回新条目的编号——以后要改要删就用这个号。
+export function addEntry(slug, content, author = 'assistant') {
+  if (!isBook(slug)) throw new Error(`没有这本笔记：${slug}`);
+  const text = String(content ?? '').trim();
+  if (!text) throw new Error('条目是空的');
+  const who = author === 'user' ? 'user' : 'assistant';
+  const now = Date.now();
+  const r = stmt(
+    'INSERT INTO note_entries (slug, content, created_at, updated_at, author) VALUES (?, ?, ?, ?, ?)'
+  ).run(slug, text, now, now, who);
+  console.log(`notes: 《${titleOf(slug)}》添了一条 #${r.lastInsertRowid}（${text.length} 字，${who}）`);
+  return { id: Number(r.lastInsertRowid), slug, chars: text.length, author: who, createdAt: now };
+}
+
+// 改一条。created_at 不动——这条是什么时候摸出来的这件事没变。
+export function editEntry(id, content, author = 'assistant') {
+  const entry = getEntry(id);
+  if (!entry) return null;
+  const text = String(content ?? '').trim();
+  if (!text) throw new Error('改成空的等于删，要删用 deleteEntry');
+  const who = author === 'user' ? 'user' : 'assistant';
+  const now = Date.now();
+  stmt('UPDATE note_entries SET content = ?, updated_at = ?, author = ? WHERE id = ?').run(
+    text,
+    now,
+    who,
+    entry.id
+  );
+  console.log(`notes: 《${titleOf(entry.slug)}》改了 #${entry.id}（${text.length} 字，${who}）`);
+  return { id: entry.id, slug: entry.slug, chars: text.length, author: who, updatedAt: now };
+}
+
+export function deleteEntry(id) {
+  const entry = getEntry(id);
+  if (!entry) return null;
+  stmt('DELETE FROM note_entries WHERE id = ?').run(entry.id);
+  console.log(`notes: 《${titleOf(entry.slug)}》删了 #${entry.id}`);
+  return entry;
+}
+
+// ── 已读水位 ──
+//
+// 未读 = 他写的、而且比她上次看这本的时间新。她自己写的不算。
+
+export function unreadCount(slug) {
+  if (!isBook(slug)) return 0;
+  const mark = stmt('SELECT ts FROM note_reads WHERE slug = ?').get(slug)?.ts ?? 0;
+  return stmt(
+    `SELECT COUNT(*) AS c FROM note_entries
+     WHERE slug = ? AND author = 'assistant' AND updated_at > ?`
+  ).get(slug, mark).c;
+}
+
+// 四本加起来。发现页那张卡上的数字就是它。
+export function unreadTotal() {
+  return SLUGS.reduce((n, slug) => n + unreadCount(slug), 0);
+}
+
+// 看过了。点进那一本的时候调，只清那一本。
+export function markRead(slug) {
+  if (!isBook(slug)) return;
+  stmt(
+    `INSERT INTO note_reads (slug, ts) VALUES (?, ?)
+     ON CONFLICT(slug) DO UPDATE SET ts = excluded.ts`
+  ).run(slug, Date.now());
+}
+
+// 四本的目录：多少条、多久没暨、有几条新的。不带正文。
+// 最近改过的排最上面，一条都没的沉底。
 export function listNotes() {
-  const rows = stmt('SELECT slug, content, updated_at, updated_by FROM notes').all();
+  const rows = stmt(
+    `SELECT slug, COUNT(*) AS n, MAX(updated_at) AS last_at FROM note_entries GROUP BY slug`
+  ).all();
   const byslug = new Map(rows.map((r) => [r.slug, r]));
+  const last = stmt(
+    `SELECT slug, author FROM note_entries WHERE updated_at = (
+       SELECT MAX(updated_at) FROM note_entries e2 WHERE e2.slug = note_entries.slug
+     ) GROUP BY slug`
+  ).all();
+  const authorOf = new Map(last.map((r) => [r.slug, r.author]));
+
   return SLUGS.map((slug) => {
     const r = byslug.get(slug);
-    const content = r?.content ?? '';
     return {
       slug,
       title: BOOKS[slug].title,
       what: BOOKS[slug].what,
-      chars: content.length,
-      empty: !content,
-      updatedAt: r?.updated_at ?? null,
-      updatedBy: r?.updated_by ?? null,
+      count: r?.n ?? 0,
+      empty: !r?.n,
+      lastAt: r?.last_at ?? null,
+      lastBy: authorOf.get(slug) ?? null,
+      unread: unreadCount(slug),
     };
-  });
+  }).sort((a, b) => (b.lastAt ?? 0) - (a.lastAt ?? 0));
 }
 
 const whoName = (a) => (a === 'user' ? USER_NAME : AI_NAME);
+const when = (ts) => (ts ? formatDateTime(ts).slice(5) : '不详');
+
+// 一条的时间怎么写。没改过就只写建的时候；改过就两个都写——
+// 哪条是上周摸出来、今天才发现不对的，他自己要看得见。
+export function stampOf(e) {
+  const made = when(e.created_at);
+  if (!e.updated_at || Math.abs(e.updated_at - e.created_at) < 60000) return made;
+  return `${made} 记下，${when(e.updated_at)} 改过`;
+}
 
 // 给模型看的一段：开工前把对应那一本原文交给他。
-// 空的时候也说清楚，别让他以为读失败了。
+// 编号要给，不给的话他没法说「改第几条」。
 export function describeNote(slug) {
-  const n = readNote(slug);
-  if (!n) return `没有「${slug}」这本笔记。固定就四本：${SLUGS.join('、')}。`;
-  if (!n.content) {
+  if (!isBook(slug)) return `没有「${slug}」这本笔记。固定就四本：${SLUGS.join('、')}。`;
+  const entries = listEntries(slug);
+  if (!entries.length) {
     return [
-      `《${n.title}》还是空的——这是第一次。`,
+      `《${titleOf(slug)}》还是空的——这是第一次。`,
       '',
-      `这次做完之后把该留的写进去：规则怎么跑的、现在到哪了、下次从哪接。`,
+      '这次做完之后把该留的添进去：规则怎么跑的、现在到哪了、下次从哪接。',
     ].join('\n');
   }
-  const when = n.updatedAt ? formatDateTime(n.updatedAt).slice(5) : '不详';
+  const lines = entries.map((e) => `#${e.id}　[${stampOf(e)}]　${e.content}`);
   return [
-    `《${n.title}》（${whoName(n.updatedBy)} ${when} 写的）：`,
+    `《${titleOf(slug)}》现在有 ${entries.length} 条（最近改过的在最上面）：`,
     '',
-    n.content,
+    ...lines,
   ].join('\n');
 }
 
 // 收工时那句话。跟 describeNote 分开：那一段是给料，这一段是讨文。
-export function rewritePrompt(slug) {
+export function updatePrompt(slug) {
   return [
-    `把《${titleOf(slug)}》重写一遍。`,
+    `这一轮完了。《${titleOf(slug)}》要改什么吗？`,
     '',
-    '**整篇重写，不是往后面接。** 你交回的这一篇会把原来那篇整个换掉，',
-    '所以该留的要自己拄过来、已经不对的直接丢掉。宁可少留，也别留着旧的跟新的打架。',
+    '**只动变了的部分，别重写没变的条目。** 三种动作：',
+    '  add    新摸到一件事，添一条',
+    '  edit   之前写的那条不对了或者该补，改那一条（用上面的 #号）',
+    '  delete 已经没用了，删掉（用 #号）',
     '',
-    '写三样：规则（这东西怎么跑的、试出来的门道、踩过的坑）、',
-    '进度（现在到哪了，带上具体数字和名字）、下次从哪接。',
-    '不限字数，但只写下次真用得上的——这不是日记，是给下一次的自己留的说明书。',
+    '一条写一件事，别把三件塞在一条里——以后只改其中一件就难办了。',
+    '规则、进度、下次从哪接这三类都行，字数不限，但只写下次真用得上的。',
+    '进度那类别另开新条：同一件事的进度就 edit 原来那条，不然一个月后十几条都在讴同一件事。',
     '',
     '一条：只写真做过的。没成的就写没成，别编。',
     '',
-    '只返回一个 JSON 对象，不要任何其他文字：{"note": "整篇正文"}',
-    '这一轮没什么值得改的就给 {"note": null}，原来那篇原样留着。',
+    '只返回一个 JSON 对象，不要任何其他文字：',
+    '{"add": ["新条目", "又一条"], "edit": [{"id": 3, "content": "改后的话"}], "delete": [7]}',
+    '哪一类没有就省略掉。这一轮没什么值得改的就给 {}——不必每次都写点什么。',
   ].join('\n');
 }
