@@ -9,6 +9,7 @@
 //
 // 未读只算他写的（见 notes.js 的 unreadCount）：小满自己添的条目
 // 不该变成她自己的未读。点进一本就清那一本的。
+import db from './state.js';
 import {
   BOOKS,
   SLUGS,
@@ -31,6 +32,14 @@ import { renderTabs, TABS_CSS } from './tabs.js';
 const PREFIX = '/notes';
 const AI_NAME = process.env.AI_DISPLAY_NAME || 'TA';
 const USER_NAME = process.env.USER_DISPLAY_NAME || '她';
+
+// 她上次看这本是什么时候。渲染时要用它分「哪几条是新的」，
+// 而 markRead 一调水位就挪到现在了——所以得在那之前先读下来。
+//
+// 直接查 note_reads（表在 notes.js 里建的）。上一版我写了个永远空的
+// Map 做缓存，结果永远返回 0，有未读时他写过的条目全被标成新的。
+const readMarkStmt = db.prepare('SELECT ts FROM note_reads WHERE slug = ?');
+const readMarkOf = (slug) => readMarkStmt.get(slug)?.ts ?? 0;
 
 function escapeHtml(value) {
   return String(value ?? '')
@@ -136,7 +145,8 @@ function renderList() {
 }
 
 // 一本里的条目。比她上次看过之后、且是他写的，标个淡边框。
-function renderBook(slug, { editing = null, mark = 0 } = {}) {
+// mark 传 Infinity 就是一条也不标（没未读的时候）。
+function renderBook(slug, { editing = null, mark = Number.MAX_SAFE_INTEGER } = {}) {
   const entries = listEntries(slug);
   const title = titleOf(slug);
   const head =
@@ -248,15 +258,13 @@ export function registerNoteRoutes(app, { requireBasicAuth }) {
     }
     res.set('Cache-Control', 'no-store');
     try {
-      // 渲染前先拿水位：这一眼还要把新的那几条标出来。
-      // markRead 得摆在拿完之后，不然水位已经挪到现在、一条都不算新的了。
-      const n = unreadCount(slug);
-      const mark = n > 0 ? Date.now() - 1 : 0;
+      // 水位要在 markRead 之前读：那一调就挪到现在，之后再读就分不出哪几条是新的了。
+      // 没未读的时候传 MAX，一条也不标。
+      const mark = unreadCount(slug) > 0 ? readMarkOf(slug) : Number.MAX_SAFE_INTEGER;
       const editing = Number(req.query.edit);
       const html = renderBook(slug, {
         editing: Number.isInteger(editing) ? editing : null,
-        // n>0 时用真水位标新条；否则 0，一条也不标
-        mark: n > 0 ? readMarkOf(slug) : Number.MAX_SAFE_INTEGER,
+        mark,
       });
       markRead(slug);
       res.send(layout(`${titleOf(slug)} · 笔记本`, html));
@@ -269,19 +277,3 @@ export function registerNoteRoutes(app, { requireBasicAuth }) {
   console.log(`notes: 笔记本 ${PREFIX}（${SLUGS.length} 本）`);
   return { enabled: true, slugs: SLUGS, books: BOOKS };
 }
-
-// 她上次看这本是什么时候。渲染时要用它分「哪几条是新的」，
-// 所以得在 markRead 之前读。notes.js 没导这个，这边自己查。
-function readMarkOf(slug) {
-  try {
-    const row = listEntries(slug);
-    void row;
-  } catch {
-    // 不关心
-  }
-  return readMarkCache.get(slug) ?? 0;
-}
-
-// 渲染前把水位记下来，这样 markRead 之后还能用它标新条。
-// 只是个过渡缓存，进程重启丢了也不要紧——最多少标一次淡边框。
-const readMarkCache = new Map();
