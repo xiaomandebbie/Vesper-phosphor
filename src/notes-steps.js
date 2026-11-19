@@ -1,7 +1,7 @@
 // 开工前读那一本，收工只改变了的那几条。
 //
 // 小满 2026-11-15：「他们的唤醒步骤得先看笔记，执行动作，更新笔记」
-// 允朱：「我自己写，玩完就写，不等你说。但有一条：写之前得真做完，不能先编」
+// 允朱：「我自己写，玩完就��，不等你说。但有一条：写之前得真做完，不能先编」
 //
 // ── 挂在哪里 ──
 //
@@ -18,6 +18,12 @@
 // 第一版是讨一篇整篇重写。小满：「会不会工程太大，只需要新增和修改呀」
 // 现在讨的是一份 {add, edit, delete}，没变的条目一个字不动。
 //
+// ── 三类板块（11-19） ──
+//
+// add 每条带 section：diary 日记、guide 攻略、question 疑惑。
+// 日记一天一条：今天已经有了就不再开新的（改归攻略），要追就 edit 那一条。
+// 往期日记 editEntry 会抛，这边接住并记一行——不让它带崩整轮。
+//
 // ── 几条规矩 ──
 //
 // 1. 一次只读一本。一轮里碰了两个游戏（比如花园加上班）只读第一个的。
@@ -26,13 +32,17 @@
 import { askJson } from './decide.js';
 import {
   isBook,
+  isSection,
   titleOf,
+  sectionTitleOf,
   addEntry,
   editEntry,
   deleteEntry,
   getEntry,
   describeNote,
   updatePrompt,
+  todayDiary,
+  canEdit,
 } from './notes.js';
 import { tier2KindOf } from './budget.js';
 
@@ -47,6 +57,9 @@ const MAX_ADD = 8;
 // 靠 budget.js 的 tier2KindOf 认：它的 TIER2_KINDS 正好就是这四个
 //（xiuchao / garden / workkk / leto），和 notes.js 的 slug 对得上。
 // 自己再写一遍判别就是两处各读一遍 .env，那是 Proof 两个 TTL 那类坑的源头。
+//
+// 注：被 Leto 叫醒那轮不走这儿——run-actions.js 那边直接认 leto 这本，
+// 因为那轮不经过 2 级分级（见那里的 letoWake ? "leto" : bookForActions）。
 export function bookForActions(list) {
   if (!ENABLED) return null;
   for (const item of Array.isArray(list) ? list : []) {
@@ -72,9 +85,9 @@ export function openNote(slug, messages) {
     '',
     describeNote(slug),
     '',
-    '这是你上次留给自己的——规则、进度、从哪接。接着这些做，',
-    '别把摸清过的路再趟一遍。跟笔记不一样的以眼前为准（那边可能改过），',
-    '做完了再回来改那几条。',
+    '这是你上次留给自己的——日记是那几天做过的事，攻略是摸到的门道，',
+    '疑惑是还没想通的。接着这些做，别把摸清过的路再趟一遍。',
+    '跟笔记不一样的以眼前为准（那边可能改过），做完了再回来改那几条。',
   ].join('\n');
   console.log(`notes: 开工前读了《${titleOf(slug)}》`);
   return [...messages, { role: 'user', content: body }];
@@ -108,12 +121,32 @@ export async function closeNote(slug, messages, { did = true } = {}) {
   const done = { added: 0, edited: 0, deleted: 0 };
 
   // 添。超过 MAX_ADD 的截掉——一轮写二十条那是日记，不是给下次的说明书。
+  //
+  // 每条可以是字符串，也可以是 {section, content}。只给字符串就归攻略
+  //（notes.js 的 DEFAULT_SECTION）。
   const add = Array.isArray(parsed.add) ? parsed.add : [];
+  let diaryOpened = Boolean(todayDiary(slug));
   for (const raw of add.slice(0, MAX_ADD)) {
-    const text = String(raw ?? '').trim();
+    let text = '';
+    let section;
+    if (typeof raw === 'string') {
+      text = raw.trim();
+    } else if (raw && typeof raw === 'object') {
+      text = String(raw.content ?? '').trim();
+      if (isSection(raw.section)) section = String(raw.section).trim();
+    }
     if (!text) continue;
+
+    // 日记一天一条。今天已经有了还要开新的，归到攻略——
+    // 丢掉更差，那是他真写下的东西。
+    if (section === 'diary' && diaryOpened) {
+      console.log(`notes: 《${titleOf(slug)}》今天的日记已经有了，这条归到攻略`);
+      section = 'guide';
+    }
+
     try {
-      addEntry(slug, text, 'assistant');
+      const r = addEntry(slug, text, 'assistant', section);
+      if (r.section === 'diary') diaryOpened = true;
       done.added++;
     } catch (err) {
       console.error(`notes: 《${titleOf(slug)}》添一条没成`, err.message);
@@ -125,6 +158,9 @@ export async function closeNote(slug, messages, { did = true } = {}) {
 
   // 改。只能改这一本里的——编号是全库唯一的，不拦的话他随手写个 #3
   // 可能改到别的本子里去。
+  //
+  // 往期日记 editEntry 会抛（notes.js 的 canEdit），这儿先自己拦一道，
+  // 这样日志里写清楚是「封了」而不是一句笼统的异常。
   const edits = Array.isArray(parsed.edit) ? parsed.edit : [];
   for (const e of edits) {
     const id = Number(e?.id);
@@ -136,7 +172,13 @@ export async function closeNote(slug, messages, { did = true } = {}) {
       continue;
     }
     if (before.slug !== slug) {
-      console.log(`notes: 《${titleOf(slug)}》要改 #${id}，但那条在《${titleOf(before.slug)}》里，跳过`);
+      console.log(
+        `notes: 《${titleOf(slug)}》要改 #${id}，但那条在《${titleOf(before.slug)}》里，跳过`
+      );
+      continue;
+    }
+    if (!canEdit(before)) {
+      console.log(`notes: 《${titleOf(slug)}》#${id} 是往期日记，已经封了，没改`);
       continue;
     }
     try {
@@ -147,7 +189,7 @@ export async function closeNote(slug, messages, { did = true } = {}) {
     }
   }
 
-  // 删。同样只能删这一本里的。
+  // 删。同样只能删这一本里的。往期日记也不让删——封了就是封了。
   const dels = Array.isArray(parsed.delete) ? parsed.delete : [];
   for (const raw of dels) {
     const id = Number(raw);
@@ -158,7 +200,13 @@ export async function closeNote(slug, messages, { did = true } = {}) {
       continue;
     }
     if (before.slug !== slug) {
-      console.log(`notes: 《${titleOf(slug)}》要删 #${id}，但那条在《${titleOf(before.slug)}》里，跳过`);
+      console.log(
+        `notes: 《${titleOf(slug)}》要删 #${id}，但那条在《${titleOf(before.slug)}》里，跳过`
+      );
+      continue;
+    }
+    if (before.section === 'diary' && !canEdit(before)) {
+      console.log(`notes: 《${titleOf(slug)}》#${id} 是往期日记，不删`);
       continue;
     }
     deleteEntry(id);
@@ -170,9 +218,7 @@ export async function closeNote(slug, messages, { did = true } = {}) {
     console.log(`notes: 他说《${titleOf(slug)}》这轮没什么要改的`);
     return;
   }
-  console.log(
-    `notes: 《${titleOf(slug)}》添 ${done.added} 改 ${done.edited} 删 ${done.deleted}`
-  );
+  console.log(`notes: 《${titleOf(slug)}》添 ${done.added} 改 ${done.edited} 删 ${done.deleted}`);
 }
 
 export function notesConfigSummary() {
