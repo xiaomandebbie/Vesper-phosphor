@@ -5,12 +5,18 @@ import { callTool, isConnected } from '../mcp-manager.js';
 //   breath_search(query,..) -> 关键词/语义检索
 //   feel(query)             -> 翻感受类记忆
 //   hold(content, ...)      -> 写入一条长期记忆
+//   plan(content, ...)      -> 登记一个还没闭环的承诺
+//   letter_write(...)       -> 留一封信（不衰减、不合并）
+//   dream(window_hours)     -> 读最近动过的桶，消化用
 //
-// `detail` 是 JSON 字符串，四选一：
+// `detail` 是 JSON 字符串，七选一：
 //   {"mode":"breath"}
 //   {"mode":"search","query":"..."}
 //   {"mode":"feel","query":"..."}
 //   {"mode":"hold","content":"...","title":"...","domain":"...","importance":8}
+//   {"mode":"plan","content":"...","weight":0.6,"why_remembered":"..."}
+//   {"mode":"letter","title":"...","content":"..."}
+//   {"mode":"dream"}
 //
 // 没写或解析不了时默认 breath——最省 token。
 
@@ -31,9 +37,18 @@ function csv(value) {
   return undefined;
 }
 
-// 只保留有值的字段，免得 OB 报"字段类型不对"
+// 只保留有值的字段，免得 OB 报“字段类型不对”
 function compact(obj) {
   return Object.fromEntries(Object.entries(obj).filter(([, v]) => v !== undefined && v !== null));
+}
+
+function num(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : undefined;
+}
+
+function str(value) {
+  return typeof value === 'string' && value.trim() ? value : undefined;
 }
 
 export default async function ombreBrain(detail) {
@@ -71,6 +86,43 @@ export default async function ombreBrain(detail) {
           feel: typeof parsed.feel === 'boolean' ? parsed.feel : undefined,
         })
       );
+
+    // 答应了、还没做完的事。登记下来，之后会在 dream 末尾的 active 段等着。
+    // plan 不衰减、也不出现在普通 breath 里，所以不登记就等于忘了。
+    case 'plan':
+      return callTool(
+        'ombre-brain',
+        'plan',
+        compact({
+          content: parsed.content,
+          status: str(parsed.status),
+          weight: num(parsed.weight),
+          related_bucket: str(parsed.related_bucket),
+          why_remembered: str(parsed.why_remembered),
+        })
+      );
+
+    // 想对她说、但不该做成一条推送的话；或者留给以后的自己。
+    // author/ai_name 写死：OB 说了，写信时没记下关系名，以后就再也锁不上这封。
+    case 'letter':
+      return callTool(
+        'ombre-brain',
+        'letter_write',
+        compact({
+          author: 'ai',
+          ai_name: str(process.env.AI_DISPLAY_NAME),
+          user_name: str(process.env.USER_DISPLAY_NAME),
+          title: str(parsed.title),
+          content: parsed.content,
+          lock_type: str(parsed.lock_type),
+          unlock_date: str(parsed.unlock_date),
+        })
+      );
+
+    // 读最近 window_hours（默认 48）内动过的桶，用来消化。
+    // 提示词里不列它：白天跑是浪费一次醒来，只由凌晨那次约醒把它递过来。
+    case 'dream':
+      return callTool('ombre-brain', 'dream', compact({ window_hours: num(parsed.window_hours) }));
 
     case 'breath':
     default:
