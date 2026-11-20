@@ -1,5 +1,4 @@
 import { callTool } from '../mcp-manager.js';
-import { TIER2_KINDS, tier2Today } from '../budget.js';
 
 // `detail` is expected to be a JSON string like:
 // {"server":"forum","tool":"search","args":{"keyword":"..."}}
@@ -22,52 +21,6 @@ function letoReadBlocked(server, tool, args) {
   ].join('\n');
 }
 
-// 2 级每一件一天最多几次。小满 2026-11-20 定的 2。
-// .env 的 TIER2_PER_KIND_DAILY 可改，上限 20；填 0 表示这几件今天都不做。
-const TIER2_PER_KIND_DAILY = (() => {
-  const raw = String(process.env.TIER2_PER_KIND_DAILY ?? '').trim();
-  const n = Number(raw);
-  return raw && Number.isInteger(n) && n >= 0 ? Math.min(n, 20) : 2;
-})();
-
-// 被叫醒那条路不受额度限制：别人 @ 他、私聊他，他得能读能回。
-// 额度管的是「自己醒来主动过去」，不是「有人叫他」。
-const WAKE_REPLY_TOOLS = new Set([
-  'leto_reply',
-  'leto_decline',
-  'leto_blind_answer',
-  'leto_get_invocation',
-  'leto_list_pending',
-]);
-
-function isAnsweringSomeone(tool, args) {
-  if (WAKE_REPLY_TOOLS.has(tool)) return true;
-  return Boolean(String(args?.invocation_id ?? '').trim());
-}
-
-// 2 级那几件（上班、花园、锈潮、Leto）每件一天 TIER2_PER_KIND_DAILY 次。
-// 满了只挡这一个动作，别的几件照旧能选——等于提示他换一件，而不是把整轮废掉。
-// 2026-11-20 凌晨那五次全花在 Leto 上，总额不限的时候他会在最顺手的那件上打转。
-function tier2CapBlocked(server, tool, args) {
-  const kind = String(server ?? '').trim().toLowerCase();
-  const label = TIER2_KINDS[kind];
-  if (!label) return null;
-  if (isAnsweringSomeone(tool, args)) return null;
-  let used = 0;
-  try {
-    used = tier2Today()[kind] ?? 0;
-  } catch (err) {
-    console.error('tier2CapBlocked(): 读今天的次数失败，放行', err.message);
-    return null;
-  }
-  if (used < TIER2_PER_KIND_DAILY) return null;
-  return [
-    `${label}今天已经去了 ${used} 次（一天 ${TIER2_PER_KIND_DAILY} 次），这次没过去。`,
-    '换一件吧——上班、花园、锈潮、Leto 是四件各自独立的事，别在同一件上打转。',
-    '哪件都不想做也行，读点书、翻翻记忆库、往星星罐里放一句，都不占这几次。',
-  ].join('\n');
-}
-
 export default async function mcpAction(detail) {
   let parsed;
   try {
@@ -81,9 +34,9 @@ export default async function mcpAction(detail) {
     console.error('mcpAction(): missing server or tool in', parsed);
     return;
   }
-  const blocked = letoReadBlocked(server, tool, args) || tier2CapBlocked(server, tool, args);
+  const blocked = letoReadBlocked(server, tool, args);
   if (blocked) {
-    console.log(`mcpAction(): ${server}/${tool} 这次没调用 —— ${blocked.split('\n')[0]}`);
+    console.log('mcpAction(): leto_read 空参，这次没调用');
     return { isError: true, content: [{ type: 'text', text: blocked }] };
   }
   return callTool(server, tool, args || {});
