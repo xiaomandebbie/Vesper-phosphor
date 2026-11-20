@@ -2,8 +2,10 @@
 //
 // 为什么是脚本不是整文件：decide.js 46KB、activity.js 16KB，
 // 从手机贴整文件不现实，而且两边已经分叉过一次——整文件覆盖会把
-// 本地改过的东西抹掉。所以这里只做精确字串替换：找不到就报错退出，
-// 全部命中才写盘。已经改过的跳过，所以重复跑不会出错。
+// 本地改过的东西抹掉。所以这里只做精确字串替换。
+//
+// 按文件各自独立：三处改动互不依赖，能改的先改，对不上的单独报出来。
+// 已经改过的跳过，所以重复跑不会出错。
 //
 //   node scripts/patch-ombre-actions.mjs
 //   pm2 restart phosphor --update-env
@@ -19,6 +21,7 @@ const edits = [
     file: 'src/decide.js',
     why: '动作表：ombre_brain 四选一 → 六选一',
     done: R + '{"mode":"plan"',
+    grep: 'ombre_brain',
     find: [
       '- ombre_brain（长期记忆，action_detail是JSON字符串，四选一：',
       '  {"mode":"breath"} 快速看看自己记得什么；',
@@ -42,6 +45,7 @@ const edits = [
     file: 'src/actions/activity.js',
     why: '动作卡：留了一封信 / 整理了思绪 / 做了个计划',
     done: '留了一封信',
+    grep: "case '",
     find: [
       "        case 'hold':",
       '          return ' + R`\`` + '${AI_NAME}刚刚存入了一条记忆${j.title || j.content ? ' + R`\`` + '：${short(j.title || j.content)}' + R`\`` + " : ''}" + R`\`` + ';',
@@ -65,6 +69,7 @@ const edits = [
     file: 'src/timeline.js',
     why: '共享时间线：写信、登记计划也写回去',
     done: '留下了一封信',
+    grep: 'ombre_brain',
     find: [
       "    case 'ombre_brain': {",
       '      const j = tryJson(detail);',
@@ -94,14 +99,14 @@ const edits = [
 
 let changed = 0;
 let skipped = 0;
-const pending = [];
+const failed = [];
 
-// 先全部校一遍，再一起写盘——不要改一半停在那里
+// 按文件各自独立：一处对不上不连坐其他两处
 for (const e of edits) {
   const abs = path.join(ROOT, e.file);
   if (!fs.existsSync(abs)) {
-    console.error('找不到 ' + e.file + '，没在仓库根目录跑？');
-    process.exit(1);
+    failed.push({ ...e, reason: '文件不在' });
+    continue;
   }
   const src = fs.readFileSync(abs, 'utf8');
   if (src.includes(e.done)) {
@@ -111,25 +116,33 @@ for (const e of edits) {
   }
   const at = src.indexOf(e.find);
   if (at < 0) {
-    console.error('对不上  ' + e.file + '：' + e.why);
-    console.error('  这段原文在你本地这份里没找到，说明本地改过。一个字都没动，把这段发我：');
-    console.error('  grep -n "ombre_brain" ' + e.file);
-    process.exit(1);
+    failed.push({ ...e, reason: '这段原文没找到（本地改过）' });
+    continue;
   }
   if (src.indexOf(e.find, at + 1) >= 0) {
-    console.error('不唯一  ' + e.file + '：' + e.why + '——这段出现了两次，没改，先找我');
-    process.exit(1);
+    failed.push({ ...e, reason: '这段出现了两次，不敢改' });
+    continue;
   }
-  pending.push({ abs, file: e.file, why: e.why, out: src.replace(e.find, e.replace) });
-}
-
-for (const p of pending) {
-  fs.writeFileSync(p.abs, p.out, 'utf8');
-  console.log('改好  ' + p.file + '：' + p.why);
+  fs.writeFileSync(abs, src.replace(e.find, e.replace), 'utf8');
+  console.log('改好  ' + e.file + '：' + e.why);
   changed += 1;
 }
 
 console.log('');
-console.log('改了 ' + changed + ' 处，跳过 ' + skipped + ' 处。接下来：');
-console.log('  node --check src/decide.js && node --check src/actions/activity.js && node --check src/timeline.js');
-console.log('  pm2 restart phosphor --update-env');
+console.log('改了 ' + changed + ' 处，跳过 ' + skipped + ' 处，对不上 ' + failed.length + ' 处。');
+
+if (failed.length) {
+  console.log('');
+  console.log('这几处没改（一个字都没动），把对应的 grep 结果发我：');
+  for (const f of failed) {
+    console.log('  ✗ ' + f.file + '：' + f.why + ' —— ' + f.reason);
+    console.log('    grep -n "' + f.grep + '" ' + f.file);
+  }
+}
+
+if (changed) {
+  console.log('');
+  console.log('接下来：');
+  console.log('  node --check src/decide.js && node --check src/actions/activity.js && node --check src/timeline.js && echo ok');
+  console.log('  pm2 restart phosphor --update-env');
+}
