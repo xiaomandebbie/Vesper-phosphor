@@ -1,11 +1,17 @@
-// 一次性补丁：把「plan / letter / dream」接进提示词、动作卡和共享时间线。
+// 一次性补丁：把「letter / dream / plan」接进动作卡和共享时间线。
 //
-// 为什么是脚本不是整文件：decide.js 46KB、activity.js 16KB，
-// 从手机贴整文件不现实，而且两边已经分叉过一次——整文件覆盖会把
-// 本地改过的东西抹掉。所以这里只做精确字串替换。
+// decide.js 的动作表已经改过了（上一版跑成了），这里只剩两处显示层。
 //
-// 按文件各自独立：三处改动互不依赖，能改的先改，对不上的单独报出来。
-// 已经改过的跳过，所以重复跑不会出错。
+// 为什么是插入而不是替换：本地 activity.js 和 timeline.js 都改过，
+// 整段匹配对不上。所以只认两个唯一的锞点，在它旁边插行，
+// 旁边原来写了什么一律不碰：
+//   activity.js 的  case 'hold':          → 在它**前面**插三个 case
+//   timeline.js 的  case 'ombre_brain': { → 在它**后面**插两行提前返回
+//
+// 插入的代码用字符串拼接写，不用模板字符串——省了一层转义，也不会被
+// 本地的引号风格影响。缩进跟随锞点那一行，所以本地缩几格都行。
+//
+// 已经改过的跳过，可重复跑。按文件各自独立，一处对不上不连坐另一处。
 //
 //   node scripts/patch-ombre-actions.mjs
 //   pm2 restart phosphor --update-env
@@ -14,86 +20,39 @@ import fs from 'fs';
 import path from 'path';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
-const R = String.raw;
 
+// 每项：找到 anchor 那一行（正则，必须唯一），在它前/后插 lines。
+// lines 里的缩进用 pad 补，pad 是锞点行的行首空白。
 const edits = [
-  {
-    file: 'src/decide.js',
-    why: '动作表：ombre_brain 四选一 → 六选一',
-    done: R + '{"mode":"plan"',
-    grep: 'ombre_brain',
-    find: [
-      '- ombre_brain（长期记忆，action_detail是JSON字符串，四选一：',
-      '  {"mode":"breath"} 快速看看自己记得什么；',
-      '  {"mode":"search","query":"..."} 按关键词/语义精准检索；',
-      '  {"mode":"feel","query":"..."} 翻感受类记忆；',
-      '  {"mode":"hold","content":"...","title":"...","domain":"...","importance":0.x} 值得记住的事就存一笔，不用等到「非得记不可」才动手）',
-    ].join('\n'),
-    replace: [
-      '- ombre_brain（长期记忆，action_detail是JSON字符串，六选一：',
-      '  {"mode":"breath"} 快速看看自己记得什么；',
-      '  {"mode":"search","query":"..."} 按关键词/语义精准检索；',
-      '  {"mode":"feel","query":"..."} 翻感受类记忆；',
-      '  {"mode":"hold","content":"...","title":"...","domain":"...","importance":0.x} 值得记住的事就存一笔，不用等到「非得记不可」才动手；',
-      '  {"mode":"plan","content":"...","why_remembered":"这事怎么来的"} 答应了她、还没做完的事。登记下来就不会忘——',
-      '    计划不衰减、也不出现在平常的记忆里，只在消化的时候摆到你面前；做完了再把它关掉；',
-      '  {"mode":"letter","title":"...","content":"..."} 想对她说、但不该做成一条推送的话，或者留给以后的自己。',
-      '    信不衰减、不合并、不被改写，写下就一直在——有话当时说不出口，就写在这里）',
-    ].join('\n'),
-  },
   {
     file: 'src/actions/activity.js',
     why: '动作卡：留了一封信 / 整理了思绪 / 做了个计划',
     done: '留了一封信',
     grep: "case '",
-    find: [
-      "        case 'hold':",
-      '          return ' + R`\`` + '${AI_NAME}刚刚存入了一条记忆${j.title || j.content ? ' + R`\`` + '：${short(j.title || j.content)}' + R`\`` + " : ''}" + R`\`` + ';',
-      '        default:',
-      '          return ' + R`\`` + '${AI_NAME}刚刚在浏览 OB 记忆库' + R`\`` + ';',
-    ].join('\n'),
-    replace: [
-      "        case 'hold':",
-      '          return ' + R`\`` + '${AI_NAME}刚刚存入了一条记忆${j.title || j.content ? ' + R`\`` + '：${short(j.title || j.content)}' + R`\`` + " : ''}" + R`\`` + ';',
-      "        case 'letter':",
-      '          return ' + R`\`` + '${AI_NAME}在 Ombre Brain 留了一封信${j.title ? ' + R`\`` + '：「${short(j.title, 30)}」' + R`\`` + " : ''}" + R`\`` + ';',
-      "        case 'dream':",
-      '          return ' + R`\`` + '${AI_NAME}在 Ombre Brain 整理了思绪' + R`\`` + ';',
-      "        case 'plan':",
-      '          return ' + R`\`` + '${AI_NAME}在 Ombre Brain 做了个计划${j.content ? ' + R`\`` + '：${short(j.content)}' + R`\`` + " : ''}" + R`\`` + ';',
-      '        default:',
-      '          return ' + R`\`` + '${AI_NAME}刚刚在浏览 OB 记忆库' + R`\`` + ';',
-    ].join('\n'),
+    anchor: /^([ \t]*)case 'hold':[ \t]*$/m,
+    where: 'before',
+    lines: [
+      "case 'letter':",
+      "  return AI_NAME + '在 Ombre Brain 留了一封信' + (j.title ? '：「' + short(j.title, 30) + '」' : '');",
+      "case 'dream':",
+      "  return AI_NAME + '在 Ombre Brain 整理了思绪';",
+      "case 'plan':",
+      "  return AI_NAME + '在 Ombre Brain 做了个计划' + (j.content ? '：' + short(j.content) : '');",
+    ],
   },
   {
     file: 'src/timeline.js',
     why: '共享时间线：写信、登记计划也写回去',
     done: '留下了一封信',
     grep: 'ombre_brain',
-    find: [
-      "    case 'ombre_brain': {",
-      '      const j = tryJson(detail);',
-      "      return j?.mode === 'hold'",
-      '        ? ' + R`\`` + '自动唤醒：本次未发送推送｜记下了一条长期记忆：${short(j.title || j.content)}' + R`\`` + '',
-      '        : null;',
-      '    }',
-    ].join('\n'),
-    replace: [
-      "    case 'ombre_brain': {",
-      '      const j = tryJson(detail);',
-      "      if (j?.mode === 'hold') {",
-      '        return ' + R`\`` + '自动唤醒：本次未发送推送｜记下了一条长期记忆：${short(j.title || j.content)}' + R`\`` + ';',
-      '      }',
-      "      if (j?.mode === 'letter') {",
-      '        return ' + R`\`` + '自动唤醒：本次未发送推送｜留下了一封信：${short(j.title || j.content)}' + R`\`` + ';',
-      '      }',
-      "      if (j?.mode === 'plan') {",
-      '        return ' + R`\`` + '自动唤醒：本次未发送推送｜登记了一件还没做完的事：${short(j.content)}' + R`\`` + ';',
-      '      }',
-      '      // dream 和翻记忆（breath / search / feel）不写，免得时间线被刷满',
-      '      return null;',
-      '    }',
-    ].join('\n'),
+    anchor: /^([ \t]*)case 'ombre_brain': \{[ \t]*$/m,
+    where: 'after',
+    lines: [
+      '  // 写信、登记计划也写回共享时间线；dream 和翻记忆不写，免得刷满。',
+      '  const jx = tryJson(detail);',
+      "  if (jx?.mode === 'letter') return '自动唤醒：本次未发送推送｜留下了一封信：' + short(jx.title || jx.content);",
+      "  if (jx?.mode === 'plan') return '自动唤醒：本次未发送推送｜登记了一件还没做完的事：' + short(jx.content);",
+    ],
   },
 ];
 
@@ -101,7 +60,6 @@ let changed = 0;
 let skipped = 0;
 const failed = [];
 
-// 按文件各自独立：一处对不上不连坐其他两处
 for (const e of edits) {
   const abs = path.join(ROOT, e.file);
   if (!fs.existsSync(abs)) {
@@ -114,16 +72,28 @@ for (const e of edits) {
     skipped += 1;
     continue;
   }
-  const at = src.indexOf(e.find);
-  if (at < 0) {
-    failed.push({ ...e, reason: '这段原文没找到（本地改过）' });
+
+  // 锞点必须唯一：多一处就不敢改
+  const all = [...src.matchAll(new RegExp(e.anchor.source, 'gm'))];
+  if (!all.length) {
+    failed.push({ ...e, reason: '找不到锞点那一行' });
     continue;
   }
-  if (src.indexOf(e.find, at + 1) >= 0) {
-    failed.push({ ...e, reason: '这段出现了两次，不敢改' });
+  if (all.length > 1) {
+    failed.push({ ...e, reason: '锞点出现了 ' + all.length + ' 次，不敢改' });
     continue;
   }
-  fs.writeFileSync(abs, src.replace(e.find, e.replace), 'utf8');
+
+  const m = all[0];
+  const pad = m[1] ?? '';
+  const block = e.lines.map((l) => (l ? pad + l : '')).join('\n');
+  const anchorLine = m[0];
+  const out =
+    e.where === 'before'
+      ? src.replace(anchorLine, block + '\n' + anchorLine)
+      : src.replace(anchorLine, anchorLine + '\n' + block);
+
+  fs.writeFileSync(abs, out, 'utf8');
   console.log('改好  ' + e.file + '：' + e.why);
   changed += 1;
 }
@@ -143,6 +113,6 @@ if (failed.length) {
 if (changed) {
   console.log('');
   console.log('接下来：');
-  console.log('  node --check src/decide.js && node --check src/actions/activity.js && node --check src/timeline.js && echo ok');
+  console.log('  node --check src/actions/activity.js && node --check src/timeline.js && echo ok');
   console.log('  pm2 restart phosphor --update-env');
 }
