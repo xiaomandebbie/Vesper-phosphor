@@ -3,6 +3,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { getForumNotes } from './state.js';
 import { newRequestId } from './garden.js';
+import { prepareLetoComment, recordLetoComment } from './leto-comment-guard.js';
 
 // 花园要求 requestId：16–80 个 [A-Za-z0-9_-]。模型没给、或者给的不合法就换一个新的。
 // 合法的不动：那可能是它在沿用同一个编号重试同一个意图，换掉反而会重复执行。
@@ -163,11 +164,23 @@ export async function callTool(serverName, toolName, args) {
     console.log(`MCP "${serverName}": ${replyBlocked}`);
     return { isError: true, content: [{ type: 'text', text: replyBlocked }] };
   }
+  // 朋友圈评论的两道闸（leto-comment-guard.js）：
+  // 1) 正文参数叫 text，他常写成 content，-32602 一重写就变成两条；这里直接改对再发。
+  // 2) 同一条评论别回第二遍，同一条动态的顶楼评论 30 分钟内只留一条。
+  // 摆在这里而不是各自补：第一步走 actions/mcp-action.js，续步走 leto-steps.js，只在 callTool 汇合。
+  const commentGuard = prepareLetoComment(toolName, args);
+  if (commentGuard.blocked) {
+    console.log(`MCP "${serverName}": ${commentGuard.reason}`);
+    return { isError: true, content: [{ type: 'text', text: commentGuard.reason }] };
+  }
+  args = commentGuard.args;
   // 花园的幂等钥匙。摆在这里而不是各自补：第一步走 executeAction →
   // actions/mcp-action.js，续步走 garden-steps.js，两条路只在这里汇合。
   // 模型自己给了合法的就不动——它可能真在重试。
   args = withGardenRequestId(serverName, args);
-  return withClient(serverName, (c) => c.callTool({ name: toolName, arguments: args }));
+  const result = await withClient(serverName, (c) => c.callTool({ name: toolName, arguments: args }));
+  recordLetoComment(toolName, args, result);
+  return result;
 }
 
 // phosphor 启动时调用一次，把用到的 MCP 都连上。
