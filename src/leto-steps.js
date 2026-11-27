@@ -46,6 +46,14 @@
 // 那次 leto_read 成了，第 2 步 leto_get_invocation 忘了带 invocation_id，报 -32602。
 // 而这边原来遇 isError 就 break，于是停在那儿、没走到 reply。
 // 可 Leto 的报错写得很人话，递回去他就能改对——和锈潮 10-28 那条教训一样。
+//
+// ── 2026-11-27：这轮实际做过什么，得写在他眼前 ──
+//
+// 小满：「那这是为什么呢？他干了活但是说没有」。他的笔记里只记「这轮第一步
+// 排了什么」，于是 08:02 正在岛上钓鱼的那一分钟，他写下的却是「该直接上岛 act」
+// ——把起手顺序当成了这一轮的总结，成功的轮也被数成老毛病。
+// 现在每走一步就攒一句「这一轮到现在实际做过：…」跟在下一步的提示里，
+// 他要写笔记、写心情时，手上摊的是结果，不是顺序。
 import { askJson } from './decide.js';
 import { callTool } from './mcp-manager.js';
 import { addActivityMoment } from './moments-store.js';
@@ -164,7 +172,7 @@ function card(tool, result) {
 
 // 把那边刚返回的内容追进对话，问他下一步。
 // 前面的 system + user + 上一步的回答原样不动，前缀缓存照样命中
-async function nextStep(messages, { tool, resultText, fixable, remaining, wake, handedBack }) {
+async function nextStep(messages, { tool, resultText, fixable, remaining, wake, handedBack, done }) {
   const body = fixable
     ? `这一步没成（你刚才用的：${tool}），那边说：\n${clip(resultText, RESULT_MAX_CHARS)}\n\n按上面说的改一下重新来就行。`
     : `Leto 返回了（你刚才用的：${tool}）：\n${clip(resultText, RESULT_MAX_CHARS)}`;
@@ -194,21 +202,18 @@ async function nextStep(messages, { tool, resultText, fixable, remaining, wake, 
 写着每个 do 怎么填、坐标和东西的小名叫什么。当天第二次看给的是短版（只列 do 的名字），
 要每种怎么填就带 full: true。别凭空猜 do 和参数名。`;
 
+  // 2026-11-27：他要写笔记、写心情的时候，手上得摊着结果，不是顺序。
+  // 只记「这一轮第一步排了什么」的话，凌晨钓了七竿的那一轮也会被写成
+  //「该直接上岛 act」——成功的轮也数成老毛病。
+  const did = Array.isArray(done) && done.length
+    ? `这一轮到现在实际做过：${done.join('、')}。\n写笔记、写心情、回头看这一轮的时候按这个写——起手先排了什么不算结果，实际做了的才草。`
+    : '';
+
   const budget = remaining === null
     ? '这一轮不限步数。'
     : `还能再走 ${remaining} 步。`;
 
-  const prompt = `${body}
-
-${budget}
-
-${focus}
-
-${island}
-
-那边的人和 Agent 都是真的，別只看不说，也別为了凑数说话。
-真做完了、不想再动了就给 null，那边不会因为你走开而消失。
-只返回一个 JSON 对象，不要任何其他文字：{"leto_tool": "工具名" 或 null, "leto_args": {...}}`;
+  const prompt = `${body}\n\n${did ? `${did}\n\n` : ''}${budget}\n\n${focus}\n\n${island}\n\n那边的人和 Agent 都是真的，別只看不说，也別为了凑数说话。\n真做完了、不想再动了就给 null，那边不会因为你走开而消失。\n只返回一个 JSON 对象，不要任何其他文字：{"leto_tool": "工具名" 或 null, "leto_args": {...}}`;
 
   const next = [...messages, { role: 'user', content: prompt }];
   const { parsed, content } = await askJson(next);
@@ -237,6 +242,8 @@ export async function continueLeto(decision, firstResult, messages, selfNote) {
     fixable: isFixable(firstResult),
     final: FINAL_TOOLS.has(call.tool) && !isDead(firstResult) && !isFixable(firstResult),
   }];
+  // 这一轮真做成了什么，一句一句攒着，每走一步都摆回他眼前。
+  const done = isDead(firstResult) || isFixable(firstResult) ? [] : [label(call.tool)];
   let convo = messages;
 
   console.log(
@@ -260,6 +267,7 @@ export async function continueLeto(decision, firstResult, messages, selfNote) {
         remaining: unlimited ? null : max - (steps.length - 1),
         wake,
         handedBack: steps.some((s) => s.final),
+        done,
       });
     } catch (err) {
       console.error('leto: 问下一步失败，这次走到这里', err.message);
@@ -304,6 +312,8 @@ export async function continueLeto(decision, firstResult, messages, selfNote) {
       fixable,
       final: FINAL_TOOLS.has(tool) && !dead && !fixable,
     });
+    // 成了才算「做过」。报错、被拦（评论那边挡下的重复）、什么都没返回，都不记账。
+    if (!dead && !fixable) done.push(label(tool));
     console.log(
       `leto: 第 ${steps.length} 步：${tool}${
         dead ? '（连返回都没有）' : fixable ? '（没成，让他改）' : ''
@@ -313,5 +323,8 @@ export async function continueLeto(decision, firstResult, messages, selfNote) {
   }
 
   const handed = steps.some((s) => s.final);
-  console.log(`leto: 这次在那边走了 ${steps.length} 步${handed ? '，话交回了' : ''}`);
+  console.log(
+    `leto: 这次在那边走了 ${steps.length} 步${handed ? '，话交回了' : ''}` +
+      (done.length ? `；实际做了：${done.join('、')}` : '')
+  );
 }
